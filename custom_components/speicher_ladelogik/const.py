@@ -8,7 +8,7 @@ from homeassistant.const import Platform
 
 DOMAIN: Final = "speicher_ladelogik"
 NAME: Final = "Speicher-Ladelogik"
-VERSION: Final = "1.0.0-beta.1"
+VERSION: Final = "1.0.0-beta.2"
 
 PLATFORMS: Final = [Platform.SENSOR]
 UPDATE_INTERVAL_SECONDS: Final = 30
@@ -78,7 +78,6 @@ DEFAULTS: Final = {
     CONF_A_DISCHARGE_LIMIT: "number.marstek_venus_a_maximale_entladeleistung",
     CONF_A_AUTO_TARGET: "switch.astrameter_venus_a_auto_target",
     CONF_A_ACTIVE: "switch.astrameter_venus_a_active",
-    CONF_A_CHARGE_OVERRIDE: "input_boolean.venus_a_nicht_laden",
     CONF_A_MAX_SOC: "number.marstek_venus_a_maximaler_soc",
     CONF_A_USABLE_CAPACITY: "input_number.venus_a_verfugbare_kapazitat",
     CONF_A_PACK_SOC: [
@@ -98,7 +97,6 @@ DEFAULTS: Final = {
     CONF_E_DISCHARGE_LIMIT: "number.marstek_venus_e_entladeleistung",
     CONF_E_AUTO_TARGET: "switch.astrameter_venus_e_auto_target",
     CONF_E_ACTIVE: "switch.astrameter_venus_e_active",
-    CONF_E_CHARGE_OVERRIDE: "input_boolean.venus_e_nicht_laden",
     CONF_E_MAX_SOC: "number.marstek_venus_e_obere_ladegrenze_kapazitat",
     CONF_E_USABLE_CAPACITY: "input_number.venus_e_verfugbare_kapazitat",
     CONF_E_MAX_CELL_VOLTAGE: "sensor.marstek_venus_e_max_zellspannung",
