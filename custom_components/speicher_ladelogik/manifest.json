@@ -1,0 +1,13 @@
+{
+  "domain": "speicher_ladelogik",
+  "name": "Speicher-Ladelogik",
+  "codeowners": ["@Allgaeuer-Bua"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/Allgaeuer-Bua/Speicher-Ladelogik",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/Allgaeuer-Bua/Speicher-Ladelogik/issues",
+  "requirements": [],
+  "version": "1.0.0-beta.1"
+}
