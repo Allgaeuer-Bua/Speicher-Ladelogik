@@ -1,0 +1,1688 @@
+# Speicher-Ladelogik V1.0 Beta 1 - 2026-09-14
+# HA built-in python_script: NO imports, NO service calls, NO register writes.
+# This file only reads states and returns a proposed plan to its YAML caller.
+# Hardware/BMS limits remain authoritative. See START_HIER.md.
+
+output = {}
+
+VERSION = "1.0.0-beta.1"
+NOW = float(data.get("now", time.time()))
+DAY0 = float(data.get("day0", 0))
+DAY1 = float(data.get("day1", 0))
+DAY2 = float(data.get("day2", 0))
+NINE = float(data.get("nine", 0))
+ELEVEN = float(data.get("eleven", 0))
+DEADLINE = float(data.get("deadline", 0))
+PREPARE = float(data.get("prepare", 0))
+REQUEST = str(data.get("request", "tick"))
+MANUAL_ENABLED = {
+    "A": "input_boolean.speicher_ladelogik_manuell_a_aktiv",
+    "E": "input_boolean.speicher_ladelogik_manuell_e_aktiv",
+}
+MANUAL_CHARGE = {
+    "A": "input_number.speicher_ladelogik_manuell_laden_a_w",
+    "E": "input_number.speicher_ladelogik_manuell_laden_e_w",
+}
+MANUAL_DISCHARGE = {
+    "A": "input_number.speicher_ladelogik_manuell_entladen_a_w",
+    "E": "input_number.speicher_ladelogik_manuell_entladen_e_w",
+}
+
+# Entity mapping: change only here if an entity was renamed in HA.
+# A uses Viper; E uses LilyGo. No forced-power/control-mode entities are used.
+BATTERIES = {
+    "A": {
+        "soc": "sensor.marstek_venus_a_soc_batterie",
+        "power": "sensor.marstek_venus_a_ac_leistung",
+        "charge": "number.marstek_venus_a_maximale_ladeleistung",
+        "discharge": "number.marstek_venus_a_maximale_entladeleistung",
+        "auto": "switch.astrameter_venus_a_auto_target",
+        "active": "switch.astrameter_venus_a_active",
+        "override": "input_boolean.venus_a_nicht_laden",
+        "top": "number.marstek_venus_a_maximaler_soc",
+        "vmax": "sensor.marstek_venus_a_maximale_zellenspannung",
+        "tmax": "sensor.marstek_venus_a_maximale_zellentemperatur",
+        "tmin": "sensor.marstek_venus_a_minimale_zellentemperatur",
+        "usable": "input_number.venus_a_verfugbare_kapazitat",
+        # Raw Viper sensor: negative AC power = charge, positive = discharge.
+        "charge_sign": -1,
+        "usable_default": 3.6608, "floor": 12, "maximum": 1500,
+        "tail": 500, "measured_ac": 3.94, "preferred": 1100,
+    },
+    "E": {
+        "soc": "sensor.marstek_venus_e_soc",
+        "power": "sensor.marstek_venus_e_ac_leistung",
+        "charge": "number.marstek_venus_e_ladeleistung",
+        "discharge": "number.marstek_venus_e_entladeleistung",
+        "auto": "switch.astrameter_venus_e_auto_target",
+        "active": "switch.astrameter_venus_e_active",
+        "override": "input_boolean.venus_e_nicht_laden",
+        "top": "number.marstek_venus_e_obere_ladegrenze_kapazitat",
+        "vmax": "sensor.marstek_venus_e_max_zellspannung",
+        "tmax": "sensor.marstek_venus_e_max_zelltemperatur",
+        "tmin": "sensor.marstek_venus_e_min_zelltemperatur",
+        "usable": "input_number.venus_e_verfugbare_kapazitat",
+        # LilyGo: negative AC power = charge, positive = discharge.
+        "charge_sign": -1,
+        "usable_default": 4.5568, "floor": 11, "maximum": 2500,
+        "tail": 1100, "measured_ac": 5.35, "preferred": 1300,
+    },
+}
+
+WRITE_THRESHOLD_W = 100   # W: erst bei >= 100 W Abweichung neu schreiben
+WRITE_THRESHOLD_HOLD = 3  # Ticks: bei konstanter Anforderung stabil halten
+
+PACKS = [
+    "sensor.marstek_venus_a_soc_batteriepack_1",
+    "sensor.marstek_venus_a_soc_batteriepack_2",
+    "sensor.marstek_venus_a_soc_batteriepack_3",
+]
+GRID = "sensor.stromzahler_leistung"  # positive import; negative export
+PV = "sensor.aktuelle_pv_leistung"
+MPPTS = ["sensor.sg10rt_mppt1_leistung", "sensor.sg10rt_mppt2_leistung",
+         "sensor.sg12rt_mppt1_leistung", "sensor.sg12rt_mppt2_leistung"]
+LEARNING_ID = "sensor.speicher_ladelogik_lernspeicher"
+SUN = "sun.sun"
+LOAD = "sensor.hausleistung_gesamt_30_min"
+LIVE_LOAD = "sensor.hausleistung_gesamt"
+DAILY = "sensor.pv_produktion_tag"
+SESSION_ID = "input_text.speicher_ladelogik_kalibrierung_sitzung"
+BACKUP_ID = "input_text.speicher_ladelogik_sicherung"
+CAL_BACKUP_ID = "input_text.speicher_ladelogik_kalibrierung_sicherung"
+QUEUE_ID = "input_text.speicher_ladelogik_kalibrierung_vormerkungen"
+ACTIVE_PHASES = ["requested", "drain", "wait", "charge", "rest", "paused", "restore"]
+PHASE_LABELS = {
+    "requested": "Auftrag vorgemerkt",
+    "drain": "Entladen auf 13 %",
+    "wait": "Wartet auf PV-Fenster",
+    "charge": "Kalibrierladung mit 500 W",
+    "rest": "Ruheprüfung",
+    "paused": "Pausiert – Auftrag bleibt erhalten",
+    "restore": "Grenzwerte wiederherstellen",
+}
+
+
+
+def raw(entity):
+    state = hass.states.get(entity)
+    return state.state if state is not None else "unavailable"
+
+
+def number(value, default=None):
+    try:
+        result = float(value)
+        if result != result or abs(result) > 1000000000000:
+            return default
+        return result
+    except (ValueError, TypeError):
+        return default
+
+
+def flag(value):
+    return value is True or str(value).lower() in ["true", "on", "1"]
+
+
+def setting(name, default, lower, upper):
+    value = number(raw("input_number.speicher_ladelogik_" + name), default)
+    return max(lower, min(upper, value))
+
+
+def charging_power(key, power):
+    if power is None:
+        return None
+    return max(0, power * BATTERIES[key]["charge_sign"])
+
+
+def measurement(entity, kind, age=None):
+    state = hass.states.get(entity)
+    if state is None:
+        return None
+    value = number(state.state)
+    if value is None:
+        return None
+    unit = str(state.attributes.get("unit_of_measurement", "")).lower()
+    units = {"power": {"w": 1, "kw": 1000},
+             "energy": {"wh": 0.001, "kwh": 1, "mwh": 1000},
+             "soc": {"%": 1}, "voltage": {"v": 1, "mv": 0.001},
+             "temperature": {"°c": 1}, "delta": {"mv": 1, "v": 1000}}
+    if kind in units:
+        if unit not in units[kind]:
+            return None
+        value = value * units[kind][unit]
+    if age is not None:
+        stamp = dt_util.as_timestamp(state.last_reported)
+        if NOW - stamp > age or stamp > NOW + 10:
+            return None
+    if kind == "soc" and not 0 <= value <= 100:
+        return None
+    return value
+
+
+def reported_timestamp(entity):
+    state = hass.states.get(entity)
+    if state is None:
+        return None
+    try:
+        stamp = dt_util.as_timestamp(state.last_reported)
+        return stamp if stamp <= NOW + 10 else None
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def writable(entity, value):
+    state = hass.states.get(entity)
+    if state is None or number(state.state) is None:
+        return False
+    lo = number(state.attributes.get("min"))
+    hi = number(state.attributes.get("max"))
+    step = number(state.attributes.get("step"))
+    return (lo is not None and hi is not None and step is not None and step > 0
+            and lo <= value <= hi and abs((value - lo) / step - round((value - lo) / step)) < 0.001)
+
+
+def write_needed(current, target):
+    return current is None or abs(current - target) >= 25
+
+
+def rounded_limit(value, maximum):
+    return int(max(0, min(maximum, round(value / 50) * 50)))
+
+
+def energy(nominal, floor, soc, goal):
+    return {"stored": nominal * max(0, soc - floor) / 100,
+            "target": nominal * max(0, goal - floor) / 100,
+            "need": nominal * max(0, goal - soc) / 100}
+
+
+def forecast(suffix, start, end):
+    errors = []
+    maps = []
+    expected = int(round((end - start) / 900))
+    if expected not in [92, 96, 100]:
+        return {"ok": False, "rows": [], "errors": ["Ungültige Tagesgrenzen"]}
+    for direction in ["sw", "so", "no"]:
+        entity = "sensor." + direction + "_energy_production_" + suffix
+        state = hass.states.get(entity)
+        readings = state.attributes.get("wh_period_15m") if state is not None else None
+        parsed = {}
+        try:
+            entries = readings.items()
+        except (AttributeError, TypeError):
+            entries = None
+        if entries is None or measurement(entity, "energy", 43200) is None:
+            errors.append(entity + ": keine aktuellen wh_period_15m")
+        else:
+            for key, entry_value in entries:
+                try:
+                    instant = dt_util.parse_datetime(str(key))
+                    if instant is None or instant.tzinfo is None:
+                        raise ValueError("Zeitzone fehlt")
+                    stamp = dt_util.as_timestamp(instant)
+                    value = number(entry_value)
+                    if start <= stamp < end:
+                        index = int(round((stamp - start) / 900))
+                        if abs(stamp - (start + index * 900)) > 1 or index in parsed or value is None or value < 0:
+                            errors.append(entity + ": ungültiges Intervall")
+                        else:
+                            parsed[index] = value
+                except (ValueError, TypeError, AttributeError):
+                    errors.append(entity + ": Zeitstempel ungültig")
+            if len(parsed) != expected:
+                errors.append(entity + ": Intervallücke/falsches Datum")
+        maps.append(parsed)
+    rows = []
+    if not errors:
+        for index in range(expected):
+            wh = sum([part[index] for part in maps])
+            rows.append({"t": start + index * 900, "wh": wh})
+        if sum([row["wh"] for row in rows]) > 300000:
+            errors.append("Tagesprognose > 300 kWh")
+    return {"ok": not errors, "rows": rows if not errors else [], "errors": errors}
+
+
+def split_power(total, needs, caps, previous):
+    total = int(max(0, total) // 50 * 50)
+    caps = {key: int(max(0, caps[key]) // 50 * 50) for key in ["A", "E"]}
+    limits = {"A": 0, "E": 0}
+    eligible = [key for key in ["A", "E"] if needs[key] > 0 and caps[key] >= 50]
+    if not eligible or total < 50:
+        return limits
+    first = eligible[0]
+    for key in eligible:
+        if previous.get(key, 0) > 0 and total <= caps[key]:
+            first = key
+            break
+        if needs[key] > needs[first]:
+            first = key
+    if total < 1600 and total <= caps[first]:
+        limits[first] = total
+        return limits
+    remaining = total
+    denominator = sum([needs[key] for key in eligible])
+    for key in eligible:
+        value = min(caps[key], int(total * needs[key] / denominator // 50) * 50)
+        limits[key] = value
+        remaining = remaining - value
+    for key in eligible:
+        extra = min(caps[key] - limits[key], remaining)
+        limits[key] = limits[key] + extra
+        remaining = remaining - extra
+    return limits
+
+
+def simulate(rows, start, end, battery_data, caps, load, factor, eta, charge_after=None, export_target=0):
+    remaining = {key: battery_data[key]["need"] for key in ["A", "E"]}
+    finish = None
+    for row in rows:
+        begin = max(start, row["t"])
+        stop = min(end, row["t"] + 900)
+        if stop <= begin:
+            continue
+        surplus = row["wh"] * 4 * factor - load
+        available = max(0, surplus - export_target)
+        tick = begin
+        while tick < stop:
+            seconds = min(60, stop - tick)
+            if surplus >= 0 and (charge_after is None or tick >= charge_after):
+                instantaneous = {}
+                for key in ["A", "E"]:
+                    bat = battery_data[key]
+                    tail_kwh = bat["nominal"] * max(0, bat["goal"] - 90) / 100
+                    rate = caps[key]
+                    if remaining[key] <= tail_kwh + 0.000001:
+                        rate = min(rate, BATTERIES[key]["tail"])
+                    instantaneous[key] = rate if remaining[key] > 0.00001 else 0
+                allocated = split_power(min(available, sum(instantaneous.values())), remaining, instantaneous, {})
+                for key in ["A", "E"]:
+                    remaining[key] = max(0, remaining[key] - allocated[key] * seconds / 3600000 * eta)
+            elif surplus < 0:
+                active = [key for key in ["A", "E"] if caps[key] > 0]
+                for key in active:
+                    remaining[key] = min(battery_data[key]["target"], remaining[key] + (-surplus) * seconds / 3600000 / max(1, len(active)))
+            tick = tick + seconds
+            if sum(remaining.values()) <= 0.002:
+                finish = tick
+                break
+        if finish is not None:
+            break
+    return {"finish": finish, "missing": sum(remaining.values())}
+
+
+def continuous_window(rows, after, required_hours, load, factor):
+    required = int((required_hours * 3600 + 899) // 900) * 900
+    beginning = None
+    longest = 0
+    match = None
+    previous_end = None
+    for row in rows:
+        start = max(after, row["t"])
+        end = row["t"] + 900
+        if end <= after:
+            continue
+        adequate = row["wh"] * 4 * factor - load >= 600
+        if adequate:
+            if beginning is None or previous_end is None or abs(row["t"] - previous_end) > 1:
+                beginning = start
+            longest = max(longest, end - beginning)
+            if match is None and end - beginning >= required:
+                match = {"start": beginning, "end": beginning + required}
+        else:
+            beginning = None
+        previous_end = end
+    return {"ok": match is not None, "start": match["start"] if match else None,
+            "end": match["end"] if match else None,
+            "longest_h": round(longest / 3600, 2), "required_h": required / 3600}
+
+
+def read_session(value):
+    fields = str(value).split("|")
+    empty = {"p": "idle", "b": "", "t": 0, "s": 0, "x": 0, "l": 0,
+             "f": 0, "h": 0, "w": 0, "v": 0, "q": 0, "r": "", "z": 0, "n": 0, "u": "", "i": 0}
+    if value in ["", "unknown", "unavailable"]:
+        return empty
+    if len(fields) != 17 or fields[0] != "state1":
+        empty["p"] = "error"
+        empty["r"] = "state_corrupt"
+        return empty
+    keys = ["p", "b", "t", "s", "x", "l", "f", "h", "w", "v", "q", "r", "z"]
+    keys.extend(["n", "u", "i"])
+    for index in range(len(keys)):
+        key = keys[index]
+        val = fields[index + 1]
+        if key not in ["p", "b", "r", "u"]:
+            val = number(val)
+            if val is None or val < 0:
+                empty["p"] = "error"
+                empty["r"] = "state_corrupt"
+                return empty
+        empty[key] = val
+    if empty["p"] not in ["idle", "requested", "drain", "wait", "charge", "rest", "paused", "restore", "incomplete", "done", "cancelled", "error"]:
+        empty["p"] = "error"
+        empty["r"] = "state_corrupt"
+    if empty["p"] not in ["idle", "error"] and empty["b"] not in ["A", "E"]:
+        empty["p"] = "error"
+        empty["r"] = "state_corrupt"
+    if empty["u"] not in ["", "requested", "drain", "wait", "charge", "rest"]:
+        empty["p"] = "error"
+        empty["r"] = "state_corrupt"
+    return empty
+
+
+def encode_session(session):
+    fields = ["state1"]
+    for key in ["p", "b", "t", "s", "x", "l", "f", "h", "w", "v", "q", "r", "z", "n", "u", "i"]:
+        value = session[key]
+        fields.append(str(round(value, 3)) if isinstance(value, float) else str(value))
+    return "|".join(fields)
+
+
+def read_backup(value):
+    fields = str(value).split("|")
+    if len(fields) == 5 and fields[0] == "backup1":
+        values = [number(item) for item in fields[1:]]
+        maxima = [1500, 2500, 1500, 2500]
+        if all([values[i] is not None and (values[i] == -1 or
+                (0 <= values[i] <= maxima[i] and values[i] % 50 == 0)) for i in range(4)]):
+            return {"A": values[0], "E": values[1], "DA": values[2], "DE": values[3]}
+    return None
+
+
+def cap_snapshot():
+    return {"A": number(raw(BATTERIES["A"]["charge"])), "E": number(raw(BATTERIES["E"]["charge"])),
+            "DA": number(raw(BATTERIES["A"]["discharge"])), "DE": number(raw(BATTERIES["E"]["discharge"]))}
+
+
+def encode_backup(values):
+    return "backup1|" + "|".join([str(values[key]) for key in ["A", "E", "DA", "DE"]])
+
+
+def backup_restored(saved, current):
+    return saved is not None and all([saved[key] == -1 or (current[key] is not None
+        and abs(current[key] - saved[key]) < 25) for key in saved])
+
+
+def transition(session, phase, reason):
+    session["p"] = phase
+    session["t"] = int(NOW)
+    session["l"] = 0
+    session["f"] = 0
+    session["r"] = reason
+
+
+def read_queue(value):
+    if value == "":
+        return {}
+    fields = str(value).split("|")
+    if not fields or fields[0] != "queue1" or len(fields) > 3:
+        return None
+    queue = {}
+    for field in fields[1:]:
+        parts = field.split(",")
+        if len(parts) != 4 or parts[0] not in ["A", "E"] or parts[0] in queue:
+            return None
+        day = number(parts[1])
+        stamp = number(parts[2])
+        if day is None or day < 0 or stamp is None or stamp < 0 or parts[3] not in ["-", "A", "E"]:
+            return None
+        if parts[3] == parts[0]:
+            return None
+        queue[parts[0]] = {"n": int(day), "t": int(stamp), "d": parts[3]}
+    return queue
+
+
+def encode_queue(queue):
+    result = ["queue1"]
+    for key in ["A", "E"]:
+        if key in queue:
+            q = queue[key]
+            result.append(key + "," + str(int(q["n"])) + "," + str(int(q["t"])) + "," + q["d"])
+    return "|".join(result)
+
+
+def pause_session(session, reason):
+    session["u"] = session["p"]
+    if session["p"] in ["charge", "rest"]:
+        session["i"] = 1
+    transition(session, "paused", reason)
+
+
+def calibration_step(session, context):
+    s = session.copy()
+    p = s["p"]
+    result = {"session": s, "charge": {}, "discharge": {}, "finish": False,
+              "notify": "", "release": False, "retry": False}
+    if p not in ACTIVE_PHASES:
+        return result
+    key = s["b"]
+    other = "E" if key == "A" else "A"
+    request = context["request"]
+    if key not in ["A", "E"]:
+        transition(s, "error", "state_corrupt")
+    elif p != "restore" and (request == "cancel" or not context["automatic"] or not context["armed"][key]):
+        transition(s, "restore", "cancelled")
+    elif p != "restore" and key == "A" and s["z"] != context["pack_count"]:
+        transition(s, "restore", "pack_changed")
+    elif p not in ["requested", "restore"] and request == "start":
+        transition(s, "restore", "restart")
+    elif p not in ["requested", "restore"] and context["backup"] is None:
+        transition(s, "error", "backup_missing")
+    elif p == "restore":
+        if context["backup"] is None and s["s"] != 0:
+            transition(s, "error", "backup_missing")
+    elif p != "requested" and context.get("critical", {}).get(key, False):
+        transition(s, "restore", "device_limit")
+    elif p != "requested" and not context["safe"][key]:
+        if p != "paused":
+            pause_session(s, "data_pause")
+    elif p == "paused":
+        resume = s["u"] or "requested"
+        if resume in ["charge", "rest"] and NOW >= s["x"] + 1800:
+            transition(s, "restore", "retry_window")
+        elif resume not in ["charge", "rest"] or context["live_surplus"] >= 600:
+            transition(s, resume, "resumed")
+            s["u"] = ""
+            s["q"] = int(NOW)
+            s["v"] = 0
+    elif p == "requested":
+        bat = context["batteries"][key]
+        today_ok = s["n"] <= DAY0 and bat["cal_empty_ready"] and context["today"][key]["ok"]
+        preview = context["today"][key] if today_ok else context["tomorrow"][key]
+        if preview["ok"] and preview["start"] >= s["n"]:
+            s["s"] = int(preview["start"])
+            s["x"] = int(preview["end"])
+            if not context["safe"][key]:
+                s["r"] = "waiting_data"
+            elif bat["cal_empty_ready"]:
+                transition(s, "wait", "waiting_pv")
+            elif NOW >= context["prepare"] and context["pv"] is not None and context["pv"] < 200 and s["n"] <= DAY1:
+                transition(s, "drain", "natural_discharge")
+            else:
+                s["r"] = "scheduled"
+        else:
+            s["s"] = 0
+            s["x"] = 0
+            s["r"] = "no_window"
+    elif p == "drain":
+        if context["batteries"][key]["cal_empty_ready"]:
+            transition(s, "wait", "waiting_pv")
+        elif NOW >= s["s"]:
+            transition(s, "restore", "retry_empty")
+    elif p == "wait":
+        if NOW >= s["s"] and s["n"] <= DAY0:
+            preview = context["today"][key]
+            if preview["ok"] and context["live_surplus"] >= 600:
+                if context["batteries"][key]["cal_empty_ready"]:
+                    transition(s, "charge", "charging")
+                    s["s"] = int(preview["start"])
+                    s["x"] = int(preview["end"])
+                    s["q"] = int(NOW)
+                    s["v"] = 0
+                    s["w"] = 0
+                    s["h"] = 0
+                    s["i"] = 0
+                else:
+                    transition(s, "restore", "retry_empty")
+            elif not preview["ok"]:
+                preview = context["tomorrow"][key]
+                if preview["ok"]:
+                    s["n"] = int(DAY1)
+                    s["s"] = int(preview["start"])
+                    s["x"] = int(preview["end"])
+                    s["r"] = "scheduled"
+                else:
+                    transition(s, "restore", "retry_window")
+    elif p == "charge":
+        bat = context["batteries"][key]
+        power = charging_power(key, bat["power"])
+        report_after_start = (bat["power_reported_ts"] is not None
+                              and bat["power_reported_ts"] >= s["t"] - 1)
+        if not s["h"] and report_after_start and power is not None and power >= 400:
+            s["h"] = 1
+        if not s["h"] and NOW - s["t"] >= 180:
+            pause_session(s, "telemetry_no_response")
+        if s["p"] == "charge" and power is not None:
+            elapsed = NOW - s["q"]
+            if 0 < elapsed <= 90:
+                s["w"] = round(s["w"] + (s["v"] + power) / 2 * elapsed / 3600, 2)
+            elif s["q"] and elapsed > 90:
+                pause_session(s, "sample_gap")
+            s["q"] = int(NOW)
+            s["v"] = power
+        if s["p"] == "charge":
+            if bat["all_full"] and s["h"]:
+                s["f"] = s["f"] or int(NOW)
+                if NOW - s["f"] >= 60:
+                    transition(s, "rest", "resting")
+            else:
+                s["f"] = 0
+            if s["p"] == "charge":
+                if context["live_surplus"] < 400:
+                    pause_session(s, "pv_pause")
+                elif s["h"] and power is not None and power < 400 and not bat["all_full"]:
+                    s["l"] = s["l"] or int(NOW)
+                    if NOW - s["l"] >= 300:
+                        if bat["lowest_soc"] >= 99:
+                            transition(s, "restore", "full_unconfirmed")
+                        else:
+                            pause_session(s, "under_400w")
+                else:
+                    s["l"] = 0
+            if s["p"] == "charge" and (NOW >= s["x"] + 1800 or NOW - s["t"] > 50400):
+                transition(s, "restore", "retry_window")
+    elif p == "rest":
+        bat = context["batteries"][key]
+        report_after_rest = (bat["power_reported_ts"] is not None
+                             and bat["power_reported_ts"] >= s["t"] - 1)
+        if not bat["all_full"]:
+            transition(s, "restore", "full_unconfirmed")
+        elif report_after_rest and bat["power"] is not None and abs(bat["power"]) <= 50:
+            s["f"] = s["f"] or int(NOW)
+            if NOW - s["f"] >= 60:
+                transition(s, "restore", "interrupted_full" if s["i"] else "success")
+        else:
+            s["f"] = 0
+        if s["p"] == "rest" and NOW - s["t"] > 600:
+            transition(s, "restore", "rest_timeout")
+    if s["p"] == "restore":
+        result["release"] = True
+        if p == "requested" and context["backup"] is None:
+            s["s"] = 0
+            s["x"] = 0
+        if context["restored"] or (p == "requested" and context["backup"] is None):
+            result["finish"] = s["r"] == "success"
+            result["retry"] = s["r"] in ["retry_empty", "retry_window", "restart", "interrupted_full"]
+            phase = "done" if result["finish"] else ("incomplete" if result["retry"] else "cancelled")
+            transition(s, phase, s["r"])
+            result["notify"] = "Kalibrierung Venus " + key + ": " + s["r"]
+    elif s["p"] == "drain":
+        result["charge"][key] = 0
+        if context["backup"] is not None and context["backup"]["D" + key] >= 0:
+            result["discharge"][key] = context["backup"]["D" + key]
+        if context["batteries"][other]["owns"] and context.get("peer_drain_ok", {}).get(other, False):
+            result["discharge"][other] = 0
+    elif s["p"] in ["wait", "rest", "paused"]:
+        result["charge"][key] = 0
+        result["discharge"][key] = 0
+    elif s["p"] == "charge":
+        result["charge"][key] = 500
+        result["discharge"][key] = 0
+    return result
+
+
+def peak_plan(rows, end, battery_data, caps, load, eta, after):
+    feasible = simulate(rows, NOW, end, battery_data, caps, load, 1, eta, after)
+    if feasible["finish"] is None:
+        return {"ok": False, "target": 0, "start": None, "end": None, "finish": None}
+    lower = 0
+    upper = max([max(0, row["wh"] * 4 - load) for row in rows] + [0])
+    finish = feasible["finish"]
+    for attempt in range(16):
+        threshold = (lower + upper) / 2
+        test = simulate(rows, NOW, end, battery_data, caps, load, 1, eta, after, threshold)
+        if test["finish"] is not None:
+            lower = threshold
+            finish = test["finish"]
+        else:
+            upper = threshold
+    threshold = int(lower // 50 * 50)
+    active_rows = [row for row in rows if row["t"] + 900 > max(NOW, after)
+                   and row["t"] < end and row["wh"] * 4 - load - threshold >= 50]
+    return {"ok": True, "target": threshold, "start": max(NOW, after, active_rows[0]["t"]) if active_rows else None,
+            "end": min(end, active_rows[-1]["t"] + 900) if active_rows else None, "finish": finish}
+
+
+def read_learning():
+    state = hass.states.get(LEARNING_ID)
+    saved = state.attributes if state is not None else {}
+    result = {"active": {}, "history": [], "models": {"A": {}, "E": {}}}
+    try:
+        active = saved.get("active", {})
+        if active.get("battery") in ["A", "E"] and 0 < number(active.get("start"), 0) <= NOW:
+            result["active"] = active.copy()
+        for record in saved.get("history", [])[-20:]:
+            if record.get("battery") in ["A", "E"] and number(record.get("end")) is not None:
+                result["history"].append(record.copy())
+        for key in ["A", "E"]:
+            model = saved.get("models", {}).get(key, {})
+            if (0 < number(model.get("count"), 0) <= 10000 and 0 < number(model.get("ac_kwh"), 0) <= 30
+                    and 0 < number(model.get("usable_reference"), 0) < 20):
+                result["models"][key] = model.copy()
+    except (AttributeError, TypeError):
+        return {"active": {}, "history": [], "models": {"A": {}, "E": {}}}
+    return result
+
+
+learning = read_learning()
+eta = setting("ladewirkungsgrad", 90, 75, 100) / 100
+safety = setting("prognose_sicherheit", 90, 50, 100) / 100
+extra = setting("unplanbare_reserve", 1, 0, 4)
+reserve = setting("mindestreserve", 2, 0, 5)
+goal = setting("ziel_soc", 100, 50, 100)
+weak = setting("schwacher_tag", 25, 5, 50)
+middle = max(weak + 1, setting("mittlerer_tag", 50, 20, 100))
+strong = max(middle + 1, setting("starker_tag", 85, 50, 200))
+pack_count = int(setting("venus_a_packs", 2, 1, 3))
+mode = raw("input_select.speicher_ladelogik_betriebsart")
+automatic = mode == "Automatik" and raw("input_boolean.speicher_ladelogik_aktiv") == "on"
+
+# Manuelle A/E-Grenzwerte bleiben aktiv, bis der Benutzer den Schalter ausschaltet.
+# Es wird keine Leistung erzwungen; AstraMeter entscheidet weiterhin die Richtung.
+manual_requested = {key: raw(MANUAL_ENABLED[key]) == "on" for key in ["A", "E"]}
+manual_active_by_key = {key: manual_requested[key] and automatic for key in ["A", "E"]}
+manual_active = any(manual_active_by_key.values())
+manual_charge = {key: rounded_limit(number(raw(MANUAL_CHARGE[key]), 0),
+                                    BATTERIES[key]["maximum"]) for key in ["A", "E"]}
+manual_discharge = {key: rounded_limit(number(raw(MANUAL_DISCHARGE[key]), 0),
+                                       BATTERIES[key]["maximum"]) for key in ["A", "E"]}
+failure_counts = {}
+for key in ["A", "E"]:
+    failure_counts[key] = number(raw("input_number.speicher_ladelogik_schreibfehler_" + key.lower()),
+                                 number(raw("input_number.speicher_ladelogik_schreibfehler"), 0))
+    if REQUEST == "ack":
+        failure_counts[key] = 0
+failure_count = max(failure_counts.values())
+pv_fresh = measurement(PV, "power", 960)
+pv_without_age_limit = measurement(PV, "power")
+pv_held_zero = pv_fresh is None and pv_without_age_limit == 0
+pv_measured = 0 if pv_held_zero else pv_fresh
+sun_below_horizon = raw(SUN) == "below_horizon"
+
+pv_night_fallback = pv_measured is None and sun_below_horizon
+pv = 0 if pv_night_fallback else pv_measured
+grid = measurement(GRID, "power", 180)
+load_raw = measurement(LOAD, "power", 3600)
+live_load = measurement(LIVE_LOAD, "power", 180)
+load = max(350, load_raw) if load_raw is not None else 1000
+actual_today = measurement(DAILY, "energy")
+daily_ok = actual_today is not None and 0 <= actual_today <= 300
+errors = []
+warnings = []
+bats = {}
+for key in ["A", "E"]:
+    cfg = BATTERIES[key]
+    soc = measurement(cfg["soc"], "soc")
+    power_fresh = measurement(cfg["power"], "power", 180)
+    power_latest = measurement(cfg["power"], "power")
+    power_reported_ts = reported_timestamp(cfg["power"])
+    power_age_min = max(0, (NOW - power_reported_ts) / 60) if power_reported_ts is not None else None
+    # Ein unveraenderter numerischer Wert bleibt verwendbar. "Frisch" ist
+    # weiterhin separat sichtbar und wird fuer Netz-/Batteriebilanzen benutzt.
+    power_held_zero = power_fresh is None and power_latest is not None and abs(power_latest) <= 0.5
+    power_for_cal = power_latest
+    power_display = power_latest
+    power_status = ("frisch" if power_fresh is not None else
+                    ("unveraendert; letzter numerischer Wert" if power_latest is not None
+                     else "nicht verfuegbar"))
+    power = power_latest
+    usable = number(raw(cfg["usable"]), cfg["usable_default"])
+    nominal = usable / (1 - cfg["floor"] / 100)
+    capacity_ok = 0 < usable < 20
+    if not capacity_ok:
+        errors.append(key + ": Kapazität ungültig")
+        usable = cfg["usable_default"]
+        nominal = usable / (1 - cfg["floor"] / 100)
+    if key == "A" and abs(nominal - pack_count * 2.08) > 0.1:
+        capacity_ok = False
+        errors.append("A: Packzahl und hinterlegte Nennkapazität passen nicht zusammen")
+    packs = []
+    if key == "A":
+        for entity in PACKS[:pack_count]:
+            value = measurement(entity, "soc")
+            if value is None:
+                warnings.append(entity + ": erwarteter Pack-Sensor fehlt")
+            else:
+                packs.append(value)
+        packs_ok = len(packs) == pack_count
+        if pack_count < 3 and measurement(PACKS[2], "soc") is not None:
+            warnings.append("Pack 3 erkannt: Packzahl und Kapazität bewusst anpassen")
+    else:
+        packs_ok = soc is not None
+        packs = [soc] if soc is not None else []
+    top = number(raw(cfg["top"]))
+    effective_goal = min(goal, top) if top is not None else goal
+    values = energy(nominal, cfg["floor"], soc if soc is not None else cfg["floor"], effective_goal)
+    lower_soc = min(packs) if packs else soc
+    higher_soc = max(packs) if packs else soc
+
+    cal_empty_ready = (soc is not None and soc <= 13 and higher_soc is not None
+                       and higher_soc <= 13.5)
+    all_full = packs_ok and lower_soc is not None and lower_soc >= 100 and soc is not None and soc >= 100
+    target_met = packs_ok and lower_soc is not None and lower_soc >= effective_goal and soc is not None and soc >= effective_goal
+
+    if packs_ok and not target_met and soc is not None:
+        values["need"] = max(values["need"], nominal / len(packs) * max(0, effective_goal - lower_soc) / 100, 0.001)
+    cap = cfg["maximum"]
+    owns = (raw(cfg["auto"]) == "on" and raw(cfg["active"]) == "on"
+            and raw(cfg["override"]) != "on")
+
+    usable_data = (soc is not None and packs_ok and capacity_ok
+                   and writable(cfg["charge"], 0) and writable(cfg["charge"], cap))
+    if not usable_data:
+        errors.append(key + ": Gesamt-/Pack-SoC oder Ladegrenze fehlt/ist ungueltig")
+    values.update({"soc": soc, "power": power, "power_live": power_fresh,
+                   "power_display": power_display,
+                   "power_fresh": power_fresh is not None, "power_status": power_status,
+                   "power_reported_ts": power_reported_ts, "power_age_min": power_age_min,
+                   "power_held_zero": power_held_zero, "power_for_cal": power_for_cal,
+                   "charge_power": charging_power(key, power),
+                   "grid_effect": power_fresh * cfg["charge_sign"] if power_fresh is not None else None,
+                   "nominal": nominal, "usable": usable,
+                   "goal": effective_goal, "packs_ok": packs_ok, "packs": packs,
+                   "lowest_soc": lower_soc, "highest_soc": higher_soc,
+                   "cal_empty_ready": cal_empty_ready,
+                   "all_full": all_full, "target_met": target_met, "owns": owns,
+                   "usable_data": usable_data, "cap": cap})
+    bats[key] = values
+
+mppt_values = [measurement(entity, "power", 180) for entity in MPPTS]
+mppt_fresh = all([value is not None and 0 <= value <= 20000 for value in mppt_values])
+mppt_sum = sum(mppt_values) if mppt_fresh else None
+balance_surplus = None
+if grid is not None and all([bats[key]["power_live"] is not None for key in ["A", "E"]]):
+    balance_surplus = max(0, sum([bats[key]["grid_effect"] for key in ["A", "E"]]) - grid)
+
+balance_lower = None
+if grid is not None:
+    balance_lower = max(0, -grid + sum([bats[key]["grid_effect"] if bats[key]["power_live"] is not None
+                        else -(BATTERIES[key]["maximum"] * 1.1 + 100) for key in ["A", "E"]]))
+pv_status = "frisch" if pv_fresh is not None else ("Nacht-Ersatzwert" if pv_night_fallback else
+             ("0 W ohne Neumeldung" if pv_held_zero else "AC-Summe nicht frisch"))
+pv_estimate = pv if pv_fresh is not None or pv_night_fallback else None
+pv_estimate_source = "AC-Messung" if pv_fresh is not None else ("Nacht-Ersatzwert" if pv_night_fallback else "keine")
+if pv_estimate is None and balance_surplus is not None and live_load is not None:
+    pv_estimate = max(0, live_load + sum([bats[key]["grid_effect"] for key in ["A", "E"]]) - grid)
+    pv_estimate_source = "Rekonstruktion aus Hauslast, Netz und Batterien"
+elif pv_estimate is None and mppt_fresh:
+    pv_estimate = mppt_sum * 0.85
+    pv_estimate_source = "MPPT-DC x 0.85"
+if pv_fresh is None and pv_estimate is not None:
+    warnings.append("AC-PV-Summe nicht frisch; Ersatzwert nutzt " + pv_estimate_source)
+
+pv_live = pv if pv_fresh is not None or pv_night_fallback else (
+    mppt_sum * 0.85 if mppt_fresh else None)
+pv_live_source = ("PV-AC" if pv_fresh is not None else
+                  ("Nacht" if pv_night_fallback else
+                   ("MPPT-DC x 0.85" if mppt_fresh else "keine")))
+
+today = forecast("today", DAY0, DAY1)
+tomorrow = forecast("tomorrow", DAY1, DAY2)
+past_wh = 0
+now_forecast = 0
+for row in today["rows"]:
+    fraction = max(0, min(1, (NOW - row["t"]) / 900))
+    past_wh = past_wh + row["wh"] * fraction
+    if row["t"] <= NOW < row["t"] + 900:
+        now_forecast = row["wh"] * 4
+day_factor = max(0.2, min(1, actual_today * 1000 / past_wh)) if daily_ok and past_wh >= 750 else 1
+short_factor = max(0.2, min(1, pv_estimate / now_forecast)) if pv_estimate is not None and now_forecast >= 1000 else 1
+
+rows = []
+for row in today["rows"]:
+    horizon = max(0, min(1, (row["t"] - NOW) / 7200))
+    factor = (short_factor * (1 - horizon) + day_factor * horizon) * safety
+    rows.append({"t": row["t"], "wh": row["wh"] * factor})
+raw_total = sum([row["wh"] for row in today["rows"]]) / 1000
+raw_rest = max(0, raw_total - past_wh / 1000)
+expected_total = (actual_today if daily_ok else past_wh / 1000) + raw_rest * day_factor
+if expected_total <= weak:
+    category = "schwach"
+    preferred = DAY0
+elif expected_total < middle:
+    category = "wechselhaft"
+    preferred = NINE - 7200 * (middle - expected_total) / (middle - weak)
+elif expected_total < strong:
+    category = "mittel"
+    preferred = NINE + (ELEVEN - NINE) * (expected_total - middle) / (strong - middle)
+else:
+    category = "stark"
+    preferred = ELEVEN
+
+direct_surplus = max(0, pv_live - live_load) if pv_live is not None and live_load is not None else None
+live_valid = grid is not None and (direct_surplus is not None or balance_surplus is not None
+                                   or (balance_lower is not None and balance_lower >= 200))
+live_surplus = 0
+surplus_source = "ungültig"
+night_zero_certified = sun_below_horizon and pv == 0
+if night_zero_certified:
+    live_valid = True
+    live_surplus = 0
+    surplus_source = "Nacht: bestätigte 0 W PV"
+elif live_valid:
+    live_surplus = min(direct_surplus, balance_surplus) if direct_surplus is not None and balance_surplus is not None else (direct_surplus if direct_surplus is not None else balance_surplus)
+    direct_label = pv_live_source + " minus Hauslast"
+    surplus_source = direct_label if balance_surplus is None else ("Bilanz und " + direct_label if direct_surplus is not None else "Netz-/Batteriebilanz")
+    if direct_surplus is None and balance_surplus is None:
+        live_surplus = balance_lower
+        surplus_source = "Netzeinspeisung abzüglich maximaler unbekannter Batterieentladung"
+    if pv is None:
+        warnings.append("PV-Summe ersetzt keine Messung: Ladefreigabe durch " + surplus_source)
+    if direct_surplus is not None and balance_surplus is not None and abs(direct_surplus - balance_surplus) > 500:
+        warnings.append("Live-Überschussprüfungen weichen um mehr als 500 W voneinander ab")
+data_errors = []
+if pv is None and not live_valid:
+    data_errors.append("PV-Leistung fehlt oder ist veraltet")
+if grid is None:
+    data_errors.append("Netzleistung fehlt oder ist veraltet")
+if load_raw is None:
+    warnings.append("Hauslastmittel fehlt: Planung mit 1000 W Ersatzlast")
+if not live_valid and pv is not None and grid is not None:
+    data_errors.append("Weder aktuelle Hauslast noch vollständige Batteriebilanz verfügbar")
+data_errors.extend(errors)
+pv_chance = live_valid and live_surplus >= 200
+prior_plan = hass.states.get("sensor.speicher_ladelogik_planung")
+reaction_blocked_prior = {}
+for key in ["A", "E"]:
+    # Eine ausbleibende AC-Reaktion ist nur ein Hinweis.
+    # Eine aus einer frueheren Installation uebernommene Sperre darf nicht weiterwirken.
+    reaction_blocked_prior[key] = False
+last_data_errors = data_errors
+last_data_error_ts = NOW if data_errors else None
+if not data_errors and prior_plan is not None:
+    last_data_errors = prior_plan.attributes.get("letzte_datenfehler", [])
+    last_data_error_ts = number(prior_plan.attributes.get("letzter_datenfehler_ts"))
+
+previews_today = {}
+previews_tomorrow = {}
+cal_safe = {}
+cal_critical = {}
+cal_armed = {}
+cal_errors = {}
+for key in ["A", "E"]:
+    cfg = BATTERIES[key]
+    model = learning["models"][key]
+    learned_ac = 0
+    if (number(model.get("count"), 0) >= 3
+            and abs(number(model.get("usable_reference"), 0) - bats[key]["usable"]) < 0.01):
+        learned_ac = number(model.get("ac_kwh"), 0)
+
+    hours = (max(cfg["measured_ac"], bats[key]["usable"] / eta, learned_ac) + 0.25) / 0.5
+    previews_today[key] = continuous_window(today["rows"], NOW, hours, load, min(day_factor, short_factor) * safety)
+    previews_tomorrow[key] = continuous_window(tomorrow["rows"], DAY1, hours, load, safety)
+    # Keine Altersgrenze fuer die Zelltemperatur -- der LilyGo-
+    # Sensor meldet nur bei tatsaechlicher Wertaenderung und kann bei einer
+    # Kalibrier-Vormerkung fuer den naechsten Tag 24h+ ohne neue Meldung
+    # bleiben, ohne dass das ein Fehler ist. Wertebereich (5-40 C) und
+    # Vorhandensein werden weiterhin geprueft, nur die Alterssperre entfaellt.
+    tmin = measurement(cfg["tmin"], "temperature")
+    tmax = measurement(cfg["tmax"], "temperature")
+    vmax = measurement(cfg["vmax"], "voltage")
+    problems = []
+    if not bats[key]["owns"]:
+        problems.append("Venus " + key + ": Auto Target/Active oder manuelle Sperre prüfen")
+    if not bats[key]["usable_data"]:
+        problems.append("Venus " + key + ": eigene SoC-/Ladegrenzendaten ungültig")
+    if bats[key]["power_for_cal"] is None:
+        problems.append("Venus " + key + ": eigene AC-Leistung für Kalibrierung nicht frisch")
+    if tmin is None or tmax is None or not 5 <= tmin <= tmax <= 40:
+        problems.append("Venus " + key + ": Temperaturfenster 5–40 °C nicht bestätigt")
+    if vmax is None or not 2.5 <= vmax < 3.60:
+        problems.append("Venus " + key + ": Zellspannung fehlt oder ausserhalb des Kalibrierfensters")
+    if number(raw(cfg["top"])) != 100:
+        problems.append("Venus " + key + ": oberes SoC-Limit muss 100 % sein")
+    if not writable(cfg["discharge"], 0) or not writable(cfg["charge"], 500):
+        problems.append("Venus " + key + ": eigene 0-W-Entlade-/500-W-Ladegrenze fehlt")
+    if failure_counts[key] >= 3:
+        problems.append("Venus " + key + ": drei Schreibfehler; Quittierung erforderlich")
+    cal_safe[key] = not problems
+    cal_critical[key] = ((tmin is not None and tmax is not None and not 5 <= tmin <= tmax <= 40)
+                         or (vmax is not None and not 2.5 <= vmax < 3.60))
+    cal_errors[key] = problems
+    cal_armed[key] = raw("input_boolean.speicher_ladelogik_kalibrierung_" + key.lower() + "_freigegeben") == "on"
+
+backup = read_backup(raw(BACKUP_ID))
+cal_backup = read_backup(raw(CAL_BACKUP_ID))
+session = read_session(raw(SESSION_ID))
+queue_value = raw(QUEUE_ID)
+
+if queue_value in ["unknown", "unavailable"] and raw("input_boolean.speicher_ladelogik_v1_beta_1_initialisiert") != "on":
+    queue_value = ""
+queue = read_queue(queue_value)
+current_caps = cap_snapshot()
+records_ok = (session["p"] != "error" and raw(SESSION_ID) not in ["unknown", "unavailable"]
+              and (backup is not None or raw(BACKUP_ID) == "")
+              and (cal_backup is not None or raw(CAL_BACKUP_ID) == "") and queue is not None)
+if queue is None:
+    queue = {}
+original_phase = session["p"]
+original_battery = session["b"]
+save_backup = ""
+save_cal_backup = ""
+clear_cal_backup = False
+clear_backup = False
+queue_notify = ""
+effective_request = REQUEST
+request_map = {"cal_a": "A", "cal_e": "E", "cal_a_tomorrow": "A", "cal_e_tomorrow": "E"}
+if REQUEST in request_map and records_ok:
+    key = request_map[REQUEST]
+    not_before = int(DAY1 if REQUEST.endswith("tomorrow") else DAY0)
+    if not automatic or not cal_armed[key]:
+        queue_notify = "Vormerkung erfordert Automatik und die Kalibrierfreigabe für Venus " + key + "."
+    elif session["p"] in ACTIVE_PHASES and session["b"] == key:
+        if session["p"] == "requested":
+            session["n"] = not_before
+            session["s"] = 0
+            session["x"] = 0
+            queue_notify = "Termin für Venus " + key + " aktualisiert."
+        else:
+            queue_notify = "Venus " + key + " wird bereits vorbereitet oder kalibriert."
+    else:
+        depends = session["b"] if session["p"] in ACTIVE_PHASES else "-"
+        queue[key] = {"n": not_before, "t": int(NOW), "d": depends}
+        queue_notify = "Venus " + key + (" für morgen vorgemerkt." if REQUEST.endswith("tomorrow") else " für das nächste geeignete Fenster vorgemerkt.")
+if REQUEST == "cancel":
+    queue = {}
+elif REQUEST in ["cancel_a", "cancel_e"]:
+    key = "A" if REQUEST == "cancel_a" else "E"
+    queue.pop(key, None)
+    if session["b"] == key and session["p"] in ACTIVE_PHASES:
+        effective_request = "cancel"
+        for item in queue.values():
+            if item["d"] == key:
+                queue_notify = "Folgeauftrag bleibt vorgemerkt und wartet auf erneute Anforderung."
+for key in ["A", "E"]:
+    if key in queue and not cal_armed[key]:
+        queue.pop(key)
+
+if session["p"] not in ACTIVE_PHASES and records_ok and automatic and REQUEST not in ["start", "cancel", "cancel_a", "cancel_e"]:
+    candidates = [key for key in ["A", "E"] if key in queue and queue[key]["d"] == "-"
+                  and cal_armed[key] and failure_counts[key] < 3]
+    chosen = None
+    for key in candidates:
+        if chosen is None or queue[key]["t"] < queue[chosen]["t"]:
+            chosen = key
+    if chosen is not None:
+        q = queue.pop(chosen)
+        session = read_session("")
+        session["b"] = chosen
+        session["z"] = pack_count if chosen == "A" else 1
+        session["n"] = q["n"]
+        transition(session, "requested", "requested")
+
+cal_restored = cal_backup is None and session["s"] == 0
+if cal_backup is not None and session["b"] in ["A", "E"]:
+    key = session["b"]
+    own_saved = {key: cal_backup[key], "D" + key: cal_backup["D" + key]}
+    cal_restored = backup_restored(own_saved, current_caps)
+cal = calibration_step(session, {"request": effective_request, "automatic": automatic,
+    "armed": cal_armed, "safe": cal_safe, "critical": cal_critical,
+    "batteries": bats, "today": previews_today, "tomorrow": previews_tomorrow,
+    "backup": cal_backup, "restored": cal_restored, "pv": pv,
+    "prepare": PREPARE, "live_surplus": live_surplus, "pack_count": pack_count,
+    "peer_drain_ok": {key: failure_counts[key] < 3 and writable(BATTERIES[key]["discharge"], 0) for key in ["A", "E"]}})
+session = cal["session"]
+if not records_ok:
+    cal["finish"] = False
+    cal["retry"] = False
+if cal["finish"]:
+    for item in queue.values():
+        if item["d"] == session["b"]:
+            item["d"] = "-"
+if cal["retry"]:
+    key = session["b"]
+    queue[key] = {"n": int(max(session["n"], DAY1)), "t": int(NOW), "d": "-"}
+
+if automatic and records_ok:
+    if backup is None:
+        backup = {"A": -1, "E": -1, "DA": -1, "DE": -1}
+    changed = False
+    for key in ["A", "E"]:
+        fields = [key, "D" + key] if manual_active_by_key[key] else [key]
+        for field in fields:
+            entity = BATTERIES[key]["discharge" if field.startswith("D") else "charge"]
+            if (bats[key]["owns"] and failure_counts[key] < 3 and backup[field] == -1
+                    and current_caps[field] is not None and writable(entity, current_caps[field])):
+                backup[field] = current_caps[field]
+                changed = True
+    if changed:
+        save_backup = encode_backup(backup)
+
+if session["p"] in ["drain", "wait", "charge", "rest", "paused"] and records_ok:
+    if cal_backup is None:
+        cal_backup = {"A": -1, "E": -1, "DA": -1, "DE": -1}
+    previous_backup = encode_backup(cal_backup)
+    key = session["b"]
+    for field in [key, "D" + key]:
+        if cal_backup[field] == -1 and current_caps[field] is not None:
+            cal_backup[field] = current_caps[field]
+    for other in cal["discharge"]:
+        if cal_backup["D" + other] == -1 and current_caps["D" + other] is not None:
+            cal_backup["D" + other] = current_caps["D" + other]
+    if previous_backup != encode_backup(cal_backup):
+        save_cal_backup = encode_backup(cal_backup)
+
+held = {}
+for key in ["A", "E"]:
+    pending = key in queue or (session["p"] in ACTIVE_PHASES and session["b"] == key)
+    held[key] = pending and raw("input_boolean.speicher_ladelogik_kalibrierung_" + key.lower() + "_laden_sperren") == "on"
+cal_active = session["b"] if session["p"] in ["drain", "wait", "charge", "rest", "paused", "restore"] else ""
+caps = {key: bats[key]["cap"] if bats[key]["owns"] and bats[key]["usable_data"] and failure_counts[key] < 3
+        and not reaction_blocked_prior[key] and not bats[key]["target_met"]
+        and key != cal_active and not held[key] else 0 for key in ["A", "E"]}
+needs = {key: bats[key]["need"] if caps[key] > 0 else 0 for key in ["A", "E"]}
+stored = sum([bats[key]["stored"] for key in ["A", "E"]])
+target_energy = sum([bats[key]["target"] for key in ["A", "E"]])
+normal_stored = sum([bats[key]["stored"] for key in ["A", "E"] if caps[key] > 0])
+normal_target = sum([bats[key]["target"] for key in ["A", "E"] if caps[key] > 0])
+normal_reserve = reserve * normal_target / max(0.001, target_energy)
+need = sum(needs.values())
+max_total = sum(caps.values())
+
+normal_rows = []
+for row in rows:
+    cal_reservation = 0
+    if cal_active and session["p"] in ["wait", "charge", "paused"]:
+        overlap = max(0, min(row["t"] + 900, session["x"] + 1800) - max(row["t"], session["s"]))
+        cal_reservation = 500 * overlap / 3600
+    normal_rows.append({"t": row["t"], "wh": max(0, row["wh"] - cal_reservation)})
+solar_rows = [row for row in rows if row["wh"] * 4 > load]
+solar_start = solar_rows[0]["t"] if solar_rows else None
+solar_end = solar_rows[-1]["t"] + 900 if solar_rows else None
+end = min(DEADLINE, solar_end) if solar_end is not None else DEADLINE
+if end <= NOW:
+    end = solar_end if solar_end is not None else DAY1
+preferred = max(preferred, solar_start if solar_start is not None else preferred)
+simulation_bats = {}
+for key in ["A", "E"]:
+    simulation_bats[key] = bats[key].copy()
+    simulation_bats[key]["need"] = needs[key]
+preferred_sim = simulate(normal_rows, NOW, max(NOW, end - 1800), simulation_bats, caps, load, 1, eta, preferred)
+start = preferred
+early = need > 0 and preferred_sim["finish"] is None
+if early:
+    start = min(NOW, preferred)
+hard_caps = caps.copy()
+efficient_caps = {key: min(caps[key], BATTERIES[key]["preferred"]) for key in ["A", "E"]}
+efficiency_mode = "Bevorzugte Leistung"
+efficiency_sim = simulate(normal_rows, NOW, max(NOW, end - 1800), simulation_bats,
+                          efficient_caps, load, 1, eta, preferred)
+if need > 0 and efficiency_sim["finish"] is None:
+    efficiency_sim = simulate(normal_rows, NOW, max(NOW, end - 1800), simulation_bats,
+                              efficient_caps, load, 1, eta, NOW)
+    if efficiency_sim["finish"] is not None:
+        start = min(NOW, preferred)
+        early = True
+        efficiency_mode = "Früher beginnen mit bevorzugter Leistung"
+    else:
+        efficiency_mode = "Mehr Leistung erforderlich; Ladeziel hat Vorrang"
+if need <= 0 or efficiency_sim["finish"] is not None:
+    caps = efficient_caps
+max_total = sum(caps.values())
+safe_rest = 0
+window_wh = 0
+current_opportunity = 0
+current_normal_surplus = 0
+morning = 0
+afternoon = 0
+for row in normal_rows:
+    seconds = max(0, row["t"] + 900 - max(NOW, row["t"]))
+    surplus = max(0, row["wh"] * 4 - load)
+    opportunity = min(surplus, max_total)
+    safe_rest = safe_rest + opportunity * seconds / 3600000 * eta
+    win_seconds = max(0, min(end, row["t"] + 900) - max(NOW, start, row["t"]))
+    window_wh = window_wh + opportunity * win_seconds / 3600
+    if row["t"] <= NOW < row["t"] + 900:
+        current_opportunity = opportunity
+        current_normal_surplus = surplus
+for row in rows:
+    if row["t"] < NINE + 10800:
+        morning = morning + row["wh"] / 1000
+    else:
+        afternoon = afternoon + row["wh"] / 1000
+safe_rest = max(0, safe_rest - extra)
+was_scarce = prior_plan is not None and prior_plan.attributes.get("knapp") is True
+scarce_threshold = need * setting("knappheitsreserve", 125, 100, 200) / 100
+if was_scarce:
+    scarce_threshold = scarce_threshold + setting("hysterese", 0.2, 0.05, 1)
+scarce = pv_chance and (expected_total <= weak or safe_rest < scarce_threshold)
+
+if caps != hard_caps and scarce and expected_total > weak:
+    hard_safe = max(0, sum([min(max(0, row["wh"] * 4 - load), sum(hard_caps.values()))
+                    * max(0, row["t"] + 900 - max(NOW, row["t"])) / 3600000 * eta
+                    for row in normal_rows]) - extra)
+    scarce = hard_safe < scarce_threshold
+reason = "Kein aktueller PV-Überschuss"
+status = "Keine PV-Ladechance"
+total = 0
+peak = {"ok": False, "target": 0, "start": None, "end": None, "finish": None}
+peak_enabled = raw("input_boolean.speicher_ladelogik_mittagsspitzen") != "off"
+cal_draw = 500 if session["p"] == "charge" else 0
+normal_live = max(0, live_surplus - cal_draw)
+if not live_valid:
+    reason = "Keine verlässliche Live-Überschusserkennung"
+    status = "Datenfehler"
+elif need <= 0:
+    status = "Ziel erreicht" if all([bats[key]["target_met"] for key in ["A", "E"]]) else "Speicher einzeln gesperrt / vorgemerkt"
+    reason = "Kein Restbedarf in den aktuell für den Fahrplan freigegebenen Speichern"
+elif pv_chance:
+    if not today["ok"]:
+        caps = hard_caps
+        max_total = sum(caps.values())
+        efficiency_mode = "Prognose-Fallback"
+        total = max_total
+        status = "PV-Fallback"
+        reason = "Prognose ungültig; AstraMeter darf realen Überschuss aufnehmen"
+    elif scarce or normal_stored < min(normal_reserve, normal_target):
+        caps = hard_caps
+        max_total = sum(caps.values())
+        efficiency_mode = "Reserve sichern; Ladeziel hat Vorrang"
+        total = max_total
+        status = "Sichern"
+        reason = "Knappheit oder Mindestreserve; vorhandenen Ueberschuss sichern"
+    else:
+        if peak_enabled and not early and NOW < min(end, DEADLINE) - 1800:
+            peak = peak_plan(normal_rows, end - 1800, simulation_bats, caps, load, eta, preferred)
+        if peak["ok"]:
+            total = min(max(0, normal_live - peak["target"]), max(0, current_normal_surplus - peak["target"])) if NOW >= preferred else 0
+            start = peak["start"] if peak["start"] is not None else preferred
+            status = "Mittagsspitzen reduzieren" if total >= 50 else "Platz für Mittagsspitze halten"
+            reason = "Ladung auf die höchsten prognostizierten Überschüsse konzentriert; Ladeziel und Endphase eingeplant"
+        elif NOW >= start:
+            quota_wh = need / eta * 1000
+            total = current_opportunity * min(1, quota_wh / max(1, window_wh))
+            if early:
+                total = max(total, min(max_total, need / eta * 1000 / max(0.25, (end - NOW) / 3600)))
+            if NOW >= DEADLINE:
+                total = max_total
+            if total > 25:
+                total = max(total, min(max_total, setting("min_effiziente_leistung", 800, 0, 1500)))
+            status = "Vorladen" if early and NOW < preferred else "Fahrplanladen"
+            reason = "Spätere Ertragsfenster reichen nicht; Ladebeginn vorgezogen" if early and NOW < preferred else "Laden nach verbleibenden Viertelstunden-Überschüssen"
+        else:
+            status = "Zurückhalten"
+            reason = "Spätere PV-Fenster decken Restbedarf einschließlich Lade-Endphase"
+
+# ── Stabile Fahrplan-Grenzen und manuelle Grenzen je Speicher ───────────────
+# Die Prognose entscheidet weiterhin ueber Start, Ende und Leistungsstufe.
+# Waehrend einer normalen Ladephase wird je Speicher aber ein fester Grenzwert
+# gesetzt und gehalten; die Feinregelung am Netzanschlusspunkt macht AstraMeter.
+automatic_status = status
+automatic_reason = reason
+dispatch_caps = {key: min(caps[key], BATTERIES[key]["tail"])
+                 if bats[key]["soc"] is not None and bats[key]["soc"] >= 90
+                 else caps[key] for key in ["A", "E"]}
+if cal_draw:
+    total = min(total, max(0, live_surplus - 600))
+    if bats[session["b"]]["charge_power"] < 400 and not bats[session["b"]]["all_full"]:
+        total = 0
+        automatic_reason = "Kalibrierladung erhält zuerst 400–500 W; danach gilt der normale Fahrplan für den Rest"
+
+if total >= 50:
+    if cal_draw:
+        # Nur waehrend einer Kalibrierung wird der Rest dynamisch begrenzt,
+        # damit deren 500 W sicher Vorrang behalten.
+        limits = split_power(min(max_total, total), needs, dispatch_caps, {})
+    else:
+        limits = {key: dispatch_caps[key] if needs[key] > 0 else 0
+                  for key in ["A", "E"]}
+else:
+    limits = {"A": 0, "E": 0}
+automatic_limits = limits.copy()
+
+manual_allowed = {}
+for key in ["A", "E"]:
+    manual_allowed[key] = (manual_active_by_key[key] and key != cal_active
+                           and bats[key]["owns"] and failure_counts[key] < 3)
+    if manual_allowed[key]:
+        limits[key] = manual_charge[key]
+
+manual_keys = [key for key in ["A", "E"] if manual_active_by_key[key]]
+if manual_keys:
+    status = "Manuelle Grenze " + "/".join(manual_keys)
+    efficiency_mode = "Manuelle Grenze nur für " + "/".join(manual_keys)
+    descriptions = []
+    for key in manual_keys:
+        descriptions.append(key + " Laden/Entladen " + str(manual_charge[key])
+                            + "/" + str(manual_discharge[key]) + " W")
+    reason = "Manuell: " + "; ".join(descriptions) + ". Anderer Speicher bleibt im Fahrplan."
+else:
+    status = automatic_status
+    reason = automatic_reason
+
+reaction = {}
+reaction_newly_blocked = []
+for key in ["A", "E"]:
+    name = key.lower()
+    prior_limit = number(prior_plan.attributes.get("soll_ladegrenze_venus_" + name + "_w"), 0) if prior_plan is not None else 0
+    prior_since = number(prior_plan.attributes.get("ladeanforderung_venus_" + name + "_seit_ts")) if prior_plan is not None else None
+    prior_confirmed = flag(prior_plan.attributes.get("ladeleistung_venus_" + name + "_bestaetigt", False)) if prior_plan is not None else False
+    blocked = reaction_blocked_prior[key]
+    requested = limits[key] > 0 and key not in cal["charge"]
+    since = None
+    confirmed = False
+    status_text = "aus"
+    if blocked:
+        limits[key] = 0
+        status_text = "gesperrt; Fehler quittieren"
+    elif requested:
+        continuing = prior_limit > 0 and prior_since is not None
+        since = prior_since if continuing else NOW
+        confirmed = (prior_confirmed if continuing else False) or (
+            bats[key]["power_fresh"] and bats[key]["charge_power"] is not None
+            and bats[key]["charge_power"] >= 25)
+        if confirmed:
+            status_text = "bestätigt"
+        elif NOW - since >= 180:
+            status_text = "nicht bestätigt – Hinweis (AstraMeter aktiv)"
+            reaction_newly_blocked.append(key)
+        else:
+            status_text = "wartet auf frische Ladeleistung"
+    reaction[key] = {"requested_since": since, "confirmed": confirmed,
+                     "blocked": blocked, "status": status_text}
+    if key in reaction_newly_blocked:
+        message = "Venus " + key + ": Ladeleistung nach Freigabe nicht bestätigt (Hinweis)"
+        if message not in warnings:
+            warnings.append(message)
+
+reaction_blocked_keys = [key for key in ["A", "E"] if reaction[key]["blocked"]]
+
+if data_errors:
+    last_data_errors = data_errors
+    last_data_error_ts = NOW
+normal_limits = automatic_limits.copy()
+normal_status = automatic_status
+normal_reason = automatic_reason
+normal_sim = simulate(normal_rows, NOW, end, simulation_bats, caps, load, 1, eta, start)
+
+hardware_commands = []
+release_ready = True
+normal_release = not automatic and backup is not None
+cal_release = cal["release"] and cal_backup is not None
+release = normal_release or cal_release
+cal_changed = False
+normal_changed = False
+order = ["E", "A"] if session["p"] in ACTIVE_PHASES and session["b"] == "E" else ["A", "E"]
+for key in order:
+    permitted = records_ok and bats[key]["owns"] and failure_counts[key] < 3 and backup is not None and backup[key] >= 0
+    active_own = session["p"] in ["drain", "wait", "charge", "rest", "paused"] and session["b"] == key
+    restoring_fields = []
+    if cal_backup is not None:
+        for field in ["D" + key, key]:
+            preserve = (active_own or (field == "D" + key and key in cal["discharge"]))
+            if cal_backup[field] >= 0 and not preserve:
+                restoring_fields.append(field)
+    key_restoring = bool(restoring_fields)
+    for field in restoring_fields:
+        value = cal_backup[field]
+        entity = BATTERIES[key]["discharge" if field.startswith("D") else "charge"]
+        if current_caps[field] is not None and abs(current_caps[field] - value) < 25:
+            cal_backup[field] = -1
+            cal_changed = True
+        elif permitted and writable(entity, value):
+            hardware_commands.append({"entity": entity, "value": value, "battery": key, "restore": True})
+        else:
+            release_ready = False
+    manual_d_field = "D" + key
+    restore_manual_discharge = (backup is not None and backup[manual_d_field] >= 0
+                                and (not manual_active_by_key[key] or not automatic)
+                                and not active_own and key not in cal["discharge"]
+                                and not key_restoring)
+    if restore_manual_discharge:
+        value = backup[manual_d_field]
+        if (current_caps[manual_d_field] is not None
+                and abs(current_caps[manual_d_field] - value) < 25):
+            backup[manual_d_field] = -1
+            normal_changed = True
+        elif permitted and writable(BATTERIES[key]["discharge"], value):
+            hardware_commands.append({"entity": BATTERIES[key]["discharge"], "value": value,
+                                      "battery": key, "restore": True})
+        else:
+            release_ready = False
+    if normal_release and not key_restoring and backup[key] >= 0:
+        value = backup[key]
+        if current_caps[key] is not None and abs(current_caps[key] - value) < 25:
+            backup[key] = -1
+            normal_changed = True
+        elif permitted and writable(BATTERIES[key]["charge"], value):
+            hardware_commands.append({"entity": BATTERIES[key]["charge"], "value": value, "battery": key, "restore": True})
+        else:
+            release_ready = False
+    elif automatic:
+        if key in cal["charge"]:
+            limits[key] = cal["charge"][key]
+        if ((not manual_active_by_key[key] and (not bats[key]["usable_data"] or not live_valid))
+                or failure_counts[key] >= 3):
+            limits[key] = 0
+        if permitted:
+            if key in cal["discharge"]:
+                value = cal["discharge"][key]
+                if (cal_backup is not None and cal_backup["D" + key] >= 0
+                        and writable(BATTERIES[key]["discharge"], value)
+                        and write_needed(current_caps["D" + key], value)):
+                    hardware_commands.append({"entity": BATTERIES[key]["discharge"], "value": value, "battery": key, "restore": False})
+            elif manual_active_by_key[key] and manual_allowed.get(key, False) and not key_restoring:
+                value = manual_discharge[key]
+                if (writable(BATTERIES[key]["discharge"], value)
+                        and write_needed(current_caps["D" + key], value)):
+                    hardware_commands.append({"entity": BATTERIES[key]["discharge"], "value": value,
+                                              "battery": key, "restore": False})
+            if (not key_restoring and writable(BATTERIES[key]["charge"], limits[key])
+                    and write_needed(current_caps[key], limits[key])):
+                hardware_commands.append({"entity": BATTERIES[key]["charge"], "value": limits[key], "battery": key, "restore": False})
+            elif (key_restoring and all([field.startswith("D") for field in restoring_fields])
+                    and writable(BATTERIES[key]["charge"], limits[key])
+                    and write_needed(current_caps[key], limits[key])):
+                hardware_commands.append({"entity": BATTERIES[key]["charge"], "value": limits[key], "battery": key, "restore": False})
+if cal_changed:
+    if all([value == -1 for value in cal_backup.values()]):
+        clear_cal_backup = True
+        save_cal_backup = ""
+    else:
+        save_cal_backup = encode_backup(cal_backup)
+if normal_changed:
+    if all([value == -1 for value in backup.values()]):
+        clear_backup = True
+        save_backup = ""
+    else:
+        save_backup = encode_backup(backup)
+can_execute = records_ok and bool(hardware_commands)
+
+reasons = {"requested": "Auftrag gespeichert; geeignetes PV-Fenster wird gesucht",
+    "scheduled": "Termin vorgemerkt; Vorbereitung beginnt abends bei geringer PV",
+    "no_window": "Auftrag bleibt vorgemerkt; heute/morgen kein ausreichend langes PV-Fenster",
+    "waiting_data": "Auftrag bleibt vorgemerkt; erforderliche eigene Daten fehlen",
+    "waiting_pv": "Leer vorbereitet; wartet auf vorgesehenes PV-Fenster",
+    "natural_discharge": "Vorbereitung durch Hausverbrauch; keine erzwungene Einspeisung",
+    "charging": "500-W-Limit; tatsächliche Ladeleistung wird überwacht",
+    "resting": "Alle erwarteten SoCs bei 100 %; Ruhephase",
+    "success": "100 % und Ruhe bestätigt; eigene Grenzwerte zurückgegeben",
+    "cancelled": "Vom Benutzer, Betriebsmodus oder eigener Freigabe beendet",
+    "restart": "Neustart: vorheriger Lauf zurückgegeben; neuer Versuch vorgemerkt",
+    "data_pause": "Pausiert: erforderliche eigene Daten oder Steuerung ungültig",
+    "data_invalid": "Abbruch: kritische Daten oder Steuerfreigaben waren ungültig",
+    "pv_pause": "Pausiert: PV-Überschuss reicht aktuell nicht für die Kalibrierladung",
+    "resumed": "Ladung nach Pause wieder aufgenommen; Unterbrechung bleibt protokolliert",
+    "device_limit": "Eigene Zellspannung oder Temperatur ausserhalb des Kalibrierfensters",
+    "pack_changed": "Packzahl während des Versuchs geändert",
+    "backup_missing": "Gesicherte Ausgangswerte fehlen: manuell prüfen",
+    "state_corrupt": "Gespeicherter Sitzungszustand ungültig",
+    "retry_empty": "Speicher noch nicht leer; Auftrag für nächsten geeigneten Tag erhalten",
+    "retry_window": "PV-Fenster reicht nicht mehr; Auftrag für nächsten geeigneten Tag erhalten",
+    "under_400w": "Pausiert: eigene Ladeleistung mindestens 5 Minuten unter 400 W",
+    "full_unconfirmed": "100 % nicht bestätigt; 99 % gilt nicht als Erfolg",
+    "sample_gap": "Pausiert: Messlücke über 90 Sekunden; Kontinuität nicht belegbar",
+    "telemetry_no_response": "Pausiert: nach Ladefreigabe keine neue AC-Rückmeldung innerhalb von drei Minuten",
+    "interrupted_full": "Volladung nach Pause; kein durchgehender Kalibriererfolg, Wiederholung vorgemerkt",
+    "rest_timeout": "Ruhephase nicht erreichbar"}
+cal_reason = reasons.get(session["r"], session["r"])
+if session["p"] in ["requested", "paused"] and session["b"] in cal_errors and cal_errors[session["b"]]:
+    cal_reason = cal_reason + ": " + "; ".join(cal_errors[session["b"]])
+if session["p"] in ["drain", "wait", "charge", "rest", "paused", "restore"]:
+    status = "Kalibrierung " + session["b"] + ": " + session["p"]
+    reason = cal_reason
+if all([failure_counts[key] >= 3 for key in ["A", "E"]]):
+    status = "Schreibfehler - gesperrt"
+    reason = "Beide Speicher nach drei eigenen Schreibfehlern gesperrt"
+elif failure_count >= 3:
+    warnings.append("Schreibsperre betrifft nur " + ("A" if failure_counts["A"] >= 3 else "E"))
+if not records_ok or session["p"] == "error":
+    status = "Sitzungsfehler - gesperrt"
+    reason = "Sitzung/Ausgangswerte/Vormerkungen ungültig: vor manueller Bereinigung prüfen"
+if errors:
+    warnings.extend(errors)
+if not release_ready:
+    warnings.append("Rückgabe eines Speichers wartet auf dessen Steuerbarkeit; anderer Speicher arbeitet weiter")
+reported_need = sum([bats[key]["need"] for key in ["A", "E"]])
+
+plan = {
+    "version": VERSION, "status": status, "berechnet_ts": NOW,
+    "betriebsart": mode, "regelung_aktiv": automatic and records_ok,
+    "daten_gueltig": live_valid and not data_errors and today["ok"],
+    "datenfehler_aktuell": data_errors,
+    "letzte_datenfehler": last_data_errors,
+    "letzter_datenfehler_ts": last_data_error_ts,
+    "prognose_intervalle_ok": today["ok"], "prognose_morgen_intervalle_ok": tomorrow["ok"],
+    "prognose_heute_roh_kwh": round(raw_total, 3), "prognose_heute_erwartet_kwh": round(expected_total, 3),
+    "prognose_bis_jetzt_kwh": round(past_wh / 1000, 3), "pv_real_bis_jetzt_kwh": actual_today if daily_ok else None,
+    "pv_real_bis_jetzt_roh": raw(DAILY), "pv_real_bis_jetzt_einheit": "kWh",
+    "pv_real_tageswert_plausibel": daily_ok, "prognose_jetzt_w": round(now_forecast),
+    "pv_real_jetzt_roh": raw(PV), "pv_real_jetzt_w": pv,
+    "pv_nacht_ersatzwert": pv_night_fallback,
+    "pv_0w_gehalten": pv_held_zero,
+    "pv_ac_status": pv_status,
+    "pv_mppt_frisch": mppt_fresh, "pv_mppt_summe_dc_w": mppt_sum,
+    "pv_mppt_werte_w": mppt_values,
+    "pv_planungswert_w": round(pv_estimate) if pv_estimate is not None else None,
+    "pv_planungswert_quelle": pv_estimate_source,
+    "ueberschuss_untergrenze_w": balance_lower,
+    "effizienzmodus": efficiency_mode,
+    "sollwertstrategie": "Stabile Grenzwerte; Register nur bei Sollwertänderung",
+    "bevorzugte_ladeleistung_a_w": BATTERIES["A"]["preferred"],
+    "bevorzugte_ladeleistung_e_w": BATTERIES["E"]["preferred"],
+    "prognose_tagesfaktor": round(day_factor, 3),
+    "prognose_kurzfristfaktor": round(short_factor, 3), "prognose_qualitaetsfaktor": round(day_factor, 3),
+    "prognose_effektivfaktor": round(short_factor * safety, 3), "prognose_rest_roh_kwh": round(raw_rest, 3),
+    "pv_ladechance": pv_chance, "hausleistung_30_min_roh": raw(LOAD), "hausleistung_30_min_einheit": "W",
+    "hausleistung_30_min_w": load, "hausleistung_aktuell_roh": raw(LIVE_LOAD),
+    "hausleistung_aktuell_w": live_load,
+    "ueberschuss_direkt_w": round(direct_surplus) if direct_surplus is not None else None,
+    "ueberschuss_bilanz_w": round(balance_surplus) if balance_surplus is not None else None,
+    "tagesklasse": category,
+    "solarfenster_start_ts": solar_start, "solarfenster_ende_ts": solar_end,
+    "ladefenster_start_ts": start, "ladefenster_ende_ts": end,
+    "ladefenster_dauer_h": round(max(0, end - start) / 3600, 2),
+    "fenster_fortschritt_prozent": round(max(0, min(100, (NOW - start) / max(1, end - start) * 100)), 1),
+    "fahrplan_basisleistung_w": sum(limits.values()), "max_ladeleistung_gesamt_w": 4000,
+    "sicher_speicherbar_rest_kwh": round(safe_rest, 3),
+    "sicher_speicherbar_fenster_rest_kwh": round(window_wh / 1000 * eta, 3),
+    "deckungsfaktor": round(safe_rest / reported_need, 2) if reported_need > 0.001 else 99,
+    "knapp": scarce, "gespeicherte_energie_kwh": round(stored, 4), "zielenergie_kwh": round(target_energy, 4),
+    "restbedarf_kwh": round(reported_need, 4), "restbedarf_ac_kwh": round(reported_need / eta, 4),
+    "fahrplanenergie_jetzt_kwh": round(stored - normal_stored + max(0, normal_target - window_wh / 1000 * eta), 3),
+    "mindestenergie_jetzt_kwh": round(stored - normal_stored + min(normal_target, max(normal_reserve, normal_target - window_wh / 1000 * eta)), 3),
+    "energieluecke_kwh": round(normal_target - window_wh / 1000 * eta - normal_stored, 3),
+    "soll_laden": sum(limits.values()) > 0, "soll_ladeleistung_gesamt_w": sum(limits.values()),
+    "soll_ladegrenze_venus_a_w": limits["A"], "soll_ladegrenze_venus_e_w": limits["E"],
+    "verteilungsmodus": "geteilt" if min(limits.values()) > 0 else ("nur A" if limits["A"] > 0 else ("nur E" if limits["E"] > 0 else "aus")),
+    "manuell_aktiv": manual_active,
+    "manuell_a_aktiv": manual_active_by_key["A"],
+    "manuell_e_aktiv": manual_active_by_key["E"],
+    "manuell_laden_a_w": manual_charge["A"],
+    "manuell_entladen_a_w": manual_discharge["A"],
+    "manuell_laden_e_w": manual_charge["E"],
+    "manuell_entladen_e_w": manual_discharge["E"],
+    "entscheidungsgrund": reason, "pv_vormittag_kwh": round(morning, 2), "pv_nachmittag_kwh": round(afternoon, 2),
+    "prognose_morgen_kwh": round(sum([row["wh"] for row in tomorrow["rows"]]) / 1000, 2) if tomorrow["ok"] else None,
+    "vorziehen_noetig": early, "fruehestens_voll_ts": normal_sim["finish"],
+    "ziel_fehlmenge_simulation_kwh": round(normal_sim["missing"], 3),
+    "warnungen": warnings, "prognose_fehler": today["errors"], "prognose_morgen_fehler": tomorrow["errors"],
+    "packs_a_erwartet": pack_count, "packs_a_gueltig": len(bats["A"]["packs"]),
+    "packs_a_soc": bats["A"]["packs"], "netto_ueberschuss_w": round(live_surplus),
+}
+for key in ["A", "E"]:
+    name = key.lower()
+    plan["soc_venus_" + name] = bats[key]["soc"]
+    plan["restbedarf_venus_" + name + "_kwh"] = round(bats[key]["need"], 4)
+    plan["kapazitaet_venus_" + name + "_kwh"] = round(bats[key]["usable"], 4)
+    plan["nennkapazitaet_venus_" + name + "_kwh"] = round(bats[key]["nominal"], 4)
+    plan["ziel_venus_" + name + "_erreicht"] = bats[key]["target_met"]
+    plan["auto_target_venus_" + name] = raw(BATTERIES[key]["auto"])
+    plan["aktuelle_ladegrenze_venus_" + name + "_w"] = current_caps[key]
+    plan["ac_leistung_venus_" + name + "_roh_w"] = bats[key]["power_display"]
+    plan["ac_ladeleistung_venus_" + name + "_w"] = (charging_power(key, bats[key]["power_display"])
+                                                       if bats[key]["power_display"] is not None else None)
+    plan["ac_leistung_venus_" + name + "_0w_gehalten"] = bats[key]["power_held_zero"]
+    plan["ac_leistung_venus_" + name + "_frisch"] = bats[key]["power_fresh"]
+    plan["ac_leistung_venus_" + name + "_status"] = bats[key]["power_status"]
+    plan["ac_leistung_venus_" + name + "_alter_min"] = (round(bats[key]["power_age_min"], 1)
+                                                          if bats[key]["power_age_min"] is not None else None)
+    plan["ladeanforderung_venus_" + name + "_seit_ts"] = reaction[key]["requested_since"]
+    plan["ladeleistung_venus_" + name + "_bestaetigt"] = reaction[key]["confirmed"]
+    plan["ladereaktion_venus_" + name + "_gesperrt"] = reaction[key]["blocked"]
+    plan["ladereaktion_venus_" + name + "_status"] = reaction[key]["status"]
+    plan["kalibrier_leer_venus_" + name] = bats[key]["cal_empty_ready"]
+
+
+def bat_summary(key, bats, limits, session, cal_active, held, reaction, manual_active_by_key):
+    b = bats[key]
+    soc = b["soc"]
+    soc_str = (str(round(soc, 1)) + " %") if soc is not None else "SoC ?"
+    lw = limits.get(key, 0)
+    if cal_active == key:
+        lade_str = "Kalibrierung (" + session.get("p", "?") + ")"
+    elif held.get(key):
+        lade_str = "Gesperrt (Kalibrierung wartet)"
+    elif manual_active_by_key.get(key, False) and lw > 0:
+        lade_str = "Manuell " + str(lw) + " W"
+    elif lw > 0:
+        lade_str = "Laden " + str(lw) + " W"
+    elif b.get("target_met"):
+        lade_str = "Ziel erreicht"
+    else:
+        lade_str = "Wartet"
+    react = reaction.get(key, {})
+    conf_str = " v" if react.get("confirmed") else (" !" if key in [r for r in reaction if not reaction[r].get("confirmed") and reaction[r].get("requested_since")] else "")
+    need_kwh = b.get("need", 0)
+    need_str = (" - noch " + str(round(need_kwh, 2)) + " kWh") if need_kwh > 0.05 else ""
+    return soc_str + " - " + lade_str + conf_str + need_str
+
+
+calibration = {"phase": session["p"], "batterie": session["b"],
+    "grund": cal_reason, "grund_code": session["r"],
+    "energie_ac_kwh": round(session["w"] / 1000, 3), "start_ts": session["s"] or None,
+    "ende_ts": session["x"] or None, "kalibrieren_a_sicher": cal_safe["A"], "kalibrieren_e_sicher": cal_safe["E"],
+    "a_pruefhinweise": cal_errors["A"], "e_pruefhinweise": cal_errors["E"],
+    "heute_a": previews_today["A"], "heute_e": previews_today["E"],
+    "morgen_a": previews_tomorrow["A"], "morgen_e": previews_tomorrow["E"],
+    "drift_a_p1_mv": measurement("sensor.venus_a_pack_1_zelldrift", "delta", 600),
+    "drift_a_p2_mv": measurement("sensor.venus_a_pack_2_zelldrift", "delta", 600),
+    "drift_e_mv": measurement("sensor.marstek_venus_e_zellspannungs_differenz", "delta", 600),
+    "hinweis": "Prognose ist keine Garantie; 500 W sind ein Limit. Pack 2 bekannt auffällig: kein Drift-Autostart.",
+    "dashboard_a": bat_summary("A", bats, limits, session, cal_active, held, reaction, manual_active_by_key),
+    "dashboard_e": bat_summary("E", bats, limits, session, cal_active, held, reaction, manual_active_by_key)}
+
+output["plan"] = plan
+output["calibration"] = calibration
+output["session"] = encode_session(session)
+output["save_backup"] = save_backup
+output["clear_backup"] = clear_backup
+output["save_cal_backup"] = save_cal_backup
+output["clear_cal_backup"] = clear_cal_backup
+output["capture_drift"] = original_phase == "rest" and session["r"] == "success"
+output["commands"] = hardware_commands
+output["execute"] = can_execute
+output["finish"] = cal["finish"]
+
+reset_after_calibration = []
+if cal["finish"] and session["b"] in ["A", "E"]:
+    key_cal = session["b"]
+    reset_after_calibration = [
+        "input_boolean.speicher_ladelogik_kalibrierung_" + key_cal.lower() + "_freigegeben",
+        "input_boolean.speicher_ladelogik_kalibrierung_" + key_cal.lower() + "_laden_sperren",
+    ]
+output["reset_after_calibration"] = reset_after_calibration
+output["notify"] = ("Kalibrierung Venus " + session["b"] + ": " + cal_reason) if cal["notify"] else queue_notify
+output["ack"] = REQUEST == "ack"
+
+plan["daten_gueltig_gemeinsam"] = live_valid
+plan["ueberschuss_quelle"] = surplus_source
+plan["normaler_fahrplan_status"] = normal_status
+plan["normaler_fahrplan_grund"] = normal_reason
+plan["mittagsspitzen_aktiv"] = peak_enabled
+plan["mittagsspitzen_planbar"] = peak["ok"]
+plan["einspeiseziel_w"] = peak["target"] if peak["ok"] else None
+plan["spitzenfenster_start_ts"] = peak["start"]
+plan["spitzenfenster_ende_ts"] = peak["end"]
+plan["spitzenplan_voll_ts"] = peak["finish"]
+plan["kalibrier_reserviert_w"] = cal_draw
+plan["normaler_restbedarf_kwh"] = round(need, 4)
+for key in ["A", "E"]:
+    name = key.lower()
+    plan["daten_gueltig_venus_" + name] = bats[key]["usable_data"] and not reaction[key]["blocked"]
+    plan["schreibfehler_venus_" + name] = failure_counts[key]
+    plan["fahrplan_ladegrenze_venus_" + name + "_w"] = normal_limits[key]
+    plan["vorgemerkt_ladesperre_venus_" + name] = held[key]
+    own_calibration = session["p"] in ACTIVE_PHASES and session["b"] == key
+    key_errors = [item for item in data_errors
+                  if item.startswith(key + ":") or item.startswith("Venus " + key + ":")]
+    if own_calibration:
+        plan["status_venus_" + name] = "Kalibrierung: " + PHASE_LABELS.get(session["p"], session["p"])
+        plan["grund_venus_" + name] = reason
+    elif key_errors:
+        plan["status_venus_" + name] = "Datenfehler"
+        plan["grund_venus_" + name] = "; ".join(key_errors)
+    elif manual_active_by_key[key]:
+        plan["status_venus_" + name] = "Manuelle Grenze"
+        plan["grund_venus_" + name] = (key + " Laden/Entladen " + str(manual_charge[key])
+                                           + "/" + str(manual_discharge[key]) + " W")
+    else:
+        plan["status_venus_" + name] = automatic_status
+        plan["grund_venus_" + name] = automatic_reason
+
+pending_items = []
+next_key = session["b"] if session["p"] == "requested" else ""
+next_day = session["n"] if next_key else None
+for key in ["A", "E"]:
+    if key in queue:
+        item = queue[key]
+        pending_items.append({"batterie": key, "fruehestens_ts": item["n"],
+                              "nach_erfolg_von": item["d"], "laden_gesperrt": held[key]})
+        if not next_key:
+            next_key = key
+            next_day = item["n"]
+    active_request = session["b"] == key and session["p"] in ACTIVE_PHASES
+    calibration[key.lower() + "_vorgemerkt"] = key in queue or active_request
+    calibration[key.lower() + "_fruehestens_ts"] = queue[key]["n"] if key in queue else (session["n"] if active_request else None)
+    calibration[key.lower() + "_laden_gesperrt"] = held[key]
+calibration["vormerkungen"] = pending_items
+calibration["naechste_batterie"] = next_key
+calibration["naechster_termin_ts"] = next_day
+calibration["fruehestens_ts"] = session["n"] or None
+calibration["lauf_unterbrochen"] = bool(session["i"])
+calibration["pausiert"] = session["p"] == "paused"
+calibration["fortsetzungsphase"] = session["u"]
+calibration["als_naechstes"] = "Als Nächstes: Venus " + next_key if next_key else "Kein Folgeauftrag"
+prior_calibration = hass.states.get("sensor.speicher_ladelogik_kalibrierung_planung")
+calibration["letzte_pause_grund"] = prior_calibration.attributes.get("letzte_pause_grund", "") if prior_calibration is not None else ""
+calibration["letzte_pause_ts"] = number(prior_calibration.attributes.get("letzte_pause_ts")) if prior_calibration is not None else None
+if session["p"] == "paused" and original_phase != "paused":
+    calibration["letzte_pause_grund"] = cal_reason
+    calibration["letzte_pause_ts"] = NOW
+output["queue"] = encode_queue(queue) if records_ok else queue_value
+output["write_order"] = order
+output["failure_counts"] = failure_counts
+output["reaction_newly_blocked"] = reaction_newly_blocked
+
+drifts = {"A": [calibration["drift_a_p1_mv"], calibration["drift_a_p2_mv"]],
+          "E": [calibration["drift_e_mv"]]}
+active = learning["active"]
+if session["p"] == "charge" and original_phase in ["wait", "requested"]:
+    key = session["b"]
+    active = {"battery": key, "start": NOW, "soc": bats[key]["soc"],
+              "usable_reference": bats[key]["usable"], "eta": eta, "drift": drifts[key]}
+    learning["active"] = active
+journal_event = ((session["p"] == "paused" and original_phase != "paused") or
+                 (session["p"] in ["done", "incomplete", "cancelled", "error"]
+                  and original_phase in ACTIVE_PHASES))
+if journal_event and session["b"] in ["A", "E"]:
+    key = session["b"]
+    has_start = active.get("battery") == key and number(active.get("start")) is not None
+    start_stamp = active["start"] if has_start else None
+    sample = session["w"] / 1000
+    start_soc = number(active.get("soc")) if has_start else None
+    reference = number(active.get("usable_reference"), 0)
+    sample_eta = number(active.get("eta"), eta)
+    normalized_ac = sample * (100 - BATTERIES[key]["floor"]) / max(1, 100 - start_soc) if start_soc is not None else 0
+    sample_ok = (cal["finish"] and not session["i"] and has_start
+                 and start_soc is not None and 0 <= start_soc <= 15
+                 and abs(reference - bats[key]["usable"]) < 0.01
+                 and 0.6 * reference <= normalized_ac * sample_eta <= 1.4 * reference)
+    record = {"battery": key, "start": start_stamp, "end": NOW,
+              "duration_h": round((NOW - start_stamp) / 3600, 3) if has_start else None,
+              "result": session["p"], "reason": cal_reason, "ac_kwh": round(sample, 4),
+              "drift_before_mv": active.get("drift", []) if has_start else [],
+              "drift_after_mv": drifts[key], "learning_valid": sample_ok}
+    learning["history"] = (learning["history"] + [record])[-20:]
+    if sample_ok:
+        old = learning["models"][key]
+        old_count = int(number(old.get("count"), 0))
+        if abs(number(old.get("usable_reference"), 0) - reference) >= 0.01:
+            old_count = 0
+        average = (0.75 * number(old.get("ac_kwh"), normalized_ac) + 0.25 * normalized_ac
+                   if old_count else normalized_ac)
+        learning["models"][key] = {"count": min(10000, old_count + 1), "ac_kwh": round(average, 4),
+            "usable_estimate_kwh": round(average * sample_eta, 4), "eta_assumed": sample_eta,
+            "usable_reference": reference, "updated_ts": NOW}
+    if session["p"] != "paused":
+        learning["active"] = {}
+output["learning"] = learning
+output["journal_event"] = journal_event
