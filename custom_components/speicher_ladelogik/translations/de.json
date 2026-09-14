@@ -1,0 +1,63 @@
+{
+  "title": "Speicher-Ladelogik",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Gemeinsame Datenquellen",
+        "description": "Die erste Beta arbeitet ausschließlich im Beobachtungsmodus und führt keine Schreibzugriffe aus.",
+        "data": {
+          "name": "Name",
+          "pv_ac": "Aktuelle PV-AC-Leistung",
+          "mppt_sensors": "MPPT-Leistungssensoren",
+          "grid_power": "Leistung am Netzanschlusspunkt",
+          "house_power": "Aktuelle Hausleistung",
+          "house_power_average": "Gemittelte Hausleistung",
+          "pv_daily_energy": "Heutige PV-Produktion",
+          "forecast_sensors": "15-Minuten-Prognosesensoren heute und morgen"
+        }
+      },
+      "venus_a": {
+        "title": "Venus A",
+        "description": "Datenquellen und Stellglieder für Venus A auswählen. Es wird noch nichts geschrieben.",
+        "data": {
+          "a_soc": "SoC",
+          "a_ac_power": "AC-Leistung",
+          "a_charge_limit": "Maximale Ladeleistung",
+          "a_discharge_limit": "Maximale Entladeleistung",
+          "a_auto_target": "AstraMeter Auto Target",
+          "a_active": "AstraMeter Active",
+          "a_charge_override": "Nicht-laden-Helfer",
+          "a_max_soc": "Obere SoC-Grenze",
+          "a_usable_capacity": "Verfügbare Kapazität",
+          "a_pack_soc": "Pack-SoC-Sensoren",
+          "a_max_cell_voltage": "Maximale Zellspannung",
+          "a_max_cell_temp": "Maximale Zelltemperatur",
+          "a_min_cell_temp": "Minimale Zelltemperatur",
+          "a_pack_drift": "Pack-Driftsensoren"
+        }
+      },
+      "venus_e": {
+        "title": "Venus E",
+        "description": "Datenquellen und Stellglieder für Venus E auswählen. Es wird noch nichts geschrieben.",
+        "data": {
+          "e_soc": "SoC",
+          "e_ac_power": "AC-Leistung",
+          "e_charge_limit": "Maximale Ladeleistung",
+          "e_discharge_limit": "Maximale Entladeleistung",
+          "e_auto_target": "AstraMeter Auto Target",
+          "e_active": "AstraMeter Active",
+          "e_charge_override": "Nicht-laden-Helfer",
+          "e_max_soc": "Obere SoC-Grenze",
+          "e_usable_capacity": "Verfügbare Kapazität",
+          "e_max_cell_voltage": "Maximale Zellspannung",
+          "e_max_cell_temp": "Maximale Zelltemperatur",
+          "e_min_cell_temp": "Minimale Zelltemperatur",
+          "e_cell_drift": "Zellspannungsdifferenz"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Speicher-Ladelogik ist bereits eingerichtet."
+    }
+  }
+}
