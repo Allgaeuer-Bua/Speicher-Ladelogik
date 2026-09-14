@@ -84,7 +84,6 @@ DEFAULTS: Final = {
     CONF_A_PACK_SOC: [
         "sensor.marstek_venus_a_soc_batteriepack_1",
         "sensor.marstek_venus_a_soc_batteriepack_2",
-        "sensor.marstek_venus_a_soc_batteriepack_3",
     ],
     CONF_A_MAX_CELL_VOLTAGE: "sensor.marstek_venus_a_maximale_zellenspannung",
     CONF_A_MAX_CELL_TEMP: "sensor.marstek_venus_a_maximale_zellentemperatur",
