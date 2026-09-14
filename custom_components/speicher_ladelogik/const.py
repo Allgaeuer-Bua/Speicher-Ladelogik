@@ -8,10 +8,50 @@ from homeassistant.const import Platform
 
 DOMAIN: Final = "speicher_ladelogik"
 NAME: Final = "Speicher-Ladelogik"
-VERSION: Final = "1.0.0-beta.2"
+VERSION: Final = "1.0.0-beta.3"
 
 PLATFORMS: Final = [Platform.SENSOR]
 UPDATE_INTERVAL_SECONDS: Final = 30
+
+SHADOW_TRACKED_ENTITIES: Final = (
+    "sun.sun",
+    "sensor.speicher_ladelogik_planung",
+    "sensor.speicher_ladelogik_kalibrierung_planung",
+    "sensor.speicher_ladelogik_lernspeicher",
+    "input_boolean.speicher_ladelogik_aktiv",
+    "input_boolean.speicher_ladelogik_mittagsspitzen",
+    "input_boolean.speicher_ladelogik_manuell_a_aktiv",
+    "input_boolean.speicher_ladelogik_manuell_e_aktiv",
+    "input_boolean.speicher_ladelogik_kalibrierung_a_freigegeben",
+    "input_boolean.speicher_ladelogik_kalibrierung_e_freigegeben",
+    "input_boolean.speicher_ladelogik_kalibrierung_a_laden_sperren",
+    "input_boolean.speicher_ladelogik_kalibrierung_e_laden_sperren",
+    "input_boolean.speicher_ladelogik_v1_beta_1_initialisiert",
+    "input_select.speicher_ladelogik_betriebsart",
+    "input_text.speicher_ladelogik_kalibrierung_sitzung",
+    "input_text.speicher_ladelogik_kalibrierung_vormerkungen",
+    "input_text.speicher_ladelogik_sicherung",
+    "input_text.speicher_ladelogik_kalibrierung_sicherung",
+    "input_number.speicher_ladelogik_ziel_soc",
+    "input_number.speicher_ladelogik_mindestreserve",
+    "input_number.speicher_ladelogik_prognose_sicherheit",
+    "input_number.speicher_ladelogik_unplanbare_reserve",
+    "input_number.speicher_ladelogik_ladewirkungsgrad",
+    "input_number.speicher_ladelogik_hysterese",
+    "input_number.speicher_ladelogik_schwacher_tag",
+    "input_number.speicher_ladelogik_mittlerer_tag",
+    "input_number.speicher_ladelogik_starker_tag",
+    "input_number.speicher_ladelogik_knappheitsreserve",
+    "input_number.speicher_ladelogik_min_effiziente_leistung",
+    "input_number.speicher_ladelogik_venus_a_packs",
+    "input_number.speicher_ladelogik_schreibfehler",
+    "input_number.speicher_ladelogik_schreibfehler_a",
+    "input_number.speicher_ladelogik_schreibfehler_e",
+    "input_number.speicher_ladelogik_manuell_laden_a_w",
+    "input_number.speicher_ladelogik_manuell_entladen_a_w",
+    "input_number.speicher_ladelogik_manuell_laden_e_w",
+    "input_number.speicher_ladelogik_manuell_entladen_e_w",
+)
 
 CONF_NAME: Final = "name"
 CONF_PV_AC: Final = "pv_ac"
