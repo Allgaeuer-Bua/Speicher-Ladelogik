@@ -23,12 +23,14 @@ from .const import (
     REQUIRED_A_KEYS,
     REQUIRED_COMMON_KEYS,
     REQUIRED_E_KEYS,
+    SHADOW_TRACKED_ENTITIES,
     UPDATE_INTERVAL_SECONDS,
     VENUS_A_KEYS,
     VENUS_E_KEYS,
     VERSION,
 )
 from .helpers import as_number, is_usable_state, power_in_watts
+from .planner_adapter import calculate, compare_with_legacy
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,8 +50,8 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.config = dict(entry.data)
 
     @property
-    def tracked_entities(self) -> list[str]:
-        """Return every configured entity ID once."""
+    def source_entities(self) -> list[str]:
+        """Return every entity selected in the config flow once."""
         entities: list[str] = []
         for value in self.config.values():
             candidates = value if isinstance(value, list) else [value]
@@ -57,6 +59,11 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if isinstance(candidate, str) and "." in candidate:
                     entities.append(candidate)
         return list(dict.fromkeys(entities))
+
+    @property
+    def tracked_entities(self) -> list[str]:
+        """Return sources and legacy helper entities that trigger recalculation."""
+        return list(dict.fromkeys([*self.source_entities, *SHADOW_TRACKED_ENTITIES]))
 
     async def _async_update_data(self) -> dict[str, Any]:
         return self._collect_data()
@@ -147,7 +154,7 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         a_ready = all(self._key_available(key) for key in REQUIRED_A_KEYS)
         e_ready = all(self._key_available(key) for key in REQUIRED_E_KEYS)
 
-        return {
+        result = {
             "version": VERSION,
             "betriebsart": "Beobachten",
             "schreibzugriffe_aktiv": False,
@@ -165,7 +172,44 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "ac_leistung_venus_e_w": self._numeric(CONF_E_AC_POWER, power=True),
             "fehlende_entitaeten": missing,
             "warnungen": [f"Nicht verfügbar: {entity}" for entity in missing],
-            "quellen_gesamt": len(self.tracked_entities),
-            "quellen_verfuegbar": len(self.tracked_entities) - len(missing),
+            "quellen_gesamt": len(self.source_entities),
+            "quellen_verfuegbar": len(self.source_entities) - len(missing),
             "quellen": sources,
         }
+
+        try:
+            shadow = calculate(self.hass, self.config)
+            shadow_plan = shadow.get("plan", {})
+            shadow_calibration = shadow.get("calibration", {})
+            result.update(
+                {
+                    "schattenplanung_aktiv": True,
+                    "schattenplanung_fehler": None,
+                    "shadow_plan": shadow_plan,
+                    "shadow_calibration": shadow_calibration,
+                    "shadow_comparison": compare_with_legacy(
+                        self.hass, shadow_plan, shadow_calibration
+                    ),
+                    "shadow_proposed_commands": shadow.get(
+                        "proposed_commands", []
+                    ),
+                }
+            )
+        except Exception as err:  # noqa: BLE001 - keep observation sensors alive
+            _LOGGER.exception("Schattenplanung konnte nicht berechnet werden")
+            result.update(
+                {
+                    "schattenplanung_aktiv": False,
+                    "schattenplanung_fehler": str(err),
+                    "shadow_plan": {},
+                    "shadow_calibration": {},
+                    "shadow_comparison": {
+                        "available": False,
+                        "matches": None,
+                        "fields_compared": 0,
+                        "differences": [],
+                    },
+                    "shadow_proposed_commands": [],
+                }
+            )
+        return result
