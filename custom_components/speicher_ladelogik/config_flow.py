@@ -131,9 +131,7 @@ class SpeicherLadelogikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_A_ACTIVE, default=DEFAULTS[CONF_A_ACTIVE]): _entity(
                     "switch"
                 ),
-                vol.Required(
-                    CONF_A_CHARGE_OVERRIDE, default=DEFAULTS[CONF_A_CHARGE_OVERRIDE]
-                ): _entity("input_boolean"),
+                vol.Optional(CONF_A_CHARGE_OVERRIDE): _entity("input_boolean"),
                 vol.Required(CONF_A_MAX_SOC, default=DEFAULTS[CONF_A_MAX_SOC]): _entity(
                     "number"
                 ),
@@ -185,9 +183,7 @@ class SpeicherLadelogikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_E_ACTIVE, default=DEFAULTS[CONF_E_ACTIVE]): _entity(
                     "switch"
                 ),
-                vol.Required(
-                    CONF_E_CHARGE_OVERRIDE, default=DEFAULTS[CONF_E_CHARGE_OVERRIDE]
-                ): _entity("input_boolean"),
+                vol.Optional(CONF_E_CHARGE_OVERRIDE): _entity("input_boolean"),
                 vol.Required(CONF_E_MAX_SOC, default=DEFAULTS[CONF_E_MAX_SOC]): _entity(
                     "number"
                 ),
