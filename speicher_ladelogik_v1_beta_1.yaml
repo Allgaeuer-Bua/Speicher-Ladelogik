@@ -1,0 +1,709 @@
+# Speicher-Ladelogik V1.0 Beta 1
+# Dauerhafte manuelle Lade- und Entladegrenzen stehen getrennt fuer A und E bereit.
+# Zusaetzlich python_scripts/speicher_ladelogik_v1_beta_1.py installieren.
+# Die neuen Entity- und Unique-IDs beginnen einheitlich mit speicher_ladelogik.
+# Ohne Initialwerte bleiben Benutzereinstellungen nach einem Neustart erhalten.
+python_script:
+
+input_boolean:
+  speicher_ladelogik_v1_beta_1_initialisiert:
+    name: Speicher-Ladelogik V1.0 Beta 1 eingerichtet intern
+  speicher_ladelogik_mittagsspitzen:
+    name: Mittagsspitzen reduzieren
+    icon: mdi:chart-bell-curve
+  speicher_ladelogik_kalibrierung_a_laden_sperren:
+    name: Venus A bei Vormerkung sofort nicht laden
+    icon: mdi:battery-lock
+  speicher_ladelogik_kalibrierung_e_laden_sperren:
+    name: Venus E bei Vormerkung sofort nicht laden
+    icon: mdi:battery-lock
+  speicher_ladelogik_aktiv:
+    name: Speicher-Ladelogik aktiv
+    icon: mdi:battery-clock-outline
+  speicher_ladelogik_laden_freigegeben:
+    name: Speicher-Ladelogik Ladefreigabe intern
+    icon: mdi:battery-charging
+  speicher_ladelogik_laufbereit:
+    name: Speicher-Ladelogik Start abgeschlossen intern
+    initial: false
+  speicher_ladelogik_initialisiert:
+    name: Speicher-Ladelogik Sitzungshilfen eingerichtet intern
+  speicher_ladelogik_kalibrierung_a_freigegeben:
+    name: Kalibrierung Venus A freigegeben
+    icon: mdi:shield-check
+  speicher_ladelogik_kalibrierung_e_freigegeben:
+    name: Kalibrierung Venus E freigegeben
+    icon: mdi:shield-check
+  speicher_ladelogik_kalibrierung_a_erfolg_bekannt:
+    name: Kalibrierung A Erfolg bekannt
+  speicher_ladelogik_kalibrierung_e_erfolg_bekannt:
+    name: Kalibrierung E Erfolg bekannt
+  speicher_ladelogik_manuell_a_aktiv:
+    name: Venus A manuelle Grenzen aktiv
+    icon: mdi:hand-back-right
+  speicher_ladelogik_manuell_e_aktiv:
+    name: Venus E manuelle Grenzen aktiv
+    icon: mdi:hand-back-right
+
+input_select:
+  speicher_ladelogik_betriebsart:
+    name: Speicher-Ladelogik Betriebsart
+    icon: mdi:state-machine
+    # First installation starts in Beobachten. Later the selected mode restores.
+    options: [Beobachten, Automatik, Aus]
+
+input_button:
+  speicher_ladelogik_kalibrierung_a_morgen:
+    name: Venus A fuer morgen vormerken
+    icon: mdi:calendar-arrow-right
+  speicher_ladelogik_kalibrierung_e_morgen:
+    name: Venus E fuer morgen vormerken
+    icon: mdi:calendar-arrow-right
+  speicher_ladelogik_kalibrierung_a_entfernen:
+    name: Venus A Auftrag entfernen
+    icon: mdi:calendar-remove
+  speicher_ladelogik_kalibrierung_e_entfernen:
+    name: Venus E Auftrag entfernen
+    icon: mdi:calendar-remove
+  speicher_ladelogik_kalibrierung_a_anfordern:
+    name: Kalibrierung Venus A anfordern
+    icon: mdi:battery-sync
+  speicher_ladelogik_kalibrierung_e_anfordern:
+    name: Kalibrierung Venus E anfordern
+    icon: mdi:battery-sync
+  speicher_ladelogik_kalibrierung_abbrechen:
+    name: Kalibrierung abbrechen
+    icon: mdi:stop-circle-outline
+  speicher_ladelogik_fehler_quittieren:
+    name: Speicher-Ladelogik Fehler quittieren
+    icon: mdi:check-circle-outline
+
+input_text:
+  speicher_ladelogik_kalibrierung_vormerkungen:
+    name: Speicher-Ladelogik Kalibrierung Vormerkungen intern
+    max: 255
+  speicher_ladelogik_kalibrierung_sitzung:
+    name: Speicher-Ladelogik Kalibrierung Sitzung intern
+    max: 255
+  speicher_ladelogik_sicherung:
+    name: Speicher-Ladelogik Ausgangswerte intern
+    max: 255
+  speicher_ladelogik_kalibrierung_sicherung:
+    name: Speicher-Ladelogik Kalibrierung Ausgangswerte intern
+    max: 255
+
+input_datetime:
+  speicher_ladelogik_kalibrierung_a_letzter_erfolg:
+    name: Venus A letzte erfolgreiche Kalibrierung
+    has_date: true
+    has_time: true
+  speicher_ladelogik_kalibrierung_e_letzter_erfolg:
+    name: Venus E letzte erfolgreiche Kalibrierung
+    has_date: true
+    has_time: true
+
+input_number:
+  speicher_ladelogik_schreibfehler_a:
+    name: Venus A aufeinanderfolgende Schreibfehler
+    min: 0
+    max: 3
+    step: 1
+    mode: box
+  speicher_ladelogik_schreibfehler_e:
+    name: Venus E aufeinanderfolgende Schreibfehler
+    min: 0
+    max: 3
+    step: 1
+    mode: box
+  speicher_ladelogik_ziel_soc:
+    name: Speicher-Ladelogik Ziel-SoC
+    min: 50
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: box
+  speicher_ladelogik_mindestreserve:
+    name: Speicher-Ladelogik Mindestreserve
+    min: 0
+    max: 5
+    step: 0.1
+    unit_of_measurement: kWh
+    mode: box
+  speicher_ladelogik_prognose_sicherheit:
+    name: Speicher-Ladelogik Prognose-Sicherheit
+    min: 50
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: box
+  speicher_ladelogik_unplanbare_reserve:
+    name: Speicher-Ladelogik unplanbare Reserve
+    min: 0
+    max: 4
+    step: 0.1
+    unit_of_measurement: kWh
+    mode: box
+  speicher_ladelogik_ladewirkungsgrad:
+    name: Speicher-Ladelogik Ladewirkungsgrad
+    min: 75
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: box
+  speicher_ladelogik_hysterese:
+    name: Speicher-Ladelogik Hysterese
+    min: 0.05
+    max: 1
+    step: 0.05
+    unit_of_measurement: kWh
+    mode: box
+  speicher_ladelogik_schwacher_tag:
+    name: Speicher-Ladelogik schwacher Tag
+    min: 5
+    max: 50
+    step: 1
+    unit_of_measurement: kWh
+    mode: box
+  speicher_ladelogik_mittlerer_tag:
+    name: Speicher-Ladelogik mittlerer Tag
+    min: 20
+    max: 100
+    step: 1
+    unit_of_measurement: kWh
+    mode: box
+  speicher_ladelogik_starker_tag:
+    name: Speicher-Ladelogik starker Tag
+    min: 50
+    max: 200
+    step: 1
+    unit_of_measurement: kWh
+    mode: box
+  speicher_ladelogik_knappheitsreserve:
+    name: Speicher-Ladelogik Knappheitsreserve
+    min: 100
+    max: 200
+    step: 5
+    unit_of_measurement: "%"
+    mode: box
+  speicher_ladelogik_min_effiziente_leistung:
+    name: Speicher-Ladelogik minimale effiziente Leistung
+    min: 0
+    max: 1500
+    step: 50
+    unit_of_measurement: W
+    mode: box
+  speicher_ladelogik_venus_a_packs:
+    name: Speicher-Ladelogik vorhandene Venus-A-Packs
+    min: 2
+    max: 3
+    step: 1
+    mode: box
+  speicher_ladelogik_schreibfehler:
+    name: Speicher-Ladelogik aufeinanderfolgende Schreibfehler
+    min: 0
+    max: 3
+    step: 1
+    mode: box
+  speicher_ladelogik_kalibrierung_a_letzte_energie:
+    name: Venus A letzte Kalibrierenergie AC
+    min: 0
+    max: 20
+    step: 0.001
+    unit_of_measurement: kWh
+    mode: box
+  speicher_ladelogik_kalibrierung_e_letzte_energie:
+    name: Venus E letzte Kalibrierenergie AC
+    min: 0
+    max: 20
+    step: 0.001
+    unit_of_measurement: kWh
+    mode: box
+  speicher_ladelogik_kalibrierung_a_p1_letzte_drift:
+    name: Venus A Pack 1 Drift nach Kalibrierung
+    min: -1
+    max: 1000
+    step: 1
+    unit_of_measurement: mV
+    mode: box
+  speicher_ladelogik_kalibrierung_a_p2_letzte_drift:
+    name: Venus A Pack 2 Drift nach Kalibrierung
+    min: -1
+    max: 1000
+    step: 1
+    unit_of_measurement: mV
+    mode: box
+  speicher_ladelogik_kalibrierung_e_letzte_drift:
+    name: Venus E Drift nach Kalibrierung
+    min: -1
+    max: 1000
+    step: 1
+    unit_of_measurement: mV
+    mode: box
+  speicher_ladelogik_manuell_laden_a_w:
+    name: Manuell Venus A Ladegrenze
+    min: 0
+    max: 1500
+    step: 50
+    unit_of_measurement: W
+    mode: box
+  speicher_ladelogik_manuell_entladen_a_w:
+    name: Manuell Venus A Entladegrenze
+    min: 0
+    max: 1500
+    step: 50
+    unit_of_measurement: W
+    mode: box
+  speicher_ladelogik_manuell_laden_e_w:
+    name: Manuell Venus E Ladegrenze
+    min: 0
+    max: 2500
+    step: 50
+    unit_of_measurement: W
+    mode: box
+  speicher_ladelogik_manuell_entladen_e_w:
+    name: Manuell Venus E Entladegrenze
+    min: 0
+    max: 2500
+    step: 50
+    unit_of_measurement: W
+    mode: box
+
+script:
+  speicher_ladelogik_schreiben_geprueft:
+    alias: Speicher-Ladelogik Grenzwert schreiben und bestaetigen
+    mode: queued
+    max: 6
+    fields:
+      entity:
+        description: Freigegebene Lade- oder Entladegrenze
+      value:
+        description: Zielwert in W
+      battery:
+        description: A oder E
+      restore:
+        description: Gesicherte Ausgangswerte wiederherstellen
+    sequence:
+      - variables:
+          result: {ok: false, written: false}
+          allowed:
+            - number.marstek_venus_a_maximale_ladeleistung
+            - number.marstek_venus_e_ladeleistung
+            - number.marstek_venus_a_maximale_entladeleistung
+            - number.marstek_venus_e_entladeleistung
+          battery_entities:
+            A:
+              - number.marstek_venus_a_maximale_ladeleistung
+              - number.marstek_venus_a_maximale_entladeleistung
+            E:
+              - number.marstek_venus_e_ladeleistung
+              - number.marstek_venus_e_entladeleistung
+          current: "{{ states(entity) | float(none) }}"
+          minimum: "{{ state_attr(entity, 'min') | float(none) }}"
+          maximum: "{{ state_attr(entity, 'max') | float(none) }}"
+          step: "{{ state_attr(entity, 'step') | float(none) }}"
+          control_ok: >-
+            {{ (restore | bool(false) or (
+              is_state('input_boolean.speicher_ladelogik_aktiv', 'on') and
+              is_state('input_select.speicher_ladelogik_betriebsart', 'Automatik'))) and
+              is_state('switch.astrameter_venus_' ~ (battery | lower) ~ '_auto_target', 'on') and
+              is_state('switch.astrameter_venus_' ~ (battery | lower) ~ '_active', 'on') and
+              not is_state('input_boolean.venus_' ~ (battery | lower) ~ '_nicht_laden', 'on') and
+              states('input_number.speicher_ladelogik_schreibfehler_' ~ (battery | lower)) | int(0) < 3 }}
+      - if:
+          - "{{ entity not in allowed or entity not in battery_entities.get(battery, []) or not control_ok or current is none or minimum is none or maximum is none or step is none or step <= 0 }}"
+        then:
+          - stop: Entitaet oder Steuerfreigabe ungueltig
+            response_variable: result
+      - if:
+          - "{{ value | float(-1) < minimum or value | float(-1) > maximum or (((value | float - minimum) / step) - ((value | float - minimum) / step) | round(0)) | abs > 0.001 }}"
+        then:
+          - stop: Zielwert ausserhalb der Geraetegrenzen
+            response_variable: result
+      - if:
+          - "{{ (current - value | float) | abs < 25 }}"
+        then:
+          - variables:
+              result: {ok: true, written: false}
+          - stop: Wert bereits gesetzt
+            response_variable: result
+      - action: number.set_value
+        continue_on_error: true
+        target:
+          entity_id: "{{ entity }}"
+        data:
+          value: "{{ value }}"
+      - action: homeassistant.update_entity
+        continue_on_error: true
+        target:
+          entity_id: "{{ entity }}"
+      - wait_template: >-
+          {{ is_number(states(entity)) and (states(entity) | float - value | float) | abs < 25 }}
+        timeout: "00:00:20"
+        continue_on_timeout: true
+      - variables:
+          result:
+            ok: "{{ wait.completed }}"
+            written: true
+      - stop: HA-Entitaetswert kontrolliert
+        response_variable: result
+
+template:
+  - triggers:
+      - trigger: event
+        event_type: speicher_ladelogik_v1_beta_1_auswertung
+    actions:
+      - variables:
+          p: "{{ trigger.event.data.plan }}"
+          c: "{{ trigger.event.data.calibration }}"
+    sensor:
+      - name: Speicher-Ladelogik Lernspeicher
+        default_entity_id: sensor.speicher_ladelogik_lernspeicher
+        unique_id: speicher_ladelogik_lernspeicher_v1_beta_1
+        icon: mdi:history
+        state: "{{ p.version }}"
+        attributes:
+          active: "{{ trigger.event.data.learning.active }}"
+          history: >-
+            {{ trigger.event.data.learning.history if not trigger.event.data.journal_event
+               or (trigger.event.data.writes_a if c.batterie == 'A' else trigger.event.data.writes_e)
+               else (state_attr('sensor.speicher_ladelogik_lernspeicher', 'history') | default([], true)) }}
+          models: >-
+            {{ trigger.event.data.learning.models if not trigger.event.data.journal_event
+               or (trigger.event.data.writes_a if c.batterie == 'A' else trigger.event.data.writes_e)
+               else (state_attr('sensor.speicher_ladelogik_lernspeicher', 'models') | default({'A': {}, 'E': {}}, true)) }}
+          hinweis: >-
+            AC-Ladebedarf gelernt; nutzbare Kapazitaet nur Schaetzung mit angenommenem
+            Wirkungsgrad. Bestehende Kapazitaetshelfer werden nicht veraendert.
+      - name: Speicher-Ladelogik Planung
+        default_entity_id: sensor.speicher_ladelogik_planung
+        unique_id: speicher_ladelogik_planung_v1_beta_1
+        icon: mdi:solar-power-variant-outline
+        state: >-
+          {% set status = p.status | string %}
+          {% if status.startswith('Kalibrierung ') and ': ' in status %}
+            {% set teile = status.split(': ', 1) %}
+            {% set phasen = {
+              'drain': 'Entladen auf 13 %',
+              'wait': 'Wartet auf PV-Fenster',
+              'charge': 'Kalibrierladung mit 500 W',
+              'rest': 'Ruheprüfung',
+              'paused': 'Pausiert – Auftrag bleibt erhalten',
+              'restore': 'Grenzwerte wiederherstellen'
+            } %}
+            {{ teile[0] ~ ': ' ~ phasen.get(teile[1], teile[1]) }}
+          {% else %}
+            {{ status }}
+          {% endif %}
+        attributes:
+          pv_ac_status: "{{ p.pv_ac_status }}"
+          pv_mppt_frisch: "{{ p.pv_mppt_frisch }}"
+          pv_mppt_summe_dc_w: "{{ p.pv_mppt_summe_dc_w }}"
+          pv_mppt_werte_w: "{{ p.pv_mppt_werte_w }}"
+          pv_planungswert_w: "{{ p.pv_planungswert_w }}"
+          pv_planungswert_quelle: "{{ p.pv_planungswert_quelle }}"
+          ueberschuss_untergrenze_w: "{{ p.ueberschuss_untergrenze_w }}"
+          effizienzmodus: "{{ p.effizienzmodus }}"
+          sollwertstrategie: "{{ p.sollwertstrategie }}"
+          bevorzugte_ladeleistung_a_w: "{{ p.bevorzugte_ladeleistung_a_w }}"
+          bevorzugte_ladeleistung_e_w: "{{ p.bevorzugte_ladeleistung_e_w }}"
+          version: "{{ p.version }}"
+          berechnet_ts: "{{ p.berechnet_ts }}"
+          betriebsart: "{{ p.betriebsart }}"
+          regelung_aktiv: "{{ p.regelung_aktiv }}"
+          daten_gueltig: "{{ p.daten_gueltig }}"
+          daten_gueltig_gemeinsam: "{{ p.daten_gueltig_gemeinsam }}"
+          daten_gueltig_venus_a: "{{ p.daten_gueltig_venus_a }}"
+          daten_gueltig_venus_e: "{{ p.daten_gueltig_venus_e }}"
+          ueberschuss_quelle: "{{ p.ueberschuss_quelle }}"
+          normaler_fahrplan_status: "{{ p.normaler_fahrplan_status }}"
+          normaler_fahrplan_grund: "{{ p.normaler_fahrplan_grund }}"
+          mittagsspitzen_aktiv: "{{ p.mittagsspitzen_aktiv }}"
+          mittagsspitzen_planbar: "{{ p.mittagsspitzen_planbar }}"
+          einspeiseziel_w: "{{ p.einspeiseziel_w }}"
+          kalibrier_reserviert_w: "{{ p.kalibrier_reserviert_w }}"
+          normaler_restbedarf_kwh: "{{ p.normaler_restbedarf_kwh }}"
+          schreibfehler_venus_a: "{{ p.schreibfehler_venus_a }}"
+          schreibfehler_venus_e: "{{ p.schreibfehler_venus_e }}"
+          fahrplan_ladegrenze_venus_a_w: "{{ p.fahrplan_ladegrenze_venus_a_w }}"
+          fahrplan_ladegrenze_venus_e_w: "{{ p.fahrplan_ladegrenze_venus_e_w }}"
+          vorgemerkt_ladesperre_venus_a: "{{ p.vorgemerkt_ladesperre_venus_a }}"
+          vorgemerkt_ladesperre_venus_e: "{{ p.vorgemerkt_ladesperre_venus_e }}"
+          status_venus_a: "{{ p.status_venus_a }}"
+          grund_venus_a: "{{ p.grund_venus_a }}"
+          status_venus_e: "{{ p.status_venus_e }}"
+          grund_venus_e: "{{ p.grund_venus_e }}"
+          spitzenfenster_start: "{{ p.spitzenfenster_start_ts | timestamp_custom('%H:%M', true) if p.spitzenfenster_start_ts is not none else '–' }}"
+          spitzenfenster_ende: "{{ p.spitzenfenster_ende_ts | timestamp_custom('%H:%M', true) if p.spitzenfenster_ende_ts is not none else '–' }}"
+          spitzenplan_voll: "{{ p.spitzenplan_voll_ts | timestamp_custom('%H:%M', true) if p.spitzenplan_voll_ts is not none else '–' }}"
+          schreibwerte_bestaetigt_a: "{{ trigger.event.data.writes_a }}"
+          schreibwerte_bestaetigt_e: "{{ trigger.event.data.writes_e }}"
+          datenfehler_aktuell: "{{ p.datenfehler_aktuell }}"
+          letzte_datenfehler: "{{ p.letzte_datenfehler }}"
+          letzter_datenfehler: "{{ p.letzter_datenfehler_ts | timestamp_custom('%d.%m. %H:%M:%S', true) if p.letzter_datenfehler_ts is not none else '–' }}"
+          letzter_datenfehler_ts: "{{ p.letzter_datenfehler_ts }}"
+          prognose_intervalle_ok: "{{ p.prognose_intervalle_ok }}"
+          prognose_morgen_intervalle_ok: "{{ p.prognose_morgen_intervalle_ok }}"
+          prognose_heute_roh_kwh: "{{ p.prognose_heute_roh_kwh }}"
+          prognose_heute_erwartet_kwh: "{{ p.prognose_heute_erwartet_kwh }}"
+          prognose_bis_jetzt_kwh: "{{ p.prognose_bis_jetzt_kwh }}"
+          pv_real_bis_jetzt_roh: "{{ p.pv_real_bis_jetzt_roh }}"
+          pv_real_bis_jetzt_einheit: "{{ p.pv_real_bis_jetzt_einheit }}"
+          pv_real_tageswert_plausibel: "{{ p.pv_real_tageswert_plausibel }}"
+          pv_real_bis_jetzt_kwh: "{{ p.pv_real_bis_jetzt_kwh }}"
+          prognose_jetzt_w: "{{ p.prognose_jetzt_w }}"
+          pv_real_jetzt_roh: "{{ p.pv_real_jetzt_roh }}"
+          pv_real_jetzt_w: "{{ p.pv_real_jetzt_w }}"
+          pv_nacht_ersatzwert: "{{ p.pv_nacht_ersatzwert }}"
+          pv_0w_gehalten: "{{ p.pv_0w_gehalten }}"
+          prognose_tagesfaktor: "{{ p.prognose_tagesfaktor }}"
+          prognose_kurzfristfaktor: "{{ p.prognose_kurzfristfaktor }}"
+          prognose_qualitaetsfaktor: "{{ p.prognose_qualitaetsfaktor }}"
+          prognose_effektivfaktor: "{{ p.prognose_effektivfaktor }}"
+          prognose_rest_roh_kwh: "{{ p.prognose_rest_roh_kwh }}"
+          hausleistung_30_min_roh: "{{ p.hausleistung_30_min_roh }}"
+          hausleistung_30_min_einheit: "{{ p.hausleistung_30_min_einheit }}"
+          hausleistung_30_min_w: "{{ p.hausleistung_30_min_w }}"
+          hausleistung_aktuell_roh: "{{ p.hausleistung_aktuell_roh }}"
+          hausleistung_aktuell_w: "{{ p.hausleistung_aktuell_w }}"
+          netto_ueberschuss_w: "{{ p.netto_ueberschuss_w }}"
+          ueberschuss_direkt_w: "{{ p.ueberschuss_direkt_w }}"
+          ueberschuss_bilanz_w: "{{ p.ueberschuss_bilanz_w }}"
+          tagesklasse: "{{ p.tagesklasse }}"
+          solarfenster_start: "{{ p.solarfenster_start_ts | timestamp_custom('%H:%M', true) if p.solarfenster_start_ts is not none else '–' }}"
+          solarfenster_ende: "{{ p.solarfenster_ende_ts | timestamp_custom('%H:%M', true) if p.solarfenster_ende_ts is not none else '–' }}"
+          ladefenster_start: "{{ p.ladefenster_start_ts | timestamp_custom('%H:%M', true) }}"
+          ladefenster_ende: "{{ p.ladefenster_ende_ts | timestamp_custom('%H:%M', true) }}"
+          ladefenster_dauer_h: "{{ p.ladefenster_dauer_h }}"
+          fenster_fortschritt_prozent: "{{ p.fenster_fortschritt_prozent }}"
+          fahrplan_basisleistung_w: "{{ p.fahrplan_basisleistung_w }}"
+          max_ladeleistung_gesamt_w: "{{ p.max_ladeleistung_gesamt_w }}"
+          sicher_speicherbar_rest_kwh: "{{ p.sicher_speicherbar_rest_kwh }}"
+          sicher_speicherbar_fenster_rest_kwh: "{{ p.sicher_speicherbar_fenster_rest_kwh }}"
+          deckungsfaktor: "{{ p.deckungsfaktor }}"
+          knapp: "{{ p.knapp }}"
+          pv_ladechance: "{{ p.pv_ladechance }}"
+          gespeicherte_energie_kwh: "{{ p.gespeicherte_energie_kwh }}"
+          zielenergie_kwh: "{{ p.zielenergie_kwh }}"
+          kapazitaet_venus_a_kwh: "{{ p.kapazitaet_venus_a_kwh }}"
+          kapazitaet_venus_e_kwh: "{{ p.kapazitaet_venus_e_kwh }}"
+          nennkapazitaet_venus_a_kwh: "{{ p.nennkapazitaet_venus_a_kwh }}"
+          nennkapazitaet_venus_e_kwh: "{{ p.nennkapazitaet_venus_e_kwh }}"
+          restbedarf_kwh: "{{ p.restbedarf_kwh }}"
+          restbedarf_ac_kwh: "{{ p.restbedarf_ac_kwh }}"
+          restbedarf_venus_a_kwh: "{{ p.restbedarf_venus_a_kwh }}"
+          restbedarf_venus_e_kwh: "{{ p.restbedarf_venus_e_kwh }}"
+          fahrplanenergie_jetzt_kwh: "{{ p.fahrplanenergie_jetzt_kwh }}"
+          mindestenergie_jetzt_kwh: "{{ p.mindestenergie_jetzt_kwh }}"
+          energieluecke_kwh: "{{ p.energieluecke_kwh }}"
+          soll_laden: "{{ p.soll_laden }}"
+          soll_ladeleistung_gesamt_w: "{{ p.soll_ladeleistung_gesamt_w }}"
+          soll_ladegrenze_venus_a_w: "{{ p.soll_ladegrenze_venus_a_w }}"
+          soll_ladegrenze_venus_e_w: "{{ p.soll_ladegrenze_venus_e_w }}"
+          verteilungsmodus: "{{ p.verteilungsmodus }}"
+          manuell_aktiv: "{{ p.manuell_aktiv }}"
+          manuell_a_aktiv: "{{ p.manuell_a_aktiv }}"
+          manuell_e_aktiv: "{{ p.manuell_e_aktiv }}"
+          manuell_laden_a_w: "{{ p.manuell_laden_a_w }}"
+          manuell_entladen_a_w: "{{ p.manuell_entladen_a_w }}"
+          manuell_laden_e_w: "{{ p.manuell_laden_e_w }}"
+          manuell_entladen_e_w: "{{ p.manuell_entladen_e_w }}"
+          entscheidungsgrund: "{{ p.entscheidungsgrund }}"
+          soc_venus_a: "{{ p.soc_venus_a }}"
+          soc_venus_e: "{{ p.soc_venus_e }}"
+          ladefreigabe_intern: "{{ is_state('input_boolean.speicher_ladelogik_laden_freigegeben', 'on') }}"
+          auto_target_venus_a: "{{ p.auto_target_venus_a }}"
+          auto_target_venus_e: "{{ p.auto_target_venus_e }}"
+          aktuelle_ladegrenze_venus_a_w: "{{ states('number.marstek_venus_a_maximale_ladeleistung') }}"
+          aktuelle_ladegrenze_venus_e_w: "{{ states('number.marstek_venus_e_ladeleistung') }}"
+          ac_leistung_venus_a_roh_w: "{{ p.ac_leistung_venus_a_roh_w }}"
+          ac_leistung_venus_e_roh_w: "{{ p.ac_leistung_venus_e_roh_w }}"
+          ac_ladeleistung_venus_a_w: "{{ p.ac_ladeleistung_venus_a_w }}"
+          ac_ladeleistung_venus_e_w: "{{ p.ac_ladeleistung_venus_e_w }}"
+          ac_leistung_venus_a_0w_gehalten: "{{ p.ac_leistung_venus_a_0w_gehalten }}"
+          ac_leistung_venus_e_0w_gehalten: "{{ p.ac_leistung_venus_e_0w_gehalten }}"
+          ac_leistung_venus_a_frisch: "{{ p.ac_leistung_venus_a_frisch }}"
+          ac_leistung_venus_e_frisch: "{{ p.ac_leistung_venus_e_frisch }}"
+          ac_leistung_venus_a_status: "{{ p.ac_leistung_venus_a_status }}"
+          ac_leistung_venus_e_status: "{{ p.ac_leistung_venus_e_status }}"
+          ac_leistung_venus_a_alter_min: "{{ p.ac_leistung_venus_a_alter_min }}"
+          ac_leistung_venus_e_alter_min: "{{ p.ac_leistung_venus_e_alter_min }}"
+          ladeanforderung_venus_a_seit_ts: "{{ p.ladeanforderung_venus_a_seit_ts }}"
+          ladeanforderung_venus_e_seit_ts: "{{ p.ladeanforderung_venus_e_seit_ts }}"
+          ladeleistung_venus_a_bestaetigt: "{{ p.ladeleistung_venus_a_bestaetigt }}"
+          ladeleistung_venus_e_bestaetigt: "{{ p.ladeleistung_venus_e_bestaetigt }}"
+          ladereaktion_venus_a_gesperrt: "{{ p.ladereaktion_venus_a_gesperrt }}"
+          ladereaktion_venus_e_gesperrt: "{{ p.ladereaktion_venus_e_gesperrt }}"
+          ladereaktion_venus_a_status: "{{ p.ladereaktion_venus_a_status }}"
+          ladereaktion_venus_e_status: "{{ p.ladereaktion_venus_e_status }}"
+          kalibrier_leer_venus_a: "{{ p.kalibrier_leer_venus_a }}"
+          kalibrier_leer_venus_e: "{{ p.kalibrier_leer_venus_e }}"
+          ziel_venus_a_erreicht: "{{ p.ziel_venus_a_erreicht }}"
+          ziel_venus_e_erreicht: "{{ p.ziel_venus_e_erreicht }}"
+          packs_a_erwartet: "{{ p.packs_a_erwartet }}"
+          packs_a_gueltig: "{{ p.packs_a_gueltig }}"
+          packs_a_soc: "{{ p.packs_a_soc }}"
+          pv_vormittag_kwh: "{{ p.pv_vormittag_kwh }}"
+          pv_nachmittag_kwh: "{{ p.pv_nachmittag_kwh }}"
+          prognose_morgen_kwh: "{{ p.prognose_morgen_kwh }}"
+          vorziehen_noetig: "{{ p.vorziehen_noetig }}"
+          fruehestens_voll: "{{ p.fruehestens_voll_ts | timestamp_custom('%H:%M', true) if p.fruehestens_voll_ts is not none else 'nicht gesichert' }}"
+          ziel_fehlmenge_simulation_kwh: "{{ p.ziel_fehlmenge_simulation_kwh }}"
+          warnungen: "{{ p.warnungen }}"
+          prognose_fehler: "{{ p.prognose_fehler }}"
+          prognose_morgen_fehler: "{{ p.prognose_morgen_fehler }}"
+          schreibwerte_bestaetigt: "{{ trigger.event.data.writes_ok }}"
+      - name: Speicher-Ladelogik Kalibrierung Planung
+        default_entity_id: sensor.speicher_ladelogik_kalibrierung_planung
+        unique_id: speicher_ladelogik_kalibrierung_planung_v1_beta_1
+        icon: mdi:battery-sync
+        state: >-
+          {% set phasen = {
+            'idle': 'Bereit',
+            'requested': 'Auftrag vorgemerkt',
+            'drain': 'Entladen auf 13 %',
+            'wait': 'Wartet auf PV-Fenster',
+            'charge': 'Kalibrierladung mit 500 W',
+            'rest': 'Ruheprüfung',
+              'paused': 'Pausiert – Auftrag bleibt erhalten',
+            'restore': 'Grenzwerte wiederherstellen',
+            'done': 'Erfolgreich beendet',
+            'incomplete': 'Wiederholung vorgemerkt',
+            'cancelled': 'Abgebrochen',
+            'error': 'Fehler'
+          } %}
+          {{ phasen.get(c.phase, c.phase) }}
+        attributes:
+          version: "{{ p.version }}"
+          phase_intern: "{{ c.phase }}"
+          letzte_pause_grund: "{{ c.letzte_pause_grund }}"
+          letzte_pause_ts: "{{ c.letzte_pause_ts }}"
+          letzte_pause_zeit: "{{ c.letzte_pause_ts | timestamp_custom('%d.%m. %H:%M:%S', true) if c.letzte_pause_ts is not none else '–' }}"
+          vormerkungen: "{{ c.vormerkungen }}"
+          naechste_batterie: "{{ c.naechste_batterie }}"
+          lauf_unterbrochen: "{{ c.lauf_unterbrochen }}"
+          pausiert: "{{ c.pausiert }}"
+          fortsetzungsphase: "{{ c.fortsetzungsphase }}"
+          a_vorgemerkt: "{{ c.a_vorgemerkt }}"
+          e_vorgemerkt: "{{ c.e_vorgemerkt }}"
+          a_laden_gesperrt: "{{ c.a_laden_gesperrt }}"
+          e_laden_gesperrt: "{{ c.e_laden_gesperrt }}"
+          als_naechstes: "{{ 'Als Nächstes: Venus ' ~ c.naechste_batterie if c.naechste_batterie else 'Kein Folgeauftrag' }}"
+          naechster_termin: "{{ c.naechster_termin_ts | timestamp_custom('%d.%m.%Y', true) if c.naechster_termin_ts is not none else '–' }}"
+          fruehestens: "{{ c.fruehestens_ts | timestamp_custom('%d.%m.%Y', true) if c.fruehestens_ts is not none else '–' }}"
+          a_fruehestens: "{{ c.a_fruehestens_ts | timestamp_custom('%d.%m.%Y', true) if c.a_fruehestens_ts is not none else '–' }}"
+          e_fruehestens: "{{ c.e_fruehestens_ts | timestamp_custom('%d.%m.%Y', true) if c.e_fruehestens_ts is not none else '–' }}"
+          batterie: "{{ c.batterie }}"
+          grund: "{{ c.grund }}"
+          grund_code: "{{ c.grund_code }}"
+          energie_ac_kwh: "{{ c.energie_ac_kwh }}"
+          fenster_start: "{{ c.start_ts | timestamp_custom('%d.%m. %H:%M', true) if c.start_ts is not none else '–' }}"
+          fenster_ende: "{{ c.ende_ts | timestamp_custom('%d.%m. %H:%M', true) if c.ende_ts is not none else '–' }}"
+          a_pruefhinweise: "{{ c.a_pruefhinweise }}"
+          e_pruefhinweise: "{{ c.e_pruefhinweise }}"
+          kalibrieren_a_sicher: "{{ c.kalibrieren_a_sicher }}"
+          kalibrieren_e_sicher: "{{ c.kalibrieren_e_sicher }}"
+          heute_a: "{{ c.heute_a }}"
+          heute_e: "{{ c.heute_e }}"
+          morgen_a: "{{ c.morgen_a }}"
+          morgen_e: "{{ c.morgen_e }}"
+          drift_a_p1_mv: "{{ c.drift_a_p1_mv }}"
+          drift_a_p2_mv: "{{ c.drift_a_p2_mv }}"
+          drift_e_mv: "{{ c.drift_e_mv }}"
+          hinweis: "{{ c.hinweis }}"
+  - sensor:
+      - name: Speicher-Ladelogik sicher speicherbar Rest
+        default_entity_id: sensor.speicher_ladelogik_sicher_speicherbar_rest
+        unique_id: speicher_ladelogik_sicher_speicherbar_rest_v1_beta_1
+        device_class: energy
+        state_class: measurement
+        unit_of_measurement: kWh
+        state: "{{ state_attr('sensor.speicher_ladelogik_planung', 'sicher_speicherbar_rest_kwh') | float(0) }}"
+      - name: Speicher-Ladelogik Mindestenergie jetzt
+        default_entity_id: sensor.speicher_ladelogik_mindestenergie_jetzt
+        unique_id: speicher_ladelogik_mindestenergie_jetzt_v1_beta_1
+        device_class: energy
+        state_class: measurement
+        unit_of_measurement: kWh
+        state: "{{ state_attr('sensor.speicher_ladelogik_planung', 'mindestenergie_jetzt_kwh') | float(0) }}"
+      - name: Speicher-Ladelogik gespeicherte Energie
+        default_entity_id: sensor.speicher_ladelogik_gespeicherte_energie
+        unique_id: speicher_ladelogik_gespeicherte_energie_v1_beta_1
+        device_class: energy
+        state_class: measurement
+        unit_of_measurement: kWh
+        state: "{{ state_attr('sensor.speicher_ladelogik_planung', 'gespeicherte_energie_kwh') | float(0) }}"
+      - name: Speicher-Ladelogik Prognoseguete
+        default_entity_id: sensor.speicher_ladelogik_prognoseguete
+        unique_id: speicher_ladelogik_prognoseguete_v1_beta_1
+        state_class: measurement
+        unit_of_measurement: "%"
+        state: "{{ (state_attr('sensor.speicher_ladelogik_planung', 'prognose_effektivfaktor') | float(0) * 100) | round(1) }}"
+      - name: Speicher-Ladelogik Soll-Ladeleistung
+        default_entity_id: sensor.speicher_ladelogik_soll_ladeleistung
+        unique_id: speicher_ladelogik_soll_ladeleistung_v1_beta_1
+        device_class: power
+        state_class: measurement
+        unit_of_measurement: W
+        state: "{{ state_attr('sensor.speicher_ladelogik_planung', 'soll_ladeleistung_gesamt_w') | float(0) }}"
+      - name: Speicher-Ladelogik Restbedarf AC
+        default_entity_id: sensor.speicher_ladelogik_restbedarf_ac
+        unique_id: speicher_ladelogik_restbedarf_ac_v1_beta_1
+        device_class: energy
+        state_class: measurement
+        unit_of_measurement: kWh
+        state: "{{ state_attr('sensor.speicher_ladelogik_planung', 'restbedarf_ac_kwh') | float(0) }}"
+      - name: Venus A Kalibrierungsempfehlung
+        default_entity_id: sensor.speicher_ladelogik_kalibrierung_a_empfehlung
+        unique_id: speicher_ladelogik_kalibrierung_a_empfehlung_v1_beta_1
+        state: >-
+          {% if not is_state('input_boolean.speicher_ladelogik_kalibrierung_a_erfolg_bekannt', 'on') %}
+            Letzter Erfolg unbekannt
+          {% else %}
+            {% set tage = (as_timestamp(now()) - as_timestamp(states('input_datetime.speicher_ladelogik_kalibrierung_a_letzter_erfolg'), 0)) / 86400 %}
+            {{ 'Faellig' if tage >= 30 else 'In ' ~ (30 - tage) | round(0, 'ceil') | int ~ ' Tagen' }}
+          {% endif %}
+        attributes:
+          tage_seit_erfolg: >-
+            {{ ((as_timestamp(now()) - as_timestamp(states('input_datetime.speicher_ladelogik_kalibrierung_a_letzter_erfolg'), 0)) / 86400) | round(1)
+               if is_state('input_boolean.speicher_ladelogik_kalibrierung_a_erfolg_bekannt', 'on') else none }}
+          intervall_tage: 30
+          zellhinweis: >-
+            {% if not is_state('input_boolean.speicher_ladelogik_kalibrierung_a_erfolg_bekannt', 'on') or states('input_number.speicher_ladelogik_kalibrierung_a_p1_letzte_drift') | float(-1) < 0 %}
+              Keine gueltige protokollierte Ruhe-Messung
+            {% elif states('input_number.speicher_ladelogik_kalibrierung_a_p1_letzte_drift') | float(0) >= 50 %}
+              Pack 1 nach Ruhephase mindestens 50 mV: Verlauf pruefen
+            {% else %}
+              Pack 1 bei letzter protokollierter Ruhe-Messung unter 50 mV
+            {% endif %}
+          pack_2: Bekannte Auffaelligkeit; kein automatischer Kalibrierausloeser
+          hinweis: 50 mV ist eine Beobachtungsschwelle, kein Marstek-Grenzwert
+      - name: Venus E Kalibrierungsempfehlung
+        default_entity_id: sensor.speicher_ladelogik_kalibrierung_e_empfehlung
+        unique_id: speicher_ladelogik_kalibrierung_e_empfehlung_v1_beta_1
+        state: >-
+          {% if not is_state('input_boolean.speicher_ladelogik_kalibrierung_e_erfolg_bekannt', 'on') %}
+            Letzter Erfolg unbekannt
+          {% else %}
+            {% set tage = (as_timestamp(now()) - as_timestamp(states('input_datetime.speicher_ladelogik_kalibrierung_e_letzter_erfolg'), 0)) / 86400 %}
+            {{ 'Faellig' if tage >= 30 else 'In ' ~ (30 - tage) | round(0, 'ceil') | int ~ ' Tagen' }}
+          {% endif %}
+        attributes:
+          tage_seit_erfolg: >-
+            {{ ((as_timestamp(now()) - as_timestamp(states('input_datetime.speicher_ladelogik_kalibrierung_e_letzter_erfolg'), 0)) / 86400) | round(1)
+               if is_state('input_boolean.speicher_ladelogik_kalibrierung_e_erfolg_bekannt', 'on') else none }}
+          intervall_tage: 30
+          zellhinweis: >-
+            {% if not is_state('input_boolean.speicher_ladelogik_kalibrierung_e_erfolg_bekannt', 'on') or states('input_number.speicher_ladelogik_kalibrierung_e_letzte_drift') | float(-1) < 0 %}
+              Keine gueltige protokollierte Ruhe-Messung
+            {% elif states('input_number.speicher_ladelogik_kalibrierung_e_letzte_drift') | float(0) >= 50 %}
+              Nach Ruhephase mindestens 50 mV: Verlauf pruefen
+            {% else %}
+              Bei letzter protokollierter Ruhe-Messung unter 50 mV
+            {% endif %}
+          hinweis: 50 mV ist eine Beobachtungsschwelle, kein Marstek-Grenzwert
+    binary_sensor:
+      - name: Speicher-Ladelogik Planung aktuell
+        default_entity_id: binary_sensor.speicher_ladelogik_planung_aktuell
+        unique_id: speicher_ladelogik_planung_aktuell_v1_beta_1
+        device_class: connectivity
+        state: "{{ 0 <= as_timestamp(now()) - state_attr('sensor.speicher_ladelogik_planung', 'berechnet_ts') | float(0) < 120 }}"

@@ -1,0 +1,820 @@
+views:
+  - title: Speicher-Ladelogik
+    path: speicher-ladelogik
+    icon: mdi:battery-clock-outline
+    type: sections
+    max_columns: 3
+    dense_section_placement: true
+    header:
+      layout: responsive
+      badges_position: bottom
+      badges_wrap: scroll
+      card:
+        type: markdown
+        text_only: true
+        content: |-
+          # ☀️ Speicher-Ladelogik
+          Venus A und Venus E · Speicher-Fahrplan V1.0 Beta 1
+    badges: []
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Regelung
+            heading_style: title
+            icon: mdi:state-machine
+          - type: custom:mushroom-template-card
+            entity: sensor.speicher_ladelogik_planung
+            primary: >-
+              {% set p = 'sensor.speicher_ladelogik_planung' %} {% set status =
+              state_attr(p, 'status_venus_a') | default(states(p), true) %} {%
+              set aktiv = is_state('input_boolean.speicher_ladelogik_aktiv', 'on') %}
+              {% set daten = state_attr(p, 'daten_gueltig_venus_a') |
+              bool(false) %} {% if not aktiv %}
+                V1.0 Beta 1 · Venus A · ausgeschaltet
+              {% elif 'gesperrt' in status | lower %}
+                Venus A · {{ status }}
+              {% elif not daten %}
+                Venus A · Datenfehler
+              {% else %}
+                Venus A · {{ status }}
+              {% endif %}
+            secondary: >-
+              {% set p = 'sensor.speicher_ladelogik_planung' %} {{
+              states('input_select.speicher_ladelogik_betriebsart') }} · {{
+              state_attr(p, 'grund_venus_a') | default('Warte auf Auswertung …',
+              true) }} Soll {{ state_attr(p, 'soll_ladegrenze_venus_a_w') |
+              float(0) | round(0) }} W
+            multiline_secondary: true
+            icon: >-
+              {% set p = 'sensor.speicher_ladelogik_planung' %} {% set status =
+              state_attr(p, 'status_venus_a') | default(states(p), true) %} {%
+              if 'gesperrt' in status | lower or not state_attr(p,
+              'daten_gueltig_venus_a') | bool(false) %}
+                mdi:alert-circle-outline
+              {% elif not is_state('input_boolean.speicher_ladelogik_aktiv', 'on') %}
+                mdi:pause-circle-outline
+              {% elif state_attr(p, 'soll_ladegrenze_venus_a_w') | float(0) > 0
+              %}
+                mdi:battery-charging
+              {% else %}
+                mdi:battery-clock-outline
+              {% endif %}
+            icon_color: >-
+              {% set p = 'sensor.speicher_ladelogik_planung' %} {% set status =
+              state_attr(p, 'status_venus_a') | default(states(p), true) %} {%
+              if 'gesperrt' in status | lower or not state_attr(p,
+              'daten_gueltig_venus_a') | bool(false) %}
+                red
+              {% elif not is_state('input_boolean.speicher_ladelogik_aktiv', 'on') %}
+                grey
+              {% elif state_attr(p, 'soll_ladegrenze_venus_a_w') | float(0) > 0
+              %}
+                green
+              {% else %}
+                amber
+              {% endif %}
+            tap_action:
+              action: more-info
+            grid_options:
+              columns: full
+              rows: auto
+          - type: custom:mushroom-template-card
+            entity: sensor.speicher_ladelogik_planung
+            primary: >-
+              {% set p = 'sensor.speicher_ladelogik_planung' %} {% set status =
+              state_attr(p, 'status_venus_e') | default(states(p), true) %} {%
+              set aktiv = is_state('input_boolean.speicher_ladelogik_aktiv', 'on') %}
+              {% set daten = state_attr(p, 'daten_gueltig_venus_e') |
+              bool(false) %} {% if not aktiv %}
+                V1.0 Beta 1 · Venus E · ausgeschaltet
+              {% elif 'gesperrt' in status | lower %}
+                Venus E · {{ status }}
+              {% elif not daten %}
+                Venus E · Datenfehler
+              {% else %}
+                Venus E · {{ status }}
+              {% endif %}
+            secondary: >-
+              {% set p = 'sensor.speicher_ladelogik_planung' %} {{
+              states('input_select.speicher_ladelogik_betriebsart') }} · {{
+              state_attr(p, 'grund_venus_e') | default('Warte auf Auswertung …',
+              true) }} Soll {{ state_attr(p, 'soll_ladegrenze_venus_e_w') |
+              float(0) | round(0) }} W
+            multiline_secondary: true
+            icon: >-
+              {% set p = 'sensor.speicher_ladelogik_planung' %} {% set status =
+              state_attr(p, 'status_venus_e') | default(states(p), true) %} {%
+              if 'gesperrt' in status | lower or not state_attr(p,
+              'daten_gueltig_venus_e') | bool(false) %}
+                mdi:alert-circle-outline
+              {% elif not is_state('input_boolean.speicher_ladelogik_aktiv', 'on') %}
+                mdi:pause-circle-outline
+              {% elif state_attr(p, 'soll_ladegrenze_venus_e_w') | float(0) > 0
+              %}
+                mdi:battery-charging
+              {% else %}
+                mdi:battery-clock-outline
+              {% endif %}
+            icon_color: >-
+              {% set p = 'sensor.speicher_ladelogik_planung' %} {% set status =
+              state_attr(p, 'status_venus_e') | default(states(p), true) %} {%
+              if 'gesperrt' in status | lower or not state_attr(p,
+              'daten_gueltig_venus_e') | bool(false) %}
+                red
+              {% elif not is_state('input_boolean.speicher_ladelogik_aktiv', 'on') %}
+                grey
+              {% elif state_attr(p, 'soll_ladegrenze_venus_e_w') | float(0) > 0
+              %}
+                green
+              {% else %}
+                amber
+              {% endif %}
+            tap_action:
+              action: more-info
+            grid_options:
+              columns: full
+              rows: auto
+          - type: entities
+            title: Bedienung
+            show_header_toggle: false
+            entities:
+              - entity: input_boolean.speicher_ladelogik_aktiv
+                name: Speicher-Fahrplan
+              - entity: input_select.speicher_ladelogik_betriebsart
+                name: Betriebsart
+              - entity: input_boolean.speicher_ladelogik_mittagsspitzen
+                name: Mittagsspitzen reduzieren
+              - entity: binary_sensor.speicher_ladelogik_planung_aktuell
+                name: Auswertung aktuell
+          - type: custom:mushroom-template-card
+            entity: input_boolean.speicher_ladelogik_manuell_a_aktiv
+            primary: >-
+              {% set a = is_state('input_boolean.speicher_ladelogik_manuell_a_aktiv',
+              'on') %} {% set e =
+              is_state('input_boolean.speicher_ladelogik_manuell_e_aktiv', 'on') %} {%
+              if a and e %}Manuelle Grenzen A und E aktiv {% elif a %}Venus A
+              manuell · Venus E automatisch {% elif e %}Venus E manuell · Venus
+              A automatisch {% else %}Manuelle Speichergrenzen aus{% endif %}
+            secondary: >-
+              A Laden/Entladen {{
+              states('input_number.speicher_ladelogik_manuell_laden_a_w') | int(0)
+              }}/{{ states('input_number.speicher_ladelogik_manuell_entladen_a_w') |
+              int(0) }} W · E {{
+              states('input_number.speicher_ladelogik_manuell_laden_e_w') | int(0)
+              }}/{{ states('input_number.speicher_ladelogik_manuell_entladen_e_w') |
+              int(0) }} W · AstraMeter bestimmt die Richtung
+            multiline_secondary: true
+            icon: mdi:hand-back-right-outline
+            icon_color: >-
+              {{ 'amber' if
+              is_state('input_boolean.speicher_ladelogik_manuell_a_aktiv', 'on') or
+              is_state('input_boolean.speicher_ladelogik_manuell_e_aktiv', 'on') else
+              'grey' }}
+            tap_action:
+              action: more-info
+            grid_options:
+              columns: full
+              rows: auto
+          - type: custom:mushroom-template-card
+            entity: sensor.speicher_ladelogik_kalibrierung_a_empfehlung
+            primary: Kalibrierung · Venus A
+            secondary: >-
+              {% set c = 'sensor.speicher_ladelogik_kalibrierung_planung' %} {% set empfehlung =
+              states('sensor.speicher_ladelogik_kalibrierung_a_empfehlung') %} {{ empfehlung }}
+              {% if state_attr(c, 'batterie') == 'A' %} · {{ states(c) }}{% if
+              state_attr(c, 'grund') %} · {{ state_attr(c, 'grund') }}{% endif
+              %} {% endif %} Sperre: {{ 'an' if state_attr(c,
+              'a_laden_gesperrt') else 'aus' }} · {{ state_attr(c,
+              'a_pruefhinweise') or '' }}
+            multiline_secondary: true
+            icon: mdi:battery-sync-outline
+            icon_color: >-
+              {% set a = states('sensor.speicher_ladelogik_kalibrierung_a_empfehlung') %} {{
+              'amber' if a in ['Faellig', 'Letzter Erfolg unbekannt'] else
+              'green' }}
+            tap_action:
+              action: more-info
+            grid_options:
+              columns: full
+              rows: auto
+          - type: custom:mushroom-template-card
+            entity: sensor.speicher_ladelogik_kalibrierung_e_empfehlung
+            primary: Kalibrierung · Venus E
+            secondary: >-
+              {% set c = 'sensor.speicher_ladelogik_kalibrierung_planung' %} {% set empfehlung =
+              states('sensor.speicher_ladelogik_kalibrierung_e_empfehlung') %} {{ empfehlung }}
+              {% if state_attr(c, 'batterie') == 'E' %} · {{ states(c) }}{% if
+              state_attr(c, 'grund') %} · {{ state_attr(c, 'grund') }}{% endif
+              %} {% endif %} Sperre: {{ 'an' if state_attr(c,
+              'e_laden_gesperrt') else 'aus' }} · {{ state_attr(c,
+              'e_pruefhinweise') or '' }}
+            multiline_secondary: true
+            icon: mdi:battery-sync-outline
+            icon_color: >-
+              {% set e = states('sensor.speicher_ladelogik_kalibrierung_e_empfehlung') %} {{
+              'amber' if e in ['Faellig', 'Letzter Erfolg unbekannt'] else
+              'green' }}
+            tap_action:
+              action: more-info
+            grid_options:
+              columns: full
+              rows: auto
+      - type: grid
+        cards:
+          - type: heading
+            heading: Speicher
+            heading_style: title
+            icon: mdi:battery-high
+          - type: custom:mushroom-template-card
+            entity: sensor.marstek_venus_a_soc_batterie
+            primary: >-
+              Venus A · {{ states('sensor.marstek_venus_a_soc_batterie') |
+              float(0) | round(0) }} %
+            secondary: >-
+              {% set p = 'sensor.speicher_ladelogik_planung' %}
+
+              {% set w = state_attr(p, 'ac_leistung_venus_a_roh_w') %}
+
+              {% set packs = state_attr(p, 'packs_a_soc') or [] %}
+
+              {% if w is none %}Leistung nicht verfügbar{% elif w | float(0) <
+              -20 %}Lädt mit {{ (w | float(0) | abs) | round(0) }} W{% elif w |
+              float(0) > 20 %}Entlädt mit {{ w | float(0) | round(0) }} W{% else
+              %}Bereit · {{ w | float(0) | round(0) }} W{% endif %} · Freigabe
+              {{ state_attr(p, 'soll_ladegrenze_venus_a_w') | float(0) |
+              round(0) }} W
+
+              Bis Ladeziel {{ state_attr(p, 'restbedarf_venus_a_kwh') | float(0)
+              | round(2) }} kWh{% if packs %} · Packs {{ packs | join(' / ') }}
+              %{% endif %}
+
+              {{ state_attr(p, 'dashboard_a') or '' }}
+            multiline_secondary: true
+            icon: mdi:battery
+            icon_color: >-
+              {% set soc = states('sensor.marstek_venus_a_soc_batterie') |
+              float(0) %} {% if soc >= 90 %}green{% elif soc >= 40 %}amber{%
+              else %}red{% endif %}
+            badge_icon: >-
+              {{ 'mdi:lightning-bolt' if
+              state_attr('sensor.speicher_ladelogik_planung',
+              'soll_ladegrenze_venus_a_w') | float(0) > 0 else '' }}
+            badge_color: green
+            tap_action:
+              action: more-info
+            grid_options:
+              columns: full
+              rows: auto
+          - type: custom:mushroom-template-card
+            entity: sensor.marstek_venus_e_soc
+            primary: >-
+              Venus E · {{ states('sensor.marstek_venus_e_soc') | float(0) |
+              round(0) }} %
+            secondary: >-
+              {% set p = 'sensor.speicher_ladelogik_planung' %}
+
+              {% set w = state_attr(p, 'ac_leistung_venus_e_roh_w') %}
+
+              {% if w is none %}Leistung nicht verfügbar{% elif w | float(0) <
+              -20 %}Lädt mit {{ (w | float(0) | abs) | round(0) }} W{% elif w |
+              float(0) > 20 %}Entlädt mit {{ w | float(0) | round(0) }} W{% else
+              %}Bereit · {{ w | float(0) | round(0) }} W{% endif %} · Freigabe
+              {{ state_attr(p, 'soll_ladegrenze_venus_e_w') | float(0) |
+              round(0) }} W
+
+              Bis Ladeziel {{ state_attr(p, 'restbedarf_venus_e_kwh') | float(0)
+              | round(2) }} kWh
+
+              {{ state_attr(p, 'dashboard_e') or '' }}
+            multiline_secondary: true
+            icon: mdi:battery
+            icon_color: >-
+              {% set soc = states('sensor.marstek_venus_e_soc') | float(0) %} {%
+              if soc >= 90 %}green{% elif soc >= 40 %}amber{% else %}red{% endif
+              %}
+            badge_icon: >-
+              {{ 'mdi:lightning-bolt' if
+              state_attr('sensor.speicher_ladelogik_planung',
+              'soll_ladegrenze_venus_e_w') | float(0) > 0 else '' }}
+            badge_color: green
+            tap_action:
+              action: more-info
+            grid_options:
+              columns: full
+              rows: auto
+          - type: history-graph
+            title: Energie vs. Mindestbedarf · 12 Stunden
+            hours_to_show: 12
+            show_names: true
+            entities:
+              - entity: sensor.speicher_ladelogik_gespeicherte_energie
+                name: Gespeichert
+              - entity: sensor.speicher_ladelogik_mindestenergie_jetzt
+                name: Mindestpfad
+            grid_options:
+              columns: full
+              rows: auto
+          - type: entities
+            title: Manuelle Speichergrenzen
+            show_header_toggle: false
+            entities:
+              - entity: input_boolean.speicher_ladelogik_manuell_a_aktiv
+                name: Venus A · manuell aktiv
+              - entity: input_boolean.speicher_ladelogik_manuell_e_aktiv
+                name: Venus E · manuell aktiv
+              - entity: input_number.speicher_ladelogik_manuell_laden_a_w
+                name: Venus A · Laden
+              - entity: input_number.speicher_ladelogik_manuell_entladen_a_w
+                name: Venus A · Entladen
+              - entity: input_number.speicher_ladelogik_manuell_laden_e_w
+                name: Venus E · Laden
+              - entity: input_number.speicher_ladelogik_manuell_entladen_e_w
+                name: Venus E · Entladen
+      - type: grid
+        cards:
+          - type: heading
+            heading: Fahrplan heute
+            heading_style: title
+            icon: mdi:weather-partly-cloudy
+          - type: markdown
+            content: >-
+              {% set p = 'sensor.speicher_ladelogik_planung' %}
+
+              {% set early = state_attr(p, 'vorziehen_noetig') | bool(false) %}
+
+              {% set klasse = state_attr(p, 'tagesklasse') |
+              default('unbekannt', true) %}
+
+              {% set klassenname = {'schwach': 'Schwacher', 'mittel':
+              'Mittlerer', 'stark': 'Starker'}.get(klasse, klasse | title) %}
+
+              **{{ klassenname }} Tag** · {{ state_attr(p,
+              'prognose_heute_erwartet_kwh') | float(0) | round(1) }} kWh
+              erwartet
+
+
+              | | |
+
+              | :--- | ---: |
+
+              | PV AC jetzt / Prognose | {{ state_attr(p, 'pv_real_jetzt_w') if
+              state_attr(p, 'pv_real_jetzt_w') is not none else 'nicht frisch'
+              }} / {{ state_attr(p, 'prognose_jetzt_w') | float(0) | round(0) }}
+              W |
+
+              | Ladefreigabe belegt durch | {{ state_attr(p,
+              'ueberschuss_quelle') or '–' }} |
+
+              | Leistungsstrategie | {{ state_attr(p, 'effizienzmodus') or '–'
+              }} |
+
+              | Heute bisher | {{ state_attr(p, 'pv_real_bis_jetzt_kwh') |
+              float(0) | round(1) }} kWh |
+
+              | Vormittag / Nachmittag | {{ state_attr(p, 'pv_vormittag_kwh') |
+              float(0) | round(1) }} / {{ state_attr(p, 'pv_nachmittag_kwh') |
+              float(0) | round(1) }} kWh |
+
+              | Morgen | {{ state_attr(p, 'prognose_morgen_kwh') | float(0) |
+              round(1) }} kWh |
+
+              | Ladefenster | {{ state_attr(p, 'ladefenster_start') }}–{{
+              state_attr(p, 'ladefenster_ende') }} Uhr |
+
+              | Frühestens voll | {{ state_attr(p, 'fruehestens_voll') }} |
+
+              | Restbedarf AC | {{ state_attr(p, 'restbedarf_ac_kwh') | float(0)
+              | round(2) }} kWh |
+
+              | Sicher speicherbar | {{ state_attr(p,
+              'sicher_speicherbar_fenster_rest_kwh') | float(0) | round(2) }}
+              kWh |
+
+
+              {% if early %}**⏩ Laden wird wegen des Tagesverlaufs
+              vorgezogen.**{% endif %}
+            grid_options:
+              columns: full
+              rows: auto
+          - type: history-graph
+            title: Freigabe und reale Batterieleistung · 12 Stunden
+            hours_to_show: 12
+            show_names: true
+            entities:
+              - entity: sensor.speicher_ladelogik_soll_ladeleistung
+                name: Gesamtfreigabe
+              - entity: sensor.leistung_batterien
+                name: Batterien real
+            grid_options:
+              columns: full
+              rows: auto
+  - title: Ladelogik-Service
+    path: speicher-ladelogik-service
+    icon: mdi:tools
+    type: sections
+    max_columns: 3
+    dense_section_placement: true
+    header:
+      layout: responsive
+      badges_position: bottom
+      badges_wrap: scroll
+      card:
+        type: markdown
+        text_only: true
+        content: |-
+          # 🛠️ Ladelogik-Service
+          Kalibrierung, Parameter und Diagnose · V1.0 Beta 1
+    badges: []
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Kalibrierung
+            heading_style: title
+            icon: mdi:battery-sync
+          - type: markdown
+            title: PV-Fenster und Warteschlange
+            content: >-
+              {% set c = 'sensor.speicher_ladelogik_kalibrierung_planung' %}
+
+              {% set at = state_attr(c, 'heute_a') or {} %}
+
+              {% set et = state_attr(c, 'heute_e') or {} %}
+
+              {% set a = state_attr(c, 'morgen_a') or {} %}
+
+              {% set e = state_attr(c, 'morgen_e') or {} %}
+
+              **{{ states(c) }}{% if state_attr(c, 'batterie') %} · Venus {{
+              state_attr(c, 'batterie') }}{% endif %}**
+
+
+              {{ state_attr(c, 'grund') or 'Noch kein Auftrag.' }}
+
+
+              **{{ state_attr(c, 'als_naechstes') or 'Kein Folgeauftrag' }}**
+
+
+              | Auftrag | Wert |
+
+              | :--- | :---: |
+
+              | Vorbereitung frühestens | {{ state_attr(c, 'fruehestens') or '–'
+              }} |
+
+              | Geplantes Ladefenster | {{ state_attr(c, 'fenster_start') or '–'
+              }} – {{ state_attr(c, 'fenster_ende') or '–' }} |
+
+              | Venus A | {{ 'vorgemerkt' if state_attr(c, 'a_vorgemerkt') else
+              'kein Auftrag' }} · Ladesperre {{ 'aktiv' if state_attr(c,
+              'a_laden_gesperrt') else 'aus' }} |
+
+              | Venus E | {{ 'vorgemerkt' if state_attr(c, 'e_vorgemerkt') else
+              'kein Auftrag' }} · Ladesperre {{ 'aktiv' if state_attr(c,
+              'e_laden_gesperrt') else 'aus' }} |
+
+
+              | Vorschau | Venus A | Venus E |
+
+              | :--- | :---: | :---: |
+
+              | Heute | {{ 'geeignet' if at.get('ok', false) else 'kein langes
+              Fenster' }} | {{ 'geeignet' if et.get('ok', false) else 'kein
+              langes Fenster' }} |
+
+              | Morgen | {{ 'geeignet' if a.get('ok', false) else 'kein langes
+              Fenster' }} | {{ 'geeignet' if e.get('ok', false) else 'kein
+              langes Fenster' }} |
+
+              | Benötigte Dauer | {{ a.get('required_h', '–') }} h | {{
+              e.get('required_h', '–') }} h |
+
+              | Längstes Fenster morgen | {{ a.get('longest_h', '–') }} h | {{
+              e.get('longest_h', '–') }} h |
+
+              | Frühester Start morgen | {{ a.get('start') |
+              timestamp_custom('%H:%M', true) if a.get('start') else '–' }} | {{
+              e.get('start') | timestamp_custom('%H:%M', true) if e.get('start')
+              else '–' }} |
+
+
+              Erfasste Ladung: **{{ state_attr(c, 'energie_ac_kwh') | float(0) |
+              round(2) }} kWh AC**.
+
+
+              {% if state_attr(c, 'lauf_unterbrochen') %}⚠️ Der aktuelle Lauf
+              wurde unterbrochen; eine spätere Volladung wird nicht als
+              durchgehender Kalibriererfolg gewertet.{% endif %}
+          - type: entities
+            title: Venus A vormerken
+            show_header_toggle: false
+            entities:
+              - entity: sensor.speicher_ladelogik_kalibrierung_a_empfehlung
+                name: 30-Tage-Intervall
+              - entity: input_boolean.speicher_ladelogik_kalibrierung_a_freigegeben
+                name: Versuch freigeben
+              - entity: input_boolean.speicher_ladelogik_kalibrierung_a_laden_sperren
+                name: Bei Vormerkung Laden sofort sperren
+              - entity: input_button.speicher_ladelogik_kalibrierung_a_anfordern
+                name: Nächstes geeignetes Fenster
+              - entity: input_button.speicher_ladelogik_kalibrierung_a_morgen
+                name: Für morgen vormerken
+              - entity: input_button.speicher_ladelogik_kalibrierung_a_entfernen
+                name: Auftrag entfernen / Versuch beenden
+          - type: entities
+            title: Venus E vormerken
+            show_header_toggle: false
+            entities:
+              - entity: sensor.speicher_ladelogik_kalibrierung_e_empfehlung
+                name: 30-Tage-Intervall
+              - entity: input_boolean.speicher_ladelogik_kalibrierung_e_freigegeben
+                name: Versuch freigeben
+              - entity: input_boolean.speicher_ladelogik_kalibrierung_e_laden_sperren
+                name: Bei Vormerkung Laden sofort sperren
+              - entity: input_button.speicher_ladelogik_kalibrierung_e_anfordern
+                name: Nächstes geeignetes Fenster
+              - entity: input_button.speicher_ladelogik_kalibrierung_e_morgen
+                name: Für morgen vormerken
+              - entity: input_button.speicher_ladelogik_kalibrierung_e_entfernen
+                name: Auftrag entfernen / Versuch beenden
+          - type: entities
+            title: Gemeinsame Bedienung
+            show_header_toggle: false
+            entities:
+              - entity: input_button.speicher_ladelogik_kalibrierung_abbrechen
+                name: Alle Aufträge / laufenden Versuch beenden
+              - entity: input_button.speicher_ladelogik_fehler_quittieren
+          - type: markdown
+            title: Zellbeobachtung
+            content: >-
+              {% set c = 'sensor.speicher_ladelogik_kalibrierung_planung' %}
+
+              Aktuelle Drift: A P1 **{{ state_attr(c, 'drift_a_p1_mv') if
+              state_attr(c, 'drift_a_p1_mv') is not none else '–' }} mV** · A P2
+              **{{ state_attr(c, 'drift_a_p2_mv') if state_attr(c,
+              'drift_a_p2_mv') is not none else '–' }} mV** · E **{{
+              state_attr(c, 'drift_e_mv') | round(1) if state_attr(c,
+              'drift_e_mv') is not none else '–' }} mV**.
+
+
+              **A:** {{ state_attr('sensor.speicher_ladelogik_kalibrierung_a_empfehlung',
+              'zellhinweis') or '–' }}
+
+
+              **E:** {{ state_attr('sensor.speicher_ladelogik_kalibrierung_e_empfehlung',
+              'zellhinweis') or '–' }}
+
+
+              P2 bleibt wegen der bekannten Auffälligkeit ein Beobachtungsfall;
+              seine Drift startet keinen Zyklus.
+      - type: grid
+        cards:
+          - type: heading
+            heading: Diagnose
+            heading_style: title
+            icon: mdi:stethoscope
+          - type: markdown
+            title: Status und Hinweise
+            content: >-
+              {% set p = 'sensor.speicher_ladelogik_planung' %}
+
+              {% set c = 'sensor.speicher_ladelogik_kalibrierung_planung' %}
+
+              **{{ states(p) }}** · Version {{ state_attr(p, 'version') }}
+
+
+              {{ state_attr(p, 'entscheidungsgrund') or 'Kein Entscheidungsgrund
+              vorhanden.' }}
+
+
+              **Normaler Fahrplan:** {{ state_attr(p,
+              'normaler_fahrplan_status') or '–' }}
+
+
+              **PV AC:** {{ state_attr(p, 'pv_ac_status') or '–' }}
+
+
+              **MPPT DC:** {{ state_attr(p, 'pv_mppt_summe_dc_w') if
+              state_attr(p, 'pv_mppt_summe_dc_w') is not none else 'nicht
+              frisch' }} W · alle vier frisch: {{ state_attr(p,
+              'pv_mppt_frisch') }}
+
+
+              **Prognosekorrektur:** {{ state_attr(p, 'pv_planungswert_quelle')
+              or '–' }}
+
+
+              **Ladefreigabe:** {{ state_attr(p, 'ueberschuss_quelle') or '–' }}
+
+
+              **Leistung:** {{ state_attr(p, 'effizienzmodus') or '–' }} ·
+              bevorzugt A 1100 / E 1300 W
+
+
+              **Sollwertstrategie:** {{ state_attr(p, 'sollwertstrategie') or
+              '–' }}
+
+
+              **Warnungen:** {{ (state_attr(p, 'warnungen') or []) | join('; ')
+              or 'Keine vorhanden' }}
+
+
+              **Aktuelle Datenfehler:**
+
+              {% set current = state_attr(p, 'datenfehler_aktuell') or [] %}
+
+              {% if current %}{% for item in current %}• {{ item }}
+
+              {% endfor %}{% else %}Keine vorhanden{% endif %}
+
+
+              **Letzter Datenfehler:** {{ state_attr(p, 'letzter_datenfehler')
+              or '–' }}
+
+              {% set previous = state_attr(p, 'letzte_datenfehler') or [] %}
+
+              {% if previous %}{% for item in previous %}• {{ item }}
+
+              {% endfor %}{% endif %}
+
+
+              **Vorprüfung A:** {{ (state_attr(c, 'a_pruefhinweise') or []) |
+              join('; ') or 'Datenprüfung bestanden' }}
+
+
+              **Vorprüfung E:** {{ (state_attr(c, 'e_pruefhinweise') or []) |
+              join('; ') or 'Datenprüfung bestanden' }}
+
+
+              **AC-Sensor A:** {{ state_attr(p, 'ac_leistung_venus_a_status') or
+              '–' }} · Ladereaktion {{ state_attr(p,
+              'ladereaktion_venus_a_status') or '–' }}
+
+
+              **AC-Sensor E:** {{ state_attr(p, 'ac_leistung_venus_e_status') or
+              '–' }} · Ladereaktion {{ state_attr(p,
+              'ladereaktion_venus_e_status') or '–' }}
+
+
+              *Hinweis: „nicht bestätigt" sperrt in V1.0 Beta 1 nicht;
+              AstraMeter regelt in dem Fall selbst.*
+
+
+              {% if state_attr(c, 'letzte_pause_grund') %}**Letzte Pause:** {{
+              state_attr(c, 'letzte_pause_zeit') }} · {{ state_attr(c,
+              'letzte_pause_grund') }}{% endif %}
+          - type: entities
+            title: Daten und Stellglieder
+            show_header_toggle: false
+            entities:
+              - entity: binary_sensor.speicher_ladelogik_planung_aktuell
+                name: Auswertung aktuell
+              - type: attribute
+                entity: sensor.speicher_ladelogik_planung
+                attribute: daten_gueltig_venus_a
+                name: Daten Venus A gültig
+              - type: attribute
+                entity: sensor.speicher_ladelogik_planung
+                attribute: daten_gueltig_venus_e
+                name: Daten Venus E gültig
+              - type: attribute
+                entity: sensor.speicher_ladelogik_planung
+                attribute: prognose_intervalle_ok
+                name: Prognose heute vollständig
+              - type: attribute
+                entity: sensor.speicher_ladelogik_planung
+                attribute: prognose_morgen_intervalle_ok
+                name: Prognose morgen vollständig
+              - type: attribute
+                entity: sensor.speicher_ladelogik_planung
+                attribute: schreibwerte_bestaetigt_a
+                name: Schreibwerte A bestätigt
+              - type: attribute
+                entity: sensor.speicher_ladelogik_planung
+                attribute: schreibwerte_bestaetigt_e
+                name: Schreibwerte E bestätigt
+              - type: attribute
+                entity: sensor.speicher_ladelogik_planung
+                attribute: ac_leistung_venus_a_frisch
+                name: AC-Leistung A frisch
+              - type: attribute
+                entity: sensor.speicher_ladelogik_planung
+                attribute: ac_leistung_venus_e_frisch
+                name: AC-Leistung E frisch
+              - type: attribute
+                entity: sensor.speicher_ladelogik_planung
+                attribute: ladeleistung_venus_a_bestaetigt
+                name: Ladereaktion A bestätigt
+              - type: attribute
+                entity: sensor.speicher_ladelogik_planung
+                attribute: ladeleistung_venus_e_bestaetigt
+                name: Ladereaktion E bestätigt
+              - type: attribute
+                entity: sensor.speicher_ladelogik_planung
+                attribute: schreibfehler_venus_a
+                name: Schreibfehler A
+              - type: attribute
+                entity: sensor.speicher_ladelogik_planung
+                attribute: schreibfehler_venus_e
+                name: Schreibfehler E
+              - entity: switch.astrameter_venus_a_auto_target
+                name: Auto Target Venus A
+              - entity: switch.astrameter_venus_e_auto_target
+                name: Auto Target Venus E
+              - entity: number.marstek_venus_a_maximale_ladeleistung
+                name: Ladegrenze Venus A
+              - entity: number.marstek_venus_e_ladeleistung
+                name: Ladegrenze Venus E
+          - type: markdown
+            title: Kalibrierjournal und Lernwerte
+            content: |2-
+
+                {% set models = state_attr('sensor.speicher_ladelogik_lernspeicher', 'models') or {} %}
+                {% set history = state_attr('sensor.speicher_ladelogik_lernspeicher', 'history') or [] %}
+
+                Lernwerte sind **Schätzungen**, keine unabhängige Kapazitätsmessung. Deine Kapazitätshelfer bleiben unverändert.
+
+                | Speicher | Gültige Zyklen | AC-Bedarf | Nutzbar geschätzt |
+                | :---: | :---: | :---: | :---: |
+                {%- for key in ['A', 'E'] %}
+                {%- set m = models.get(key, {}) %}
+                | Venus {{ key }} | {{ m.get('count', 0) }} | {{ m.get('ac_kwh', '–') }} kWh | {{ m.get('usable_estimate_kwh', '–') }} kWh |
+                {%- endfor %}
+
+                Ab drei gültigen Zyklen kann ein höherer AC-Bedarf das Kalibrierfenster verlängern. Annahme: konfigurierter Ladewirkungsgrad; keine automatische Änderung des SoC-Ziels.
+
+                {% if history -%}
+                | Ende | Speicher | Ergebnis | AC |
+                | :---: | :---: | :--- | :---: |
+                {%- for r in history[-8:] | reverse %}
+                | {{ r.end | timestamp_custom('%d.%m. %H:%M', true) }} | {{ r.battery }} | {{ r.reason }} | {{ r.ac_kwh }} kWh |
+                {%- endfor %}
+                {%- else %}
+                Noch kein protokollierter Versuch mit V1.0 Beta 1.
+                {%- endif %}
+
+                Details einschließlich Dauer und Drift vorher/nachher: **Speicher-Ladelogik Lernspeicher** öffnen. Historie: letzte 20 Ereignisse.
+      - type: grid
+        cards:
+          - type: heading
+            heading: Parameter
+            heading_style: title
+            icon: mdi:tune-variant
+          - type: markdown
+            content: >-
+              **Hinweis:** Das Ausschalten der Speicher-Ladelogik beendet den Fahrplan und
+              stellt die normalen Grenzen von 1500/2500 W für AstraMeter wieder
+              her.
+          - type: entities
+            title: Manuelle Speichergrenzen
+            show_header_toggle: false
+            entities:
+              - entity: input_boolean.speicher_ladelogik_manuell_a_aktiv
+                name: Venus A · manuell aktiv
+              - entity: input_boolean.speicher_ladelogik_manuell_e_aktiv
+                name: Venus E · manuell aktiv
+              - entity: input_number.speicher_ladelogik_manuell_laden_a_w
+                name: Venus A · Laden
+              - entity: input_number.speicher_ladelogik_manuell_entladen_a_w
+                name: Venus A · Entladen
+              - entity: input_number.speicher_ladelogik_manuell_laden_e_w
+                name: Venus E · Laden
+              - entity: input_number.speicher_ladelogik_manuell_entladen_e_w
+                name: Venus E · Entladen
+          - type: markdown
+            content: >-
+              Die manuellen Werte sind Leistungsgrenzen, kein Force-Modus.
+              AstraMeter entscheidet weiterhin anhand des Netzanschlusspunkts.
+              Nur der jeweils aktivierte Speicher wird manuell begrenzt; der
+              andere bleibt im automatischen Fahrplan.
+          - type: entities
+            title: Ladeziel und Reserven
+            show_header_toggle: false
+            entities:
+              - entity: input_number.speicher_ladelogik_ziel_soc
+                name: Ziel-SoC
+              - entity: input_number.speicher_ladelogik_mindestreserve
+                name: Mindestreserve
+              - entity: input_number.speicher_ladelogik_ladewirkungsgrad
+                name: Ladewirkungsgrad
+              - entity: input_number.speicher_ladelogik_hysterese
+                name: Energie-Hysterese
+              - entity: input_number.speicher_ladelogik_min_effiziente_leistung
+                name: Minimale effiziente Leistung
+              - entity: input_number.speicher_ladelogik_prognose_sicherheit
+                name: Prognose-Sicherheit
+              - entity: input_number.speicher_ladelogik_unplanbare_reserve
+                name: Unplanbare Reserve
+              - entity: input_number.speicher_ladelogik_knappheitsreserve
+                name: Knappheitsreserve
+          - type: entities
+            title: Tagesklassen
+            show_header_toggle: false
+            entities:
+              - entity: input_number.speicher_ladelogik_schwacher_tag
+                name: Schwacher Tag
+              - entity: input_number.speicher_ladelogik_mittlerer_tag
+                name: Mittlerer Tag
+              - entity: input_number.speicher_ladelogik_starker_tag
+                name: Starker Tag
