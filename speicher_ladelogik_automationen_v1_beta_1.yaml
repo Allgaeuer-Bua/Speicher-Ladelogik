@@ -1,0 +1,500 @@
+alias: Speicher-Ladelogik V1.0 Beta 1 · AstraMeter-Regelung
+description: >-
+  V1.0 Beta 1: zentraler Ablauf fuer Planung, Kalibrierung und Rueckgabe. AstraMeter
+  regelt weiter den Netzanschlusspunkt. Kein Force-Modus.
+triggers:
+  - trigger: time_pattern
+    seconds: /30
+    id: tick
+  - trigger: homeassistant
+    event: start
+    id: start
+  - trigger: state
+    entity_id:
+      - input_boolean.speicher_ladelogik_aktiv
+      - input_select.speicher_ladelogik_betriebsart
+      - input_boolean.speicher_ladelogik_mittagsspitzen
+      - input_boolean.speicher_ladelogik_kalibrierung_a_laden_sperren
+      - input_boolean.speicher_ladelogik_kalibrierung_e_laden_sperren
+      - input_boolean.speicher_ladelogik_kalibrierung_a_freigegeben
+      - input_boolean.speicher_ladelogik_kalibrierung_e_freigegeben
+    id: mode
+  - trigger: state
+    entity_id:
+      - input_boolean.speicher_ladelogik_manuell_a_aktiv
+      - input_boolean.speicher_ladelogik_manuell_e_aktiv
+      - input_number.speicher_ladelogik_manuell_laden_a_w
+      - input_number.speicher_ladelogik_manuell_entladen_a_w
+      - input_number.speicher_ladelogik_manuell_laden_e_w
+      - input_number.speicher_ladelogik_manuell_entladen_e_w
+    id: manual
+  - trigger: state
+    entity_id: input_button.speicher_ladelogik_kalibrierung_a_anfordern
+    id: cal_a
+  - trigger: state
+    entity_id: input_button.speicher_ladelogik_kalibrierung_e_anfordern
+    id: cal_e
+  - trigger: state
+    entity_id: input_button.speicher_ladelogik_kalibrierung_a_morgen
+    id: cal_a_tomorrow
+  - trigger: state
+    entity_id: input_button.speicher_ladelogik_kalibrierung_e_morgen
+    id: cal_e_tomorrow
+  - trigger: state
+    entity_id: input_button.speicher_ladelogik_kalibrierung_a_entfernen
+    id: cancel_a
+  - trigger: state
+    entity_id: input_button.speicher_ladelogik_kalibrierung_e_entfernen
+    id: cancel_e
+  - trigger: state
+    entity_id: input_button.speicher_ladelogik_kalibrierung_abbrechen
+    id: cancel
+  - trigger: state
+    entity_id: input_button.speicher_ladelogik_fehler_quittieren
+    id: ack
+conditions: []
+actions:
+  - if:
+      - condition: template
+        value_template: >-
+          {{ trigger.id in ['cal_a', 'cal_e', 'cal_a_tomorrow',
+          'cal_e_tomorrow', 'cancel_a', 'cancel_e', 'cancel', 'ack'] and
+          (trigger.from_state is none or trigger.to_state is none or
+          (as_timestamp(now()) - as_timestamp(trigger.to_state.state, 0)) | abs
+          > 30) }}
+    then:
+      - stop: Kein neuer Tastendruck
+  - if:
+      - condition: template
+        value_template: >-
+          {{ trigger.id != 'start' and not
+          is_state('input_boolean.speicher_ladelogik_laufbereit', 'on') }}
+    then:
+      - stop: Wartet auf HA-Start
+  - if:
+      - condition: template
+        value_template: '{{ trigger.id == ''start'' }}'
+    then:
+      - delay: '00:00:30'
+      - if:
+          - condition: template
+            value_template: >-
+              {{ not is_state('input_boolean.speicher_ladelogik_initialisiert', 'on')
+              }}
+        then:
+          - repeat:
+              for_each:
+                - input_text.speicher_ladelogik_sicherung
+                - input_text.speicher_ladelogik_kalibrierung_sicherung
+                - input_text.speicher_ladelogik_kalibrierung_sitzung
+              sequence:
+                - if:
+                    - condition: template
+                      value_template: '{{ states(repeat.item) in [''unknown'', ''unavailable''] }}'
+                  then:
+                    - action: input_text.set_value
+                      target:
+                        entity_id: '{{ repeat.item }}'
+                      data:
+                        value: ''
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.speicher_ladelogik_initialisiert
+      - if:
+          - condition: template
+            value_template: >-
+              {{ not is_state('input_boolean.speicher_ladelogik_v1_beta_1_initialisiert',
+              'on') }}
+        then:
+          - if:
+              - condition: template
+                value_template: >-
+                  {{ states('input_text.speicher_ladelogik_kalibrierung_vormerkungen') in
+                  ['unknown', 'unavailable'] }}
+            then:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.speicher_ladelogik_kalibrierung_vormerkungen
+                data:
+                  value: ''
+          - action: input_number.set_value
+            target:
+              entity_id:
+                - input_number.speicher_ladelogik_schreibfehler_a
+                - input_number.speicher_ladelogik_schreibfehler_e
+            data:
+              value: '{{ states(''input_number.speicher_ladelogik_schreibfehler'') | int(0) }}'
+          - action: input_boolean.turn_on
+            target:
+              entity_id:
+                - input_boolean.speicher_ladelogik_mittagsspitzen
+                - input_boolean.speicher_ladelogik_v1_beta_1_initialisiert
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.speicher_ladelogik_laufbereit
+  - action: python_script.speicher_ladelogik_v1_beta_1
+    data:
+      request: '{{ trigger.id }}'
+      now: '{{ as_timestamp(now()) }}'
+      day0: '{{ as_timestamp(today_at(''00:00'')) }}'
+      day1: '{{ as_timestamp(today_at(''00:00'') + timedelta(days=1)) }}'
+      day2: '{{ as_timestamp(today_at(''00:00'') + timedelta(days=2)) }}'
+      nine: '{{ as_timestamp(today_at(''09:00'')) }}'
+      eleven: '{{ as_timestamp(today_at(''11:00'')) }}'
+      deadline: '{{ as_timestamp(today_at(''15:00'')) }}'
+      prepare: '{{ as_timestamp(today_at(''18:00'')) }}'
+    response_variable: calc
+  - if:
+      - condition: template
+        value_template: '{{ calc.ack }}'
+    then:
+      - action: input_number.set_value
+        target:
+          entity_id:
+            - input_number.speicher_ladelogik_schreibfehler
+            - input_number.speicher_ladelogik_schreibfehler_a
+            - input_number.speicher_ladelogik_schreibfehler_e
+        data:
+          value: 0
+      - action: persistent_notification.dismiss
+        continue_on_error: true
+        data:
+          notification_id: speicher_ladelogik_v1_beta_1_schreibfehler
+      - action: persistent_notification.dismiss
+        continue_on_error: true
+        data:
+          notification_id: speicher_ladelogik_v1_beta_1_ladereaktion
+  - if:
+      - condition: template
+        value_template: '{{ calc.save_backup | length > 0 }}'
+    then:
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.speicher_ladelogik_sicherung
+        data:
+          value: '{{ calc.save_backup }}'
+  - if:
+      - condition: template
+        value_template: '{{ calc.save_cal_backup | default('''') | length > 0 }}'
+    then:
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.speicher_ladelogik_kalibrierung_sicherung
+        data:
+          value: '{{ calc.save_cal_backup }}'
+  - if:
+      - condition: template
+        value_template: '{{ states(''input_text.speicher_ladelogik_kalibrierung_sitzung'') != calc.session }}'
+    then:
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.speicher_ladelogik_kalibrierung_sitzung
+        data:
+          value: '{{ calc.session }}'
+  - if:
+      - condition: template
+        value_template: '{{ states(''input_text.speicher_ladelogik_kalibrierung_vormerkungen'') != calc.queue }}'
+    then:
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.speicher_ladelogik_kalibrierung_vormerkungen
+        data:
+          value: '{{ calc.queue }}'
+  - variables:
+      writes_a: true
+      writes_e: true
+      attempted_a: false
+      attempted_e: false
+  - if:
+      - condition: template
+        value_template: '{{ calc.execute }}'
+    then:
+      - repeat:
+          for_each: '{{ calc.write_order }}'
+          sequence:
+            - variables:
+                battery_key: '{{ repeat.item }}'
+            - repeat:
+                for_each: >-
+                  {{ calc.commands | selectattr('battery', 'eq', battery_key) |
+                  list }}
+                sequence:
+                  - if:
+                      - condition: template
+                        value_template: '{{ writes_a if battery_key == ''A'' else writes_e }}'
+                    then:
+                      - variables:
+                          attempted_a: '{{ attempted_a or battery_key == ''A'' }}'
+                          attempted_e: '{{ attempted_e or battery_key == ''E'' }}'
+                          confirmation:
+                            ok: false
+                            written: false
+                      - action: script.speicher_ladelogik_schreiben_geprueft
+                        continue_on_error: true
+                        data:
+                          entity: '{{ repeat.item.entity }}'
+                          value: '{{ repeat.item.value }}'
+                          battery: '{{ battery_key }}'
+                          restore: '{{ repeat.item.restore }}'
+                        response_variable: confirmation
+                      - variables:
+                          writes_a: >-
+                            {{ confirmation.ok | default(false) if battery_key
+                            == 'A' else writes_a }}
+                          writes_e: >-
+                            {{ confirmation.ok | default(false) if battery_key
+                            == 'E' else writes_e }}
+  - repeat:
+      for_each:
+        - battery: a
+          attempted: '{{ attempted_a }}'
+          ok: '{{ writes_a }}'
+        - battery: e
+          attempted: '{{ attempted_e }}'
+          ok: '{{ writes_e }}'
+      sequence:
+        - if:
+            - condition: template
+              value_template: '{{ repeat.item.attempted }}'
+          then:
+            - action: input_number.set_value
+              target:
+                entity_id: >-
+                  {{ 'input_number.speicher_ladelogik_schreibfehler_' ~
+                  repeat.item.battery }}
+              data:
+                value: >-
+                  {{ 0 if repeat.item.ok else [3,
+                  states('input_number.speicher_ladelogik_schreibfehler_' ~
+                  repeat.item.battery) | int(0) + 1] | min }}
+  - variables:
+      writes_ok: '{{ writes_a and writes_e }}'
+  - action: input_number.set_value
+    target:
+      entity_id: input_number.speicher_ladelogik_schreibfehler
+    data:
+      value: >-
+        {{ [states('input_number.speicher_ladelogik_schreibfehler_a') | int(0),
+        states('input_number.speicher_ladelogik_schreibfehler_e') | int(0)] | max }}
+  - if:
+      - condition: template
+        value_template: '{{ not writes_ok }}'
+    then:
+      - action: persistent_notification.create
+        data:
+          notification_id: speicher_ladelogik_v1_beta_1_schreibfehler
+          title: Speicher-Ladelogik - Grenzwert nicht bestaetigt
+          message: >-
+            {{ 'Venus A: ' ~ ('bestaetigt' if writes_a else 'Schreibfehler') ~
+            '; Venus E: ' ~ ('bestaetigt' if writes_e else 'Schreibfehler') }}.
+            Nach drei Fehlern wird nur der betroffene Speicher gesperrt.
+            Geraet/Integration pruefen, danach Fehler quittieren.
+  - if:
+      - condition: template
+        value_template: '{{ calc.reaction_newly_blocked | default([]) | length > 0 }}'
+    then:
+      - action: persistent_notification.create
+        data:
+          notification_id: speicher_ladelogik_v1_beta_1_ladereaktion
+          title: Speicher-Ladelogik - Ladeleistung noch nicht bestaetigt
+          message: >-
+            Venus {{ calc.reaction_newly_blocked | join('/') }} hat innerhalb
+            von drei Minuten nach der Ladefreigabe keine neue positive
+            AC-Rueckmeldung geliefert. Dies ist nur ein Hinweis; AstraMeter
+            regelt weiter. AC-Sensor und Geraet bei anhaltendem Zustand pruefen.
+  - if:
+      - condition: template
+        value_template: '{{ calc.clear_backup }}'
+    then:
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.speicher_ladelogik_sicherung
+        data:
+          value: ''
+  - if:
+      - condition: template
+        value_template: '{{ calc.clear_cal_backup | default(false) }}'
+    then:
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.speicher_ladelogik_kalibrierung_sicherung
+        data:
+          value: ''
+  - if:
+      - condition: template
+        value_template: >-
+          {{ calc.finish and (writes_a if calc.calibration.batterie == 'A' else
+          writes_e) }}
+    then:
+      - variables:
+          battery: '{{ calc.calibration.batterie | lower }}'
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: >-
+            {{ 'input_datetime.speicher_ladelogik_kalibrierung_' ~ battery ~ '_letzter_erfolg'
+            }}
+        data:
+          timestamp: '{{ as_timestamp(now()) }}'
+      - action: input_boolean.turn_on
+        target:
+          entity_id: '{{ ''input_boolean.speicher_ladelogik_kalibrierung_'' ~ battery ~ ''_erfolg_bekannt'' }}'
+      - action: input_number.set_value
+        target:
+          entity_id: '{{ ''input_number.speicher_ladelogik_kalibrierung_'' ~ battery ~ ''_letzte_energie'' }}'
+        data:
+          value: '{{ calc.calibration.energie_ac_kwh }}'
+  - if:
+      - condition: template
+        value_template: >-
+          {{ calc.finish and calc.reset_after_calibration | default([]) | length > 0
+             and (writes_a if calc.calibration.batterie == 'A' else writes_e) }}
+    then:
+      - repeat:
+          for_each: "{{ calc.reset_after_calibration | default([]) }}"
+          sequence:
+            - action: input_boolean.turn_off
+              target:
+                entity_id: "{{ repeat.item }}"
+  - if:
+      - condition: template
+        value_template: >-
+          {{ calc.capture_drift and (writes_a if calc.calibration.batterie ==
+          'A' else writes_e) }}
+    then:
+      - variables:
+          battery: '{{ calc.calibration.batterie | lower }}'
+      - repeat:
+          for_each:
+            - battery: a
+              attribute: drift_a_p1_mv
+              entity: input_number.speicher_ladelogik_kalibrierung_a_p1_letzte_drift
+            - battery: a
+              attribute: drift_a_p2_mv
+              entity: input_number.speicher_ladelogik_kalibrierung_a_p2_letzte_drift
+            - battery: e
+              attribute: drift_e_mv
+              entity: input_number.speicher_ladelogik_kalibrierung_e_letzte_drift
+          sequence:
+            - if:
+                - condition: template
+                  value_template: '{{ repeat.item.battery == battery }}'
+              then:
+                - action: input_number.set_value
+                  target:
+                    entity_id: '{{ repeat.item.entity }}'
+                  data:
+                    value: >-
+                      {{ calc.calibration[repeat.item.attribute] | round(0) if
+                      is_number(calc.calibration[repeat.item.attribute]) else -1
+                      }}
+  - if:
+      - condition: template
+        value_template: '{{ calc.notify | length > 0 }}'
+    then:
+      - action: persistent_notification.create
+        data:
+          notification_id: speicher_ladelogik_kalibrierung_v1_beta_1
+          title: Speicher-Ladelogik Kalibrierung
+          message: '{{ calc.notify }}'
+  - if:
+      - condition: template
+        value_template: >-
+          {{ calc.execute and calc.plan.regelung_aktiv and ((writes_a and
+          calc.plan.soll_ladegrenze_venus_a_w > 0) or (writes_e and
+          calc.plan.soll_ladegrenze_venus_e_w > 0)) }}
+    then:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.speicher_ladelogik_laden_freigegeben
+    else:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.speicher_ladelogik_laden_freigegeben
+  - event: speicher_ladelogik_v1_beta_1_auswertung
+    event_data:
+      plan: '{{ calc.plan }}'
+      calibration: '{{ calc.calibration }}'
+      learning: '{{ calc.learning }}'
+      journal_event: '{{ calc.journal_event }}'
+      writes_ok: '{{ writes_ok }}'
+      writes_a: '{{ writes_a }}'
+      writes_e: '{{ writes_e }}'
+mode: queued
+max: 3
+max_exceeded: silent
+
+
+alias: Speicher-Ladelogik V1.0 Beta 1 · Planungswächter
+description: ''
+triggers:
+  - trigger: time_pattern
+    minutes: /1
+conditions:
+  - condition: state
+    entity_id: input_boolean.speicher_ladelogik_laufbereit
+    state: 'on'
+  - condition: state
+    entity_id: input_boolean.speicher_ladelogik_aktiv
+    state: 'on'
+  - condition: state
+    entity_id: input_select.speicher_ladelogik_betriebsart
+    state: Automatik
+  - condition: template
+    value_template: >-
+      {{ as_timestamp(now()) - state_attr('sensor.speicher_ladelogik_planung',
+      'berechnet_ts') | float(0) > 150 }}
+actions:
+  - repeat:
+      for_each:
+        - battery: A
+          entity: number.marstek_venus_a_maximale_ladeleistung
+        - battery: E
+          entity: number.marstek_venus_e_ladeleistung
+      sequence:
+        - if:
+            - condition: template
+              value_template: >-
+                {{ states('input_number.speicher_ladelogik_schreibfehler_' ~
+                (repeat.item.battery | lower)) | int(0) < 3 and
+                is_state('switch.astrameter_venus_' ~ (repeat.item.battery |
+                lower) ~ '_auto_target', 'on') and
+                is_state('switch.astrameter_venus_' ~ (repeat.item.battery |
+                lower) ~ '_active', 'on') and not
+                is_state('input_boolean.venus_' ~ (repeat.item.battery | lower)
+                ~ '_nicht_laden', 'on') }}
+          then:
+            - variables:
+                confirmation:
+                  ok: false
+                  written: false
+            - action: script.speicher_ladelogik_schreiben_geprueft
+              continue_on_error: true
+              data:
+                entity: '{{ repeat.item.entity }}'
+                battery: '{{ repeat.item.battery }}'
+                value: 0
+                restore: false
+              response_variable: confirmation
+            - if:
+                - condition: template
+                  value_template: '{{ not confirmation.ok | default(false) }}'
+              then:
+                - action: input_number.set_value
+                  target:
+                    entity_id: >-
+                      {{ 'input_number.speicher_ladelogik_schreibfehler_' ~
+                      (repeat.item.battery | lower) }}
+                  data:
+                    value: >-
+                      {{ [3, states('input_number.speicher_ladelogik_schreibfehler_' ~
+                      (repeat.item.battery | lower)) | int(0) + 1] | min }}
+  - action: persistent_notification.create
+    data:
+      notification_id: speicher_ladelogik_v1_beta_1_veraltet
+      title: Speicher-Ladelogik V1.0 Beta 1 - Planung ausgefallen
+      message: >-
+        Seit mehr als 150 Sekunden fehlt eine Auswertung. Der Waechter versucht
+        die Ladegrenzen auf 0 W zu setzen. Entladegrenzen und
+        Sitzungssicherungen bleiben fuer die anschliessende Rueckgabe erhalten.
+        HA-Protokoll und Python-Skript pruefen.
+mode: single
