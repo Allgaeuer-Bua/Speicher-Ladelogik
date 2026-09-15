@@ -16,6 +16,7 @@ SPEC.loader.exec_module(STABILITY)
 
 stable_charge_limit = STABILITY.stable_charge_limit
 target_latch = STABILITY.target_latch
+peer_discharge_release = STABILITY.peer_discharge_release
 
 
 def test_target_is_latched_across_small_soc_jitter() -> None:
@@ -49,6 +50,46 @@ def test_target_latch_does_not_survive_changed_goal() -> None:
         prior_goal=80,
     )
     assert reached is False
+
+
+def test_peer_discharge_is_released_once_at_fourteen_percent() -> None:
+    released, _ = peer_discharge_release(
+        phase="drain",
+        target_soc=14,
+        highest_pack_soc=14,
+        prior_released=False,
+    )
+    assert released is True
+
+
+def test_peer_release_waits_for_highest_pack() -> None:
+    released, _ = peer_discharge_release(
+        phase="drain",
+        target_soc=13.8,
+        highest_pack_soc=14.2,
+        prior_released=False,
+    )
+    assert released is False
+
+
+def test_peer_release_latch_does_not_flap() -> None:
+    released, _ = peer_discharge_release(
+        phase="drain",
+        target_soc=15,
+        highest_pack_soc=15,
+        prior_released=True,
+    )
+    assert released is True
+
+
+def test_peer_release_resets_outside_drain() -> None:
+    released, _ = peer_discharge_release(
+        phase="wait",
+        target_soc=13,
+        highest_pack_soc=13,
+        prior_released=True,
+    )
+    assert released is False
 
 
 def test_limit_is_kept_during_short_surplus_pause() -> None:
