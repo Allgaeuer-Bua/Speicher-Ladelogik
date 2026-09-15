@@ -124,7 +124,6 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "sun.sun",
             "sensor.pv_ladelogik_planung",
             "sensor.pv_kalibrierung_planung",
-            "sensor.speicher_ladelogik_planung",
             "sensor.speicher_ladelogik_kalibrierung_planung",
         )
         return list(dict.fromkeys([*self.source_entities, *comparison]))
