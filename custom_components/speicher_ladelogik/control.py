@@ -1,4 +1,4 @@
-"""Pure control helpers for the guarded Beta-7 register writer."""
+"""Pure helpers for guarded device-register writes."""
 
 from __future__ import annotations
 

@@ -16,6 +16,7 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     CONF_A_AC_POWER,
+    CONF_A_DC_POWER,
     CONF_A_ACTIVE,
     CONF_A_AUTO_TARGET,
     CONF_A_CHARGE_LIMIT,
@@ -24,12 +25,13 @@ from .const import (
     CONF_A_MAX_CELL_TEMP,
     CONF_A_MAX_CELL_VOLTAGE,
     CONF_A_MAX_SOC,
+    CONF_A_MIN_SOC,
     CONF_A_MIN_CELL_TEMP,
     CONF_A_PACK_DRIFT,
     CONF_A_PACK_SOC,
     CONF_A_SOC,
-    CONF_A_USABLE_CAPACITY,
     CONF_E_AC_POWER,
+    CONF_E_DC_POWER,
     CONF_E_ACTIVE,
     CONF_E_AUTO_TARGET,
     CONF_E_CELL_DRIFT,
@@ -39,9 +41,9 @@ from .const import (
     CONF_E_MAX_CELL_TEMP,
     CONF_E_MAX_CELL_VOLTAGE,
     CONF_E_MAX_SOC,
+    CONF_E_MIN_SOC,
     CONF_E_MIN_CELL_TEMP,
     CONF_E_SOC,
-    CONF_E_USABLE_CAPACITY,
     CONF_FORECAST_SENSORS,
     CONF_GRID_POWER,
     CONF_HOUSE_POWER,
@@ -120,6 +122,9 @@ class SpeicherLadelogikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_A_AC_POWER, default=DEFAULTS[CONF_A_AC_POWER]
                 ): _entity("sensor"),
                 vol.Required(
+                    CONF_A_DC_POWER, default=DEFAULTS[CONF_A_DC_POWER]
+                ): _entity("sensor"),
+                vol.Required(
                     CONF_A_CHARGE_LIMIT, default=DEFAULTS[CONF_A_CHARGE_LIMIT]
                 ): _entity("number"),
                 vol.Required(
@@ -135,9 +140,7 @@ class SpeicherLadelogikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_A_MAX_SOC, default=DEFAULTS[CONF_A_MAX_SOC]): _entity(
                     "number"
                 ),
-                vol.Required(
-                    CONF_A_USABLE_CAPACITY, default=DEFAULTS[CONF_A_USABLE_CAPACITY]
-                ): _entity(["number", "input_number"]),
+                vol.Optional(CONF_A_MIN_SOC): _entity("number"),
                 vol.Required(
                     CONF_A_PACK_SOC, default=DEFAULTS[CONF_A_PACK_SOC]
                 ): _entity("sensor", multiple=True),
@@ -172,6 +175,9 @@ class SpeicherLadelogikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_E_AC_POWER, default=DEFAULTS[CONF_E_AC_POWER]
                 ): _entity("sensor"),
                 vol.Required(
+                    CONF_E_DC_POWER, default=DEFAULTS[CONF_E_DC_POWER]
+                ): _entity("sensor"),
+                vol.Required(
                     CONF_E_CHARGE_LIMIT, default=DEFAULTS[CONF_E_CHARGE_LIMIT]
                 ): _entity("number"),
                 vol.Required(
@@ -187,9 +193,9 @@ class SpeicherLadelogikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_E_MAX_SOC, default=DEFAULTS[CONF_E_MAX_SOC]): _entity(
                     "number"
                 ),
-                vol.Required(
-                    CONF_E_USABLE_CAPACITY, default=DEFAULTS[CONF_E_USABLE_CAPACITY]
-                ): _entity(["number", "input_number"]),
+                vol.Required(CONF_E_MIN_SOC, default=DEFAULTS[CONF_E_MIN_SOC]): _entity(
+                    "number"
+                ),
                 vol.Required(
                     CONF_E_MAX_CELL_VOLTAGE,
                     default=DEFAULTS[CONF_E_MAX_CELL_VOLTAGE],

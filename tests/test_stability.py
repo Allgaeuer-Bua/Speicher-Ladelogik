@@ -19,18 +19,18 @@ target_latch = STABILITY.target_latch
 peer_discharge_release = STABILITY.peer_discharge_release
 
 
-def test_target_is_latched_across_small_soc_jitter() -> None:
+def test_target_is_latched_at_device_goal() -> None:
     reached, _ = target_latch(
         goal=100,
-        soc=99.3,
-        lowest_soc=99.3,
+        soc=100,
+        lowest_soc=100,
         prior_latched=True,
         prior_goal=100,
     )
     assert reached is True
 
 
-def test_target_latch_releases_two_percent_below_goal() -> None:
+def test_target_latch_releases_immediately_below_device_goal() -> None:
     reached, _ = target_latch(
         goal=100,
         soc=97.9,
@@ -167,7 +167,7 @@ def test_safety_stop_sets_zero_immediately() -> None:
     assert held is False
 
 
-def test_target_and_window_end_set_zero_immediately() -> None:
+def test_target_keeps_register_but_window_end_sets_zero() -> None:
     target_value, _, _ = stable_charge_limit(
         raw_limit=500,
         previous_limit=500,
@@ -188,5 +188,5 @@ def test_target_and_window_end_set_zero_immediately() -> None:
         planner_status="Keine PV-Ladechance",
         safety_stop=False,
     )
-    assert target_value == 0
+    assert target_value == 500
     assert window_value == 0

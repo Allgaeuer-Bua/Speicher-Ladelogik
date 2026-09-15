@@ -8,9 +8,15 @@ from homeassistant.const import Platform
 
 DOMAIN: Final = "speicher_ladelogik"
 NAME: Final = "Speicher-Ladelogik"
-VERSION: Final = "1.0.0-beta.7"
+VERSION: Final = "1.0.0-rc.1"
 
-PLATFORMS: Final = [Platform.SENSOR, Platform.SWITCH]
+PLATFORMS: Final = [
+    Platform.SENSOR,
+    Platform.SWITCH,
+    Platform.SELECT,
+    Platform.NUMBER,
+    Platform.BUTTON,
+]
 UPDATE_INTERVAL_SECONDS: Final = 30
 
 SHADOW_TRACKED_ENTITIES: Final = (
@@ -32,7 +38,6 @@ SHADOW_TRACKED_ENTITIES: Final = (
     "input_text.speicher_ladelogik_kalibrierung_vormerkungen",
     "input_text.speicher_ladelogik_sicherung",
     "input_text.speicher_ladelogik_kalibrierung_sicherung",
-    "input_number.speicher_ladelogik_ziel_soc",
     "input_number.speicher_ladelogik_mindestreserve",
     "input_number.speicher_ladelogik_prognose_sicherheit",
     "input_number.speicher_ladelogik_unplanbare_reserve",
@@ -64,12 +69,14 @@ CONF_FORECAST_SENSORS: Final = "forecast_sensors"
 
 CONF_A_SOC: Final = "a_soc"
 CONF_A_AC_POWER: Final = "a_ac_power"
+CONF_A_DC_POWER: Final = "a_dc_power"
 CONF_A_CHARGE_LIMIT: Final = "a_charge_limit"
 CONF_A_DISCHARGE_LIMIT: Final = "a_discharge_limit"
 CONF_A_AUTO_TARGET: Final = "a_auto_target"
 CONF_A_ACTIVE: Final = "a_active"
 CONF_A_CHARGE_OVERRIDE: Final = "a_charge_override"
 CONF_A_MAX_SOC: Final = "a_max_soc"
+CONF_A_MIN_SOC: Final = "a_min_soc"
 CONF_A_USABLE_CAPACITY: Final = "a_usable_capacity"
 CONF_A_PACK_SOC: Final = "a_pack_soc"
 CONF_A_MAX_CELL_VOLTAGE: Final = "a_max_cell_voltage"
@@ -79,12 +86,14 @@ CONF_A_PACK_DRIFT: Final = "a_pack_drift"
 
 CONF_E_SOC: Final = "e_soc"
 CONF_E_AC_POWER: Final = "e_ac_power"
+CONF_E_DC_POWER: Final = "e_dc_power"
 CONF_E_CHARGE_LIMIT: Final = "e_charge_limit"
 CONF_E_DISCHARGE_LIMIT: Final = "e_discharge_limit"
 CONF_E_AUTO_TARGET: Final = "e_auto_target"
 CONF_E_ACTIVE: Final = "e_active"
 CONF_E_CHARGE_OVERRIDE: Final = "e_charge_override"
 CONF_E_MAX_SOC: Final = "e_max_soc"
+CONF_E_MIN_SOC: Final = "e_min_soc"
 CONF_E_USABLE_CAPACITY: Final = "e_usable_capacity"
 CONF_E_MAX_CELL_VOLTAGE: Final = "e_max_cell_voltage"
 CONF_E_MAX_CELL_TEMP: Final = "e_max_cell_temp"
@@ -114,12 +123,13 @@ DEFAULTS: Final = {
     ],
     CONF_A_SOC: "sensor.marstek_venus_a_soc_batterie",
     CONF_A_AC_POWER: "sensor.marstek_venus_a_ac_leistung",
+    CONF_A_DC_POWER: "sensor.marstek_venus_a_batterieleistung",
     CONF_A_CHARGE_LIMIT: "number.marstek_venus_a_maximale_ladeleistung",
     CONF_A_DISCHARGE_LIMIT: "number.marstek_venus_a_maximale_entladeleistung",
     CONF_A_AUTO_TARGET: "switch.astrameter_venus_a_auto_target",
     CONF_A_ACTIVE: "switch.astrameter_venus_a_active",
     CONF_A_MAX_SOC: "number.marstek_venus_a_maximaler_soc",
-    CONF_A_USABLE_CAPACITY: "input_number.venus_a_verfugbare_kapazitat",
+    CONF_A_MIN_SOC: "number.marstek_venus_a_minimaler_soc",
     CONF_A_PACK_SOC: [
         "sensor.marstek_venus_a_soc_batteriepack_1",
         "sensor.marstek_venus_a_soc_batteriepack_2",
@@ -133,12 +143,13 @@ DEFAULTS: Final = {
     ],
     CONF_E_SOC: "sensor.marstek_venus_e_soc",
     CONF_E_AC_POWER: "sensor.marstek_venus_e_ac_leistung",
+    CONF_E_DC_POWER: "sensor.marstek_venus_e_dc_leistung",
     CONF_E_CHARGE_LIMIT: "number.marstek_venus_e_ladeleistung",
     CONF_E_DISCHARGE_LIMIT: "number.marstek_venus_e_entladeleistung",
     CONF_E_AUTO_TARGET: "switch.astrameter_venus_e_auto_target",
     CONF_E_ACTIVE: "switch.astrameter_venus_e_active",
     CONF_E_MAX_SOC: "number.marstek_venus_e_obere_ladegrenze_kapazitat",
-    CONF_E_USABLE_CAPACITY: "input_number.venus_e_verfugbare_kapazitat",
+    CONF_E_MIN_SOC: "number.marstek_venus_e_untere_ladegrenze_kapazitat",
     CONF_E_MAX_CELL_VOLTAGE: "sensor.marstek_venus_e_max_zellspannung",
     CONF_E_MAX_CELL_TEMP: "sensor.marstek_venus_e_max_zelltemperatur",
     CONF_E_MIN_CELL_TEMP: "sensor.marstek_venus_e_min_zelltemperatur",
@@ -158,13 +169,14 @@ COMMON_KEYS: Final = (
 VENUS_A_KEYS: Final = (
     CONF_A_SOC,
     CONF_A_AC_POWER,
+    CONF_A_DC_POWER,
     CONF_A_CHARGE_LIMIT,
     CONF_A_DISCHARGE_LIMIT,
     CONF_A_AUTO_TARGET,
     CONF_A_ACTIVE,
     CONF_A_CHARGE_OVERRIDE,
     CONF_A_MAX_SOC,
-    CONF_A_USABLE_CAPACITY,
+    CONF_A_MIN_SOC,
     CONF_A_PACK_SOC,
     CONF_A_MAX_CELL_VOLTAGE,
     CONF_A_MAX_CELL_TEMP,
@@ -175,13 +187,14 @@ VENUS_A_KEYS: Final = (
 VENUS_E_KEYS: Final = (
     CONF_E_SOC,
     CONF_E_AC_POWER,
+    CONF_E_DC_POWER,
     CONF_E_CHARGE_LIMIT,
     CONF_E_DISCHARGE_LIMIT,
     CONF_E_AUTO_TARGET,
     CONF_E_ACTIVE,
     CONF_E_CHARGE_OVERRIDE,
     CONF_E_MAX_SOC,
-    CONF_E_USABLE_CAPACITY,
+    CONF_E_MIN_SOC,
     CONF_E_MAX_CELL_VOLTAGE,
     CONF_E_MAX_CELL_TEMP,
     CONF_E_MIN_CELL_TEMP,

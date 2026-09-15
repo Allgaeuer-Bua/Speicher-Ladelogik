@@ -17,5 +17,6 @@ async def async_get_config_entry_diagnostics(
     coordinator: SpeicherLadelogikCoordinator = entry.runtime_data
     return {
         "configuration": dict(entry.data),
+        "native_controls": coordinator.control,
         "evaluation": coordinator.data,
     }

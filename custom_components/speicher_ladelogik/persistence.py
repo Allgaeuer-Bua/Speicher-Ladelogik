@@ -125,7 +125,9 @@ def read_backup(value: Any) -> dict[str, float] | None:
         return None
 
     values = [_number(item) for item in fields[1:]]
-    maxima = (1500, 2500, 1500, 2500)
+    # Storage slots may be mapped to another Venus model. The actual number
+    # entity range is validated immediately before every write.
+    maxima = (10000, 10000, 10000, 10000)
     if not all(
         value is not None
         and (value == -1 or (0 <= value <= maxima[index] and value % 50 == 0))

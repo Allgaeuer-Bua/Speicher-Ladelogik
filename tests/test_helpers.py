@@ -17,6 +17,7 @@ SPEC.loader.exec_module(HELPERS)
 as_number = HELPERS.as_number
 is_usable_state = HELPERS.is_usable_state
 power_in_watts = HELPERS.power_in_watts
+conversion_metrics = HELPERS.conversion_metrics
 
 
 def test_as_number() -> None:
@@ -35,3 +36,23 @@ def test_usable_state() -> None:
     assert is_usable_state("0") is True
     assert is_usable_state("unknown") is False
     assert is_usable_state("unavailable") is False
+
+
+def test_efficiency_uses_correct_charge_and_discharge_signs() -> None:
+    charge = conversion_metrics(-500, 450)
+    discharge = conversion_metrics(450, -500)
+    assert charge["modus"] == "Laden"
+    assert discharge["modus"] == "Entladen"
+    assert charge["wirkungsgrad"] == 90.0
+    assert discharge["wirkungsgrad"] == 90.0
+    assert charge["verlust_w"] == 50
+
+
+def test_efficiency_is_available_below_thirty_watts() -> None:
+    result = conversion_metrics(27, -30)
+    assert result["wirkungsgrad"] == 90.0
+
+
+def test_efficiency_rejects_direction_mismatch() -> None:
+    result = conversion_metrics(-500, -450)
+    assert result["wirkungsgrad"] is None

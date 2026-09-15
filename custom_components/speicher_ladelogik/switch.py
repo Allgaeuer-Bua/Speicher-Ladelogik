@@ -1,8 +1,10 @@
-"""Switch platform for guarded Speicher-Ladelogik control."""
+"""Native switches for Speicher-Ladelogik."""
 
 from __future__ import annotations
 
-from homeassistant.components.switch import SwitchEntity
+from dataclasses import dataclass
+
+from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -11,45 +13,36 @@ from .coordinator import SpeicherLadelogikCoordinator
 from .entity import SpeicherLadelogikEntity
 
 
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddConfigEntryEntitiesCallback,
-) -> None:
-    """Set up the guarded register-control switch."""
+@dataclass(frozen=True, kw_only=True)
+class SpeicherSwitchDescription(SwitchEntityDescription):
+    control_key: str
+
+
+SWITCHES = (
+    SpeicherSwitchDescription(key="mittagsspitzen", name="Mittagsspitzen reduzieren", icon="mdi:chart-bell-curve", control_key="mittagsspitzen"),
+    SpeicherSwitchDescription(key="handbetrieb_venus_a", name="Handbetrieb Venus A", icon="mdi:hand-back-right-outline", control_key="manuell_a_aktiv"),
+    SpeicherSwitchDescription(key="handbetrieb_venus_e", name="Handbetrieb Venus E", icon="mdi:hand-back-right-outline", control_key="manuell_e_aktiv"),
+)
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback) -> None:
     coordinator: SpeicherLadelogikCoordinator = entry.runtime_data
-    async_add_entities([SpeicherRegisterControlSwitch(coordinator)])
+    async_add_entities(SpeicherControlSwitch(coordinator, description) for description in SWITCHES)
 
 
-class SpeicherRegisterControlSwitch(SpeicherLadelogikEntity, SwitchEntity):
-    """Explicitly arm register writes until the next integration restart."""
+class SpeicherControlSwitch(SpeicherLadelogikEntity, SwitchEntity):
+    entity_description: SpeicherSwitchDescription
 
-    _attr_name = "Registersteuerung"
-    _attr_icon = "mdi:shield-lock-outline"
-
-    def __init__(self, coordinator: SpeicherLadelogikCoordinator) -> None:
-        super().__init__(coordinator, "registersteuerung")
+    def __init__(self, coordinator: SpeicherLadelogikCoordinator, description: SpeicherSwitchDescription) -> None:
+        super().__init__(coordinator, description.key)
+        self.entity_description = description
 
     @property
     def is_on(self) -> bool:
-        return self.coordinator.write_enabled
+        return bool(self.coordinator.control[self.entity_description.control_key])
 
     async def async_turn_on(self, **kwargs) -> None:
-        """Enable guarded writes after validating all prerequisites."""
-        await self.coordinator.async_set_write_enabled(True)
-        self.async_write_ha_state()
+        await self.coordinator.async_set_control(self.entity_description.control_key, True)
 
     async def async_turn_off(self, **kwargs) -> None:
-        """Stop issuing new register writes."""
-        await self.coordinator.async_set_write_enabled(False)
-        self.async_write_ha_state()
-
-    @property
-    def extra_state_attributes(self):
-        data = self.coordinator.data or {}
-        return {
-            "sicherheitsmodus": "Nach jedem HA-/Integrationsneustart aus",
-            "letzter_schreibzugriff_ts": data.get("letzter_schreibzugriff_ts"),
-            "letzter_schreibfehler": data.get("letzter_schreibfehler"),
-            "letzte_schreibergebnisse": data.get("letzte_schreibergebnisse", []),
-        }
+        await self.coordinator.async_set_control(self.entity_description.control_key, False)

@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Gemeinsame Datenquellen",
-        "description": "Datenquellen auswählen. Die Registersteuerung bleibt nach Installation und jedem Neustart zunächst ausgeschaltet.",
+        "description": "Datenquellen auswählen. Nach dem ersten RC-Start beginnt die Integration sicher in Beobachten.",
         "data": {
           "name": "Name",
           "pv_ac": "Aktuelle PV-AC-Leistung",
@@ -18,17 +18,18 @@
       },
       "venus_a": {
         "title": "Venus A",
-        "description": "Datenquellen und Stellglieder für Venus A auswählen. Schreibzugriffe müssen später ausdrücklich am Gerät aktiviert werden.",
+        "description": "Datenquellen und Stellglieder für den ersten Speicher auswählen. Die Bezeichnung Venus A ist nur der frei belegbare Steckplatzname.",
         "data": {
           "a_soc": "SoC",
           "a_ac_power": "AC-Leistung",
+          "a_dc_power": "DC-Batterieleistung",
           "a_charge_limit": "Maximale Ladeleistung",
           "a_discharge_limit": "Maximale Entladeleistung",
           "a_auto_target": "AstraMeter Auto Target",
           "a_active": "AstraMeter Active",
           "a_charge_override": "Optionaler Nicht-laden-Helfer",
-          "a_max_soc": "Obere SoC-Grenze",
-          "a_usable_capacity": "Verfügbare Kapazität",
+          "a_max_soc": "Obere SoC-Gerätegrenze",
+          "a_min_soc": "Untere SoC-Gerätegrenze (falls verfügbar)",
           "a_pack_soc": "Pack-SoC-Sensoren",
           "a_max_cell_voltage": "Maximale Zellspannung",
           "a_max_cell_temp": "Maximale Zelltemperatur",
@@ -38,17 +39,18 @@
       },
       "venus_e": {
         "title": "Venus E",
-        "description": "Datenquellen und Stellglieder für Venus E auswählen. Schreibzugriffe müssen später ausdrücklich am Gerät aktiviert werden.",
+        "description": "Datenquellen und Stellglieder für den zweiten Speicher auswählen. Die Bezeichnung Venus E ist nur der frei belegbare Steckplatzname.",
         "data": {
           "e_soc": "SoC",
           "e_ac_power": "AC-Leistung",
+          "e_dc_power": "DC-Batterieleistung",
           "e_charge_limit": "Maximale Ladeleistung",
           "e_discharge_limit": "Maximale Entladeleistung",
           "e_auto_target": "AstraMeter Auto Target",
           "e_active": "AstraMeter Active",
           "e_charge_override": "Optionaler Nicht-laden-Helfer",
-          "e_max_soc": "Obere SoC-Grenze",
-          "e_usable_capacity": "Verfügbare Kapazität",
+          "e_max_soc": "Obere SoC-Gerätegrenze",
+          "e_min_soc": "Untere SoC-Gerätegrenze",
           "e_max_cell_voltage": "Maximale Zellspannung",
           "e_max_cell_temp": "Maximale Zelltemperatur",
           "e_min_cell_temp": "Minimale Zelltemperatur",

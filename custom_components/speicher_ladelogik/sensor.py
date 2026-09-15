@@ -12,7 +12,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfPower
+from homeassistant.const import PERCENTAGE, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -90,14 +90,14 @@ SENSORS = (
         value_fn=lambda data: "bereit" if data["daten_gueltig_venus_e"] else "unvollständig",
     ),
     SpeicherSensorDescription(
-        key="schattenplanung",
-        name="Schattenplanung",
+        key="planung",
+        name="Planung",
         icon="mdi:timeline-clock-outline",
         value_fn=lambda data: data.get("shadow_plan", {}).get("status", "Fehler"),
     ),
     SpeicherSensorDescription(
-        key="schattenkalibrierung",
-        name="Schattenkalibrierung",
+        key="kalibrierung",
+        name="Kalibrierung",
         icon="mdi:battery-sync-outline",
         value_fn=lambda data: PHASE_LABELS.get(
             data.get("shadow_calibration", {}).get("phase"),
@@ -109,6 +109,40 @@ SENSORS = (
         name="Planvergleich",
         icon="mdi:compare-horizontal",
         value_fn=_comparison_state,
+    ),
+    SpeicherSensorDescription(
+        key="wirkungsgrad_venus_a",
+        name="Wirkungsgrad Venus A",
+        icon="mdi:percent-outline",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda data: data["wirkungsgrad_venus_a"]["wirkungsgrad"],
+    ),
+    SpeicherSensorDescription(
+        key="verlustleistung_venus_a",
+        name="Verlustleistung Venus A",
+        icon="mdi:lightning-bolt-outline",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda data: data["wirkungsgrad_venus_a"]["verlust_w"],
+    ),
+    SpeicherSensorDescription(
+        key="wirkungsgrad_venus_e",
+        name="Wirkungsgrad Venus E",
+        icon="mdi:percent-outline",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda data: data["wirkungsgrad_venus_e"]["wirkungsgrad"],
+    ),
+    SpeicherSensorDescription(
+        key="verlustleistung_venus_e",
+        name="Verlustleistung Venus E",
+        icon="mdi:lightning-bolt-outline",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda data: data["wirkungsgrad_venus_e"]["verlust_w"],
     ),
 )
 
@@ -170,8 +204,10 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "letzter_schreibzugriff_ts": data.get("letzter_schreibzugriff_ts"),
                 "letzter_schreibfehler": data.get("letzter_schreibfehler"),
                 "letzte_schreibergebnisse": data.get("letzte_schreibergebnisse", []),
+                "kalibrierung_faellig_a": data.get("kalibrierung_faellig_a"),
+                "kalibrierung_faellig_e": data.get("kalibrierung_faellig_e"),
             }
-        if self.entity_description.key == "schattenplanung":
+        if self.entity_description.key == "planung":
             plan = data.get("shadow_plan", {})
             keys = (
                 "version",
@@ -195,6 +231,10 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "restbedarf_kwh",
                 "restbedarf_venus_a_kwh",
                 "restbedarf_venus_e_kwh",
+                "untere_geraetegrenze_venus_a_prozent",
+                "obere_geraetegrenze_venus_a_prozent",
+                "untere_geraetegrenze_venus_e_prozent",
+                "obere_geraetegrenze_venus_e_prozent",
                 "soll_laden",
                 "soll_ladeleistung_gesamt_w",
                 "soll_ladegrenze_venus_a_w",
@@ -232,7 +272,7 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
             )
             attributes["schreibzugriffe_aktiv"] = data["schreibzugriffe_aktiv"]
             return attributes
-        if self.entity_description.key == "schattenkalibrierung":
+        if self.entity_description.key == "kalibrierung":
             calibration = data.get("shadow_calibration", {})
             keys = (
                 "phase",
@@ -256,7 +296,25 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "peer_entladesperre_freigegeben",
                 "peer_freigabe_schwelle_prozent",
             )
-            return {key: calibration.get(key) for key in keys}
+            attributes = {key: calibration.get(key) for key in keys}
+            for key in (
+                "kalibrierung_letzter_erfolg_a_ts",
+                "kalibrierung_letzter_erfolg_e_ts",
+                "kalibrierung_naechste_faelligkeit_a_ts",
+                "kalibrierung_naechste_faelligkeit_e_ts",
+                "kalibrierung_faellig_a",
+                "kalibrierung_faellig_e",
+            ):
+                attributes[key] = data.get(key)
+            return attributes
         if self.entity_description.key == "planvergleich":
             return dict(data.get("shadow_comparison", {}))
+        if self.entity_description.key in {
+            "wirkungsgrad_venus_a", "verlustleistung_venus_a"
+        }:
+            return dict(data["wirkungsgrad_venus_a"])
+        if self.entity_description.key in {
+            "wirkungsgrad_venus_e", "verlustleistung_venus_e"
+        }:
+            return dict(data["wirkungsgrad_venus_e"])
         return None

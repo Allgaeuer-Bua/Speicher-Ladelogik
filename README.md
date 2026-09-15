@@ -1,62 +1,61 @@
 # Speicher-Ladelogik
 
-Intelligente Speicher-Ladesteuerung für Home Assistant mit Venus A, Venus E und AstraMeter.
+Intelligente Speicher-Ladesteuerung für Home Assistant mit zwei unabhängig
+regelbaren Speichern und AstraMeter.
 
-## V1.0 Beta 7
+## V1.0 RC 1
 
-Beta 7 übernimmt erstmals optional die kontrollierte Registersteuerung:
+Der erste Release Candidate ersetzt die bisherigen YAML-Helfer und
+Steuerautomationen durch native Entitäten der Integration.
 
-- Einrichtung über **Einstellungen → Geräte & Dienste**
-- freie Zuordnung der bestehenden Home-Assistant-Entitäten
-- Aktualisierung alle 30 Sekunden und unmittelbar bei Zustandsänderungen
-- Diagnose der gemeinsamen Daten sowie der Daten von Venus A und Venus E
-- PV-AC-Messung mit MPPT-Fallback
-- vollständige Fahrplan- und Kalibrierberechnung im Schattenmodus
-- automatischer Vergleich ausgewählter Ergebnisse mit der bisherigen V2.2.1
-- automatische Kompatibilität mit den bisherigen `pv_ladelogik_*`- und
-  `pv_kalibrierung_*`-Entity-IDs
-- liest bestehende V2.2.1-Sitzungen, Sicherungen und Vormerkungen ohne Migration
-- vorgeschlagene Stellbefehle bleiben im Beobachtungsmodus Diagnosewerte
-- eigener Schalter **Registersteuerung**; standardmäßig und nach jedem
-  Home-Assistant-/Integrationsneustart ausgeschaltet
-- Schreiben ausschließlich auf die vier bei der Einrichtung gewählten Lade-
-  und Entladegrenzen, mit Wertebereichsprüfung und Rückbestätigung
-- drei fehlgeschlagene Schreibbestätigungen sperren nur den betroffenen Speicher
-- bei ausgefallener Planung werden ausschließlich die Ladegrenzen auf 0 W gesetzt
-- Ziel-Latch mit 2 Prozentpunkten Hysterese gegen 99/100-%-Pendeln
-- zustandsbasierte Sollwertstabilisierung: ein sinnvoller Registerwert bleibt
-  bis zu einer echten Fahrplan-, Ziel- oder Sicherheitsänderung erhalten
-- Ziel-Latch und stabiler Fahrplanwert bleiben über einen HA-Neustart erhalten;
-  gespeichert wird ausschließlich bei einer tatsächlichen Zustandsänderung
-- getrennte Anzeige von rohem und stabilem Fahrplanwert sowie Haltegrund
-- während der Kalibrierentladung bleibt der andere Speicher bis 14 % gesperrt;
-  danach wird seine maximale Entladeleistung einmalig und ohne SoC-Flattern
+### Funktionen
+
+- Betriebsarten **Aus**, **Beobachten** und **Automatik**
+- Fahrplan aus PV-Prognose, realem Ertrag, Hauslast und Netzbilanz
+- PV-AC-Messung mit MPPT- und Bilanz-Fallback
+- unabhängig belegbare Speicherplätze **Venus A** und **Venus E**; bei der
+  Einrichtung können auch Entitäten anderer Venus-Modelle gewählt werden
+- frei einstellbare bevorzugte Ladeleistung und Nennkapazität je Speicher
+- minimale und maximale SoC-Grenze werden ausschließlich vom jeweiligen Gerät
+  gelesen; die Integration erzeugt und schreibt keine zweite SoC-Grenze
+- stabile Leistungsgrenzen: Register werden nur bei einer wirklichen Änderung
+  geschrieben; die Feinregelung übernimmt AstraMeter
+- kein künstliches Absenken des Registers oberhalb 90 % und kein 0-W-Schreiben
+  beim Erreichen der oberen Gerätegrenze
+- dauerhafter Handbetrieb getrennt je Speicher; der andere Speicher bleibt im
+  automatischen Fahrplan. Eine bleibende HA-Meldung erinnert an den Handbetrieb
+- Kalibrierwarteschlange und 500-W-Kalibrierung; Vorbereitung durch natürlichen
+  Hausverbrauch bis 13 %, das BMS begrenzt anschließend an der unteren
+  Gerätegrenze (für die Kalibrierung 12 %)
+- der jeweils andere Speicher bleibt während der Vorbereitung bis 14 % gesperrt
+  und wird danach mit seiner vom Gerät gemeldeten maximalen Entladeleistung
   freigegeben
-- kennzeichnet erwartete Abweichungen zur V2.2.1 im Planvergleich
-- optionale Nicht-laden-Helfer für A und E
-- bestehende V2.2.1-Helfer und das bisherige Dashboard werden während der
-  kontrollierten Umstellung weitergeführt
+- drei nicht bestätigte Schreibvorgänge sperren nur den betroffenen Speicher;
+  Home Assistant meldet die Sperre dauerhaft bis zur Quittierung
+- momentaner Lade- und Entladewirkungsgrad sowie Verlustleistung je Speicher;
+  auch kleine Leistungen werden erfasst, sofern AC- und DC-Richtung plausibel
+  sind
+- Zustände, Vormerkungen, Sicherungen und Einstellungen werden intern über
+  Home Assistant gespeichert
 
-### Kontrollierte Umschaltung
+Wetter wird in V1.0 nicht ein zweites Mal direkt bewertet: Die PV-Prognose
+enthält den Wettereinfluss bereits. So wird dieselbe Wetterlage nicht doppelt
+gewichtet.
 
-1. Beta 7 installieren und Home Assistant neu starten. Die Registersteuerung
-   bleibt aus.
-2. Eine aktuelle, fehlerfreie Planung abwarten.
-3. Die bisherige **PV-Ladelogik AstraMeter Regelung** und den
-   **PV-Ladelogik V2 Planungswächter** deaktivieren.
-4. Erst danach am Gerät **Registersteuerung** einschalten.
+### Wechsel von Beta 7
 
-> **Nie beide Steuerungen gleichzeitig aktivieren.** Zum Rückwechsel zuerst die
-> Registersteuerung der Integration ausschalten und anschließend die beiden
-> bisherigen Automationen wieder aktivieren.
+1. Vor dem Update die alten Automationen deaktiviert lassen.
+2. RC 1 über HACS installieren und Home Assistant neu starten.
+3. Der erste RC-Start erfolgt absichtlich in **Beobachten**. Entitäten und Plan
+   prüfen.
+4. Danach `select.speicher_ladelogik_betriebsart` auf **Automatik** stellen.
+   Diese Auswahl bleibt bei späteren Neustarts erhalten.
+5. Alte `pv_ladelogik_*`-Helfer erst entfernen, wenn Planung, Handbetrieb und
+   Kalibrierknöpfe im neuen Gerät geprüft wurden.
 
-## Entwicklung
-
-Die bisherige YAML-/Python-Script-Version bleibt vorerst als Referenz im Repository. Die neue Integration befindet sich unter:
-
-```text
-custom_components/speicher_ladelogik/
-```
+> Niemals die alte Registerautomation und die Integration gleichzeitig steuern
+> lassen. Die Integration verweigert Automatik, solange eine bekannte alte
+> Steuerautomation aktiv ist.
 
 Projektseite und Fehlerberichte:
 
