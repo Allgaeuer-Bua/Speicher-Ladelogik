@@ -15,6 +15,7 @@ from .const import (
     DEFAULTS,
 )
 from .planner import calculate_shadow_plan
+from .runtime import PlannerState, planner_states
 
 LEGACY_OVERRIDE_ENTITIES = {
     CONF_A_CHARGE_OVERRIDE: "input_boolean.venus_a_nicht_laden",
@@ -43,11 +44,19 @@ COMPARISON_FIELDS = {
 class _MappedStates:
     """Map legacy planner entity IDs to the UI-selected entities."""
 
-    def __init__(self, hass: HomeAssistant, mapping: dict[str, str]) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        mapping: dict[str, str],
+        overrides: dict[str, PlannerState] | None = None,
+    ) -> None:
         self._hass = hass
         self._mapping = mapping
+        self._overrides = overrides or {}
 
     def get(self, entity_id: str):
+        if entity_id in self._overrides:
+            return self._overrides[entity_id]
         mapped_entity_id = self._mapping.get(entity_id, entity_id)
         if mapped_entity_id != entity_id:
             return self._hass.states.get(mapped_entity_id)
@@ -57,8 +66,13 @@ class _MappedStates:
 class _MappedHomeAssistant:
     """Minimal Home Assistant facade required by the pure planner."""
 
-    def __init__(self, hass: HomeAssistant, mapping: dict[str, str]) -> None:
-        self.states = _MappedStates(hass, mapping)
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        mapping: dict[str, str],
+        overrides: dict[str, PlannerState] | None = None,
+    ) -> None:
+        self.states = _MappedStates(hass, mapping, overrides)
 
 
 def _entity_mapping(config: dict[str, Any]) -> dict[str, str]:
@@ -94,12 +108,17 @@ def calculate(
     config: dict[str, Any],
     prior_plan: dict[str, Any] | None = None,
     request: str = "tick",
+    control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run one planner calculation."""
     now = dt_util.now()
     today = now.date()
     mapping = _entity_mapping(config)
-    proxy = _MappedHomeAssistant(hass, mapping)
+    proxy = _MappedHomeAssistant(
+        hass,
+        mapping,
+        planner_states(control) if control is not None else None,
+    )
     result = calculate_shadow_plan(
         proxy,
         {
@@ -118,6 +137,13 @@ def calculate(
     for command_key in ("commands", "proposed_commands"):
         for command in result.get(command_key, []):
             command["entity"] = mapping.get(command["entity"], command["entity"])
+    if control is not None:
+        mode = str(control.get("mode", "Beobachten"))
+        plan = result.get("plan", {})
+        plan["betriebsart"] = mode
+        plan["regelung_aktiv"] = mode == "Automatik" and bool(
+            plan.get("regelung_aktiv")
+        )
     return result
 
 
