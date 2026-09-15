@@ -167,6 +167,9 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "quellen_verfuegbar": data["quellen_verfuegbar"],
                 "fehlende_entitaeten": data["fehlende_entitaeten"],
                 "warnungen": data["warnungen"],
+                "letzter_schreibzugriff_ts": data.get("letzter_schreibzugriff_ts"),
+                "letzter_schreibfehler": data.get("letzter_schreibfehler"),
+                "letzte_schreibergebnisse": data.get("letzte_schreibergebnisse", []),
             }
         if self.entity_description.key == "schattenplanung":
             plan = data.get("shadow_plan", {})
@@ -227,7 +230,7 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
             attributes["vorgeschlagene_befehle"] = data.get(
                 "shadow_proposed_commands", []
             )
-            attributes["schreibzugriffe_aktiv"] = False
+            attributes["schreibzugriffe_aktiv"] = data["schreibzugriffe_aktiv"]
             return attributes
         if self.entity_description.key == "schattenkalibrierung":
             calibration = data.get("shadow_calibration", {})
@@ -250,6 +253,8 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "drift_a_p1_mv",
                 "drift_a_p2_mv",
                 "drift_e_mv",
+                "peer_entladesperre_freigegeben",
+                "peer_freigabe_schwelle_prozent",
             )
             return {key: calibration.get(key) for key in keys}
         if self.entity_description.key == "planvergleich":
