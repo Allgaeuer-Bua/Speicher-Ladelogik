@@ -14,30 +14,33 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
-from .compat import compatibility_entity_ids, legacy_entity_id
+from .compat import legacy_entity_id
 from .const import (
     COMMON_KEYS,
     CONF_A_AC_POWER,
+    CONF_A_DC_POWER,
     CONF_A_ACTIVE,
     CONF_A_AUTO_TARGET,
     CONF_A_CHARGE_LIMIT,
     CONF_A_CHARGE_OVERRIDE,
     CONF_A_DISCHARGE_LIMIT,
+    CONF_A_MIN_SOC,
     CONF_A_SOC,
     CONF_E_AC_POWER,
+    CONF_E_DC_POWER,
     CONF_E_ACTIVE,
     CONF_E_AUTO_TARGET,
     CONF_E_CHARGE_LIMIT,
     CONF_E_CHARGE_OVERRIDE,
     CONF_E_DISCHARGE_LIMIT,
     CONF_E_SOC,
+    DEFAULTS,
     CONF_MPPT_SENSORS,
     CONF_PV_AC,
     DOMAIN,
     REQUIRED_A_KEYS,
     REQUIRED_COMMON_KEYS,
     REQUIRED_E_KEYS,
-    SHADOW_TRACKED_ENTITIES,
     UPDATE_INTERVAL_SECONDS,
     VENUS_A_KEYS,
     VENUS_E_KEYS,
@@ -46,20 +49,19 @@ from .const import (
 from .control import (
     BACKUP_ENTITY,
     CAL_BACKUP_ENTITY,
-    CONTROL_HELPERS,
     LEGACY_CONTROLLER_ENTITIES,
     QUEUE_ENTITY,
-    REQUEST_ENTITIES,
     SESSION_ENTITY,
     validate_number_target,
     write_needed,
 )
-from .helpers import as_number, is_usable_state, power_in_watts
+from .helpers import as_number, conversion_metrics, is_usable_state, power_in_watts
 from .planner_adapter import calculate, compare_with_legacy
+from .runtime import CONTROL_DEFAULTS, HELPER_TO_CONTROL
 
 _LOGGER = logging.getLogger(__name__)
 
-_STABILITY_STORAGE_VERSION = 1
+_STABILITY_STORAGE_VERSION = 2
 _STABILITY_KEYS = tuple(
     field
     for name in ("a", "e")
@@ -83,19 +85,25 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             always_update=False,
         )
         self.entry = entry
-        self.config = dict(entry.data)
+        # Overlay defaults so entries created by an earlier beta gain new,
+        # non-required source mappings without forcing a fresh setup.
+        self.config = {**DEFAULTS, **entry.data}
+        if CONF_A_MIN_SOC not in entry.data:
+            self.config.pop(CONF_A_MIN_SOC, None)
         self._last_shadow_plan: dict[str, Any] | None = None
         self._stored_stability: dict[str, Any] = {}
-        self._write_enabled = False
+        self._control: dict[str, Any] = dict(CONTROL_DEFAULTS)
+        self._state_loaded = False
         self._write_lock = asyncio.Lock()
         self._pending_request = "tick"
         self._last_write_error: str | None = None
         self._last_write_ts: float | None = None
         self._last_write_results: list[dict[str, Any]] = []
+        self._due_notified: tuple[str, ...] = ()
         self._stability_store: Store[dict[str, Any]] = Store(
             hass,
             _STABILITY_STORAGE_VERSION,
-            f"{DOMAIN}.{entry.entry_id}.stability",
+            f"{DOMAIN}.{entry.entry_id}.state",
         )
 
     @property
@@ -111,25 +119,31 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def tracked_entities(self) -> list[str]:
-        """Return sources and legacy helper entities that trigger recalculation."""
-        shadow_entities = [
-            *SHADOW_TRACKED_ENTITIES,
-            *compatibility_entity_ids(SHADOW_TRACKED_ENTITIES),
-        ]
-        return list(
-            dict.fromkeys(
-                [*self.source_entities, *shadow_entities, *REQUEST_ENTITIES]
-            )
+        """Return physical sources plus optional RC comparison sensors."""
+        comparison = (
+            "sun.sun",
+            "sensor.pv_ladelogik_planung",
+            "sensor.pv_kalibrierung_planung",
+            "sensor.speicher_ladelogik_planung",
+            "sensor.speicher_ladelogik_kalibrierung_planung",
         )
+        return list(dict.fromkeys([*self.source_entities, *comparison]))
 
     @property
     def write_enabled(self) -> bool:
         """Return whether this runtime is allowed to write device registers."""
-        return self._write_enabled
+        return self._control.get("mode") == "Automatik"
 
-    async def async_set_write_enabled(self, enabled: bool) -> None:
-        """Enable or disable guarded register control for this HA runtime."""
-        if enabled:
+    @property
+    def control(self) -> dict[str, Any]:
+        """Return a copy of persistent native integration controls."""
+        return dict(self._control)
+
+    async def async_set_mode(self, mode: str) -> None:
+        """Set the native operating mode after validating active control."""
+        if mode not in {"Aus", "Beobachten", "Automatik"}:
+            raise HomeAssistantError("Unbekannte Betriebsart")
+        if mode == "Automatik":
             current = self.data or self._collect_data()
             active_legacy = [
                 entity_id
@@ -144,57 +158,138 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "Steuerung nicht aktiviert: bisherige Automation ist noch an: "
                     + ", ".join(active_legacy)
                 )
-            missing_helpers = [
-                entity_id
-                for entity_id in CONTROL_HELPERS
-                if self._resolve_entity(entity_id) is None
-            ]
-            if missing_helpers:
-                raise HomeAssistantError(
-                    "Steuerung nicht aktiviert: Zustandshelfer fehlen: "
-                    + ", ".join(missing_helpers)
-                )
             if not current.get("daten_gueltig") or not current.get(
                 "schattenplanung_aktiv"
             ):
                 raise HomeAssistantError(
                     "Steuerung nicht aktiviert: Daten oder Planung sind ungültig"
                 )
-            self._write_enabled = True
             self._last_write_error = None
+        previous_mode = self._control.get("mode")
+        if previous_mode == "Automatik" and mode != "Automatik":
+            # Calculate and apply the planner's saved-value restoration once
+            # before write access is finally dormant.
+            self._control["mode"] = "Aus"
+            release_result = self._collect_data()
+            await self._async_apply_control(release_result)
+        self._control["mode"] = mode
+        self._schedule_state_save()
+        await self.async_request_refresh()
+
+    async def async_set_control(self, key: str, value: Any) -> None:
+        """Update one native option and persist it."""
+        if key not in CONTROL_DEFAULTS or key == "mode":
+            raise HomeAssistantError("Unbekannte Einstellung")
+        self._control[key] = value
+        self._schedule_state_save()
+        if key in {"manuell_a_aktiv", "manuell_e_aktiv"}:
+            await self._async_update_manual_notification()
+        await self.async_request_refresh()
+
+    async def async_request_action(self, request: str) -> None:
+        """Queue one native calibration or acknowledgement action."""
+        valid = {"cal_a", "cal_e", "cal_a_tomorrow", "cal_e_tomorrow", "cancel_a", "cancel_e", "cancel", "ack"}
+        if request not in valid:
+            raise HomeAssistantError("Unbekannte Aktion")
+        if request == "ack":
+            self._control["schreibfehler_a"] = 0
+            self._control["schreibfehler_e"] = 0
+            self._last_write_error = None
+            self._schedule_state_save()
+            await self._async_dismiss_notification("speicher_ladelogik_schreibfehler")
+            await self._async_dismiss_notification("speicher_ladelogik_ladereaktion")
             await self.async_request_refresh()
             return
+        if request != "ack" and not self.write_enabled:
+            raise HomeAssistantError(
+                "Kalibrieraktionen sind nur in der Betriebsart Automatik möglich"
+            )
+        if request.startswith("cal_a"):
+            self._control["kalibrierung_a_freigegeben"] = True
+            self._control["kalibrierung_a_laden_sperren"] = True
+        elif request.startswith("cal_e"):
+            self._control["kalibrierung_e_freigegeben"] = True
+            self._control["kalibrierung_e_laden_sperren"] = True
+        elif request == "cancel_a":
+            self._control["kalibrierung_a_freigegeben"] = False
+            self._control["kalibrierung_a_laden_sperren"] = False
+        elif request == "cancel_e":
+            self._control["kalibrierung_e_freigegeben"] = False
+            self._control["kalibrierung_e_laden_sperren"] = False
+        elif request == "cancel":
+            self._control["kalibrierung_a_freigegeben"] = False
+            self._control["kalibrierung_e_freigegeben"] = False
+            self._control["kalibrierung_a_laden_sperren"] = False
+            self._control["kalibrierung_e_laden_sperren"] = False
+        self._pending_request = request
+        self._schedule_state_save()
+        await self.async_request_refresh()
 
-        self._write_enabled = False
-        self._pending_request = "tick"
-        self.async_set_updated_data(self._collect_data())
+    def _schedule_state_save(self) -> None:
+        """Persist controls, sessions and stability with write coalescing."""
+        payload = {"control": self._control, "stability": self._stored_stability}
+        self._stability_store.async_delay_save(lambda: payload, 2)
+
+    async def _async_load_state(self) -> None:
+        """Load native state and import legacy helpers once."""
+        if self._state_loaded:
+            return
+        stored = await self._stability_store.async_load()
+        if isinstance(stored, dict) and "control" in stored:
+            self._control.update(stored.get("control", {}))
+            self._stored_stability = dict(stored.get("stability", {}))
+        else:
+            # One-time migration. The first RC deliberately starts in
+            # Beobachten; all harmless values and active calibration state are
+            # imported when their old helpers still exist.
+            for entity_id, key in HELPER_TO_CONTROL.items():
+                resolved = self._resolve_entity(entity_id)
+                state = self.hass.states.get(resolved) if resolved else None
+                if state is None:
+                    continue
+                if entity_id.startswith("input_boolean."):
+                    self._control[key] = state.state == "on"
+                elif entity_id.startswith("input_number."):
+                    value = as_number(state.state)
+                    if value is not None:
+                        self._control[key] = value
+                elif is_usable_state(state.state):
+                    self._control[key] = state.state
+            for entity_id in (
+                "sensor.speicher_ladelogik_lernspeicher",
+                "sensor.pv_ladelogik_lernspeicher",
+            ):
+                state = self.hass.states.get(entity_id)
+                if state is not None and state.attributes:
+                    self._control["lernspeicher"] = dict(state.attributes)
+                    break
+            self._control["mode"] = "Beobachten"
+            self._control["migrated_from_legacy"] = True
+        self._state_loaded = True
+        self._last_shadow_plan = self._stored_stability or None
+        self._schedule_state_save()
+        await self._async_update_manual_notification()
 
     async def _async_update_data(self) -> dict[str, Any]:
-        if self._last_shadow_plan is None:
-            stored = await self._stability_store.async_load()
-            if isinstance(stored, dict):
-                self._stored_stability = stored
-                self._last_shadow_plan = stored
+        await self._async_load_state()
         request = self._pending_request
         self._pending_request = "tick"
         result = self._collect_data(request=request)
-        if self._write_enabled:
+        if self.write_enabled:
             try:
                 await self._async_apply_control(result)
             except Exception as err:  # noqa: BLE001 - never lose coordinator data
                 self._last_write_error = f"Steuerzyklus fehlgeschlagen: {err}"
                 _LOGGER.exception("Registersteuerung konnte nicht ausgeführt werden")
             result = self._collect_data()
+        await self._async_update_calibration_due_notification(result)
         return result
 
     @callback
     def async_handle_state_change(self, event: Event) -> None:
         """Refresh immediately when a configured entity changes."""
         entity_id = event.data.get("entity_id")
-        request = REQUEST_ENTITIES.get(entity_id)
-        if request is not None and self._write_enabled:
-            self._pending_request = request
-        if self._write_enabled:
+        if self.write_enabled:
             self.hass.async_create_task(self.async_request_refresh())
         else:
             self.async_set_updated_data(self._collect_data())
@@ -238,6 +333,20 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if power:
             return power_in_watts(snapshots[0]["state"], snapshots[0]["unit"])
         return as_number(snapshots[0]["state"])
+
+    def _efficiency(self, ac_key: str, dc_key: str) -> dict[str, Any]:
+        """Calculate direction-aware instantaneous conversion efficiency."""
+        ac = self._numeric(ac_key, power=True)
+        dc = self._numeric(dc_key, power=True)
+        return conversion_metrics(ac, dc)
+
+    def _control_timestamp(self, key: str) -> float | None:
+        value = self._control.get(key)
+        numeric = as_number(value)
+        if numeric is not None:
+            return numeric
+        parsed = dt_util.parse_datetime(str(value)) if value else None
+        return parsed.timestamp() if parsed is not None else None
 
     def _collect_data(self, request: str = "tick") -> dict[str, Any]:
         sources: dict[str, list[dict[str, Any]]] = {}
@@ -283,11 +392,24 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ) and (pv_ac_w is not None or mppt_sum_w is not None)
         a_ready = all(self._key_available(key) for key in REQUIRED_A_KEYS)
         e_ready = all(self._key_available(key) for key in REQUIRED_E_KEYS)
+        efficiency_a = self._efficiency(CONF_A_AC_POWER, CONF_A_DC_POWER)
+        efficiency_e = self._efficiency(CONF_E_AC_POWER, CONF_E_DC_POWER)
+        now_ts = dt_util.utcnow().timestamp()
+        last_success = {
+            battery: self._control_timestamp(
+                f"kalibrierung_{battery.lower()}_letzter_erfolg"
+            )
+            for battery in ("A", "E")
+        }
+        next_due = {
+            battery: stamp + 30 * 86400 if stamp is not None else None
+            for battery, stamp in last_success.items()
+        }
 
         result = {
             "version": VERSION,
-            "betriebsart": "Steuerung" if self._write_enabled else "Beobachten",
-            "schreibzugriffe_aktiv": self._write_enabled,
+            "betriebsart": self._control.get("mode", "Beobachten"),
+            "schreibzugriffe_aktiv": self.write_enabled,
             "daten_gueltig_gemeinsam": common_ready,
             "daten_gueltig_venus_a": a_ready,
             "daten_gueltig_venus_e": e_ready,
@@ -300,6 +422,14 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "soc_venus_e": self._numeric(CONF_E_SOC),
             "ac_leistung_venus_a_w": self._numeric(CONF_A_AC_POWER, power=True),
             "ac_leistung_venus_e_w": self._numeric(CONF_E_AC_POWER, power=True),
+            "wirkungsgrad_venus_a": efficiency_a,
+            "wirkungsgrad_venus_e": efficiency_e,
+            "kalibrierung_letzter_erfolg_a_ts": last_success["A"],
+            "kalibrierung_letzter_erfolg_e_ts": last_success["E"],
+            "kalibrierung_naechste_faelligkeit_a_ts": next_due["A"],
+            "kalibrierung_naechste_faelligkeit_e_ts": next_due["E"],
+            "kalibrierung_faellig_a": next_due["A"] is not None and now_ts >= next_due["A"],
+            "kalibrierung_faellig_e": next_due["E"] is not None and now_ts >= next_due["E"],
             "fehlende_entitaeten": missing,
             "warnungen": [f"Nicht verfügbar: {entity}" for entity in missing],
             "quellen_gesamt": len(self.source_entities),
@@ -316,6 +446,7 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.config,
                 self._last_shadow_plan,
                 request=request,
+                control=self._control,
             )
             shadow_plan = shadow.get("plan", {})
             shadow_calibration = shadow.get("calibration", {})
@@ -339,10 +470,7 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             }
             if stability != self._stored_stability:
                 self._stored_stability = stability
-                self._stability_store.async_delay_save(
-                    lambda: self._stored_stability,
-                    10,
-                )
+                self._schedule_state_save()
         except Exception as err:  # noqa: BLE001 - keep observation sensors alive
             _LOGGER.exception("Schattenplanung konnte nicht berechnet werden")
             result.update(
@@ -378,7 +506,13 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return None
 
     async def _async_set_helper(self, entity_id: str, value: Any) -> bool:
-        """Set an existing helper only when its value actually changed."""
+        """Set integration-owned state, with legacy helper fallback for migration."""
+        control_key = HELPER_TO_CONTROL.get(entity_id)
+        if control_key is not None:
+            if self._control.get(control_key) != value:
+                self._control[control_key] = value
+                self._schedule_state_save()
+            return True
         resolved = self._resolve_entity(entity_id)
         if resolved is None:
             return False
@@ -527,25 +661,14 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Maintain the existing per-battery write-failure safety counters."""
         values: dict[str, int] = {}
         for battery in ("A", "E"):
-            entity_id = (
-                "input_number.speicher_ladelogik_schreibfehler_"
-                + battery.lower()
-            )
-            resolved = self._resolve_entity(entity_id)
-            state = self.hass.states.get(resolved) if resolved else None
-            try:
-                previous = int(float(state.state)) if state is not None else 0
-            except (TypeError, ValueError):
-                previous = 0
+            key = "schreibfehler_" + battery.lower()
+            previous = int(float(self._control.get(key, 0)))
             value = previous
             if attempted[battery]:
                 value = 0 if successful[battery] else min(3, previous + 1)
-                await self._async_set_helper(entity_id, value)
+                self._control[key] = value
             values[battery] = value
-        await self._async_set_helper(
-            "input_number.speicher_ladelogik_schreibfehler",
-            max(values.values()),
-        )
+        self._schedule_state_save()
 
     async def _async_safe_stop(self) -> None:
         """Set charge limits to zero if an active controller loses its plan."""
@@ -598,6 +721,45 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception:  # noqa: BLE001 - a missing notification is harmless
             return
 
+    async def _async_update_manual_notification(self) -> None:
+        """Keep an unmistakable reminder while a manual storage mode is active."""
+        active = [
+            battery
+            for battery in ("A", "E")
+            if self._control.get(f"manuell_{battery.lower()}_aktiv")
+        ]
+        if not active:
+            await self._async_dismiss_notification("speicher_ladelogik_manuell")
+            return
+        await self._async_notification(
+            "speicher_ladelogik_manuell",
+            "Speicher-Ladelogik – Handbetrieb aktiv",
+            "Handbetrieb ist für Venus " + "/".join(active)
+            + " dauerhaft aktiv. Der jeweils andere Speicher läuft weiter im Fahrplan. "
+            "Bitte nach dem Einsatz wieder ausschalten.",
+        )
+
+    async def _async_update_calibration_due_notification(self, data: dict[str, Any]) -> None:
+        """Notify once when a known successful calibration becomes 30 days old."""
+        due = tuple(
+            battery
+            for battery in ("A", "E")
+            if data.get(f"kalibrierung_faellig_{battery.lower()}")
+        )
+        if due == self._due_notified:
+            return
+        self._due_notified = due
+        if not due:
+            await self._async_dismiss_notification("speicher_ladelogik_kalibrierung_faellig")
+            return
+        await self._async_notification(
+            "speicher_ladelogik_kalibrierung_faellig",
+            "Speicher-Ladelogik – Kalibrierung fällig",
+            "Seit der letzten erfolgreichen Kalibrierung von Venus "
+            + "/".join(due)
+            + " sind mindestens 30 Tage vergangen. Es wird kein Auftrag automatisch gestartet.",
+        )
+
     async def _async_apply_control(self, result: dict[str, Any]) -> None:
         """Apply one calculated cycle with backups, checks and confirmation."""
         async with self._write_lock:
@@ -620,6 +782,10 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await self._async_dismiss_notification(
                     "speicher_ladelogik_ladereaktion"
                 )
+
+            if isinstance(output.get("learning"), dict):
+                self._control["lernspeicher"] = output["learning"]
+                self._schedule_state_save()
 
             if output.get("save_backup"):
                 await self._async_set_helper(BACKUP_ENTITY, output["save_backup"])
@@ -744,10 +910,17 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "; ".join(error for error in errors if error) or None
                 )
             if errors:
+                blocked = [
+                    battery
+                    for battery in ("A", "E")
+                    if int(self._control.get(f"schreibfehler_{battery.lower()}", 0)) >= 3
+                ]
                 await self._async_notification(
                     "speicher_ladelogik_schreibfehler",
                     "Speicher-Ladelogik – Grenzwert nicht bestätigt",
-                    self._last_write_error or "Unbekannter Schreibfehler",
+                    (self._last_write_error or "Unbekannter Schreibfehler")
+                    + ("\n\nGesperrt bis zur Quittierung: Venus " + "/".join(blocked)
+                       if blocked else ""),
                 )
             elif results:
                 await self._async_dismiss_notification(
