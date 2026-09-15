@@ -8,6 +8,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from .compat import first_existing_state, get_state_with_legacy_fallback
 from .const import (
     CONF_A_CHARGE_OVERRIDE,
     CONF_E_CHARGE_OVERRIDE,
@@ -47,7 +48,10 @@ class _MappedStates:
         self._mapping = mapping
 
     def get(self, entity_id: str):
-        return self._hass.states.get(self._mapping.get(entity_id, entity_id))
+        mapped_entity_id = self._mapping.get(entity_id, entity_id)
+        if mapped_entity_id != entity_id:
+            return self._hass.states.get(mapped_entity_id)
+        return get_state_with_legacy_fallback(self._hass.states, entity_id)
 
 
 class _MappedHomeAssistant:
@@ -121,9 +125,19 @@ def compare_with_legacy(
     shadow_calibration: dict[str, Any],
 ) -> dict[str, Any]:
     """Compare selected shadow values with the still-running legacy sensors."""
-    legacy_plan = hass.states.get("sensor.speicher_ladelogik_planung")
-    legacy_calibration = hass.states.get(
-        "sensor.speicher_ladelogik_kalibrierung_planung"
+    legacy_plan, legacy_plan_entity_id = first_existing_state(
+        hass.states,
+        (
+            "sensor.speicher_ladelogik_planung",
+            "sensor.pv_ladelogik_planung",
+        ),
+    )
+    legacy_calibration, legacy_calibration_entity_id = first_existing_state(
+        hass.states,
+        (
+            "sensor.speicher_ladelogik_kalibrierung_planung",
+            "sensor.pv_kalibrierung_planung",
+        ),
     )
     if legacy_plan is None:
         return {
@@ -131,18 +145,22 @@ def compare_with_legacy(
             "matches": None,
             "fields_compared": 0,
             "differences": [],
+            "referenz_plan_entitaet": None,
+            "referenz_kalibrierung_entitaet": legacy_calibration_entity_id,
         }
 
     differences: list[dict[str, Any]] = []
     compared = 0
     for field, tolerance in COMPARISON_FIELDS.items():
-        old_value = legacy_plan.state if field == "status" else legacy_plan.attributes.get(field)
+        old_value = (
+            legacy_plan.state
+            if field == "status"
+            else legacy_plan.attributes.get(field)
+        )
         new_value = shadow_plan.get(field)
         compared += 1
         if not _equal(old_value, new_value, tolerance):
-            differences.append(
-                {"feld": field, "alt": old_value, "schatten": new_value}
-            )
+            differences.append({"feld": field, "alt": old_value, "schatten": new_value})
 
     if legacy_calibration is not None:
         compared += 1
@@ -158,4 +176,6 @@ def compare_with_legacy(
         "matches": not differences,
         "fields_compared": compared,
         "differences": differences,
+        "referenz_plan_entitaet": legacy_plan_entity_id,
+        "referenz_kalibrierung_entitaet": legacy_calibration_entity_id,
     }

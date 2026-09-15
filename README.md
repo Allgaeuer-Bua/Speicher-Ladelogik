@@ -2,7 +2,7 @@
 
 Intelligente Speicher-Ladesteuerung für Home Assistant mit Venus A, Venus E und AstraMeter.
 
-## V1.0 Beta 3
+## V1.0 Beta 4
 
 Die Integrations-Beta ist ausschließlich zur sicheren Datenprüfung und Schattenplanung gedacht:
 
@@ -13,6 +13,8 @@ Die Integrations-Beta ist ausschließlich zur sicheren Datenprüfung und Schatte
 - PV-AC-Messung mit MPPT-Fallback
 - vollständige Fahrplan- und Kalibrierberechnung im Schattenmodus
 - automatischer Vergleich ausgewählter Ergebnisse mit der bisherigen V2.2.1
+- automatische Kompatibilität mit den bisherigen `pv_ladelogik_*`- und
+  `pv_kalibrierung_*`-Entity-IDs
 - vorgeschlagene Stellbefehle ausschließlich als Diagnosewerte
 - optionale Nicht-laden-Helfer für A und E
 - keine Schreibzugriffe auf Lade- oder Entladegrenzen

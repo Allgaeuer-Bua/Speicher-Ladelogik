@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
 import logging
+from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -11,6 +11,7 @@ from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
+from .compat import compatibility_entity_ids
 from .const import (
     COMMON_KEYS,
     CONF_A_AC_POWER,
@@ -63,7 +64,11 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @property
     def tracked_entities(self) -> list[str]:
         """Return sources and legacy helper entities that trigger recalculation."""
-        return list(dict.fromkeys([*self.source_entities, *SHADOW_TRACKED_ENTITIES]))
+        shadow_entities = [
+            *SHADOW_TRACKED_ENTITIES,
+            *compatibility_entity_ids(SHADOW_TRACKED_ENTITIES),
+        ]
+        return list(dict.fromkeys([*self.source_entities, *shadow_entities]))
 
     async def _async_update_data(self) -> dict[str, Any]:
         return self._collect_data()
@@ -97,7 +102,9 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _snapshots_for_key(self, key: str) -> list[dict[str, Any]]:
         value = self.config.get(key)
         entities = value if isinstance(value, list) else [value]
-        return [self._snapshot(entity) for entity in entities if isinstance(entity, str)]
+        return [
+            self._snapshot(entity) for entity in entities if isinstance(entity, str)
+        ]
 
     def _key_available(self, key: str) -> bool:
         snapshots = self._snapshots_for_key(key)
@@ -125,9 +132,11 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         mppt_complete = bool(sources[CONF_MPPT_SENSORS]) and len(mppt_values) == len(
             sources[CONF_MPPT_SENSORS]
         )
-        mppt_sum_w = sum(value for value in mppt_values if value is not None) if (
-            mppt_complete and all(value is not None for value in mppt_values)
-        ) else None
+        mppt_sum_w = (
+            sum(value for value in mppt_values if value is not None)
+            if (mppt_complete and all(value is not None for value in mppt_values))
+            else None
+        )
 
         if pv_ac_w is not None and (pv_ac_w > 0 or not mppt_sum_w):
             pv_plan_w = max(0.0, pv_ac_w)
@@ -148,9 +157,9 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             }
         )
 
-        common_ready = all(self._key_available(key) for key in REQUIRED_COMMON_KEYS) and (
-            pv_ac_w is not None or mppt_sum_w is not None
-        )
+        common_ready = all(
+            self._key_available(key) for key in REQUIRED_COMMON_KEYS
+        ) and (pv_ac_w is not None or mppt_sum_w is not None)
         a_ready = all(self._key_available(key) for key in REQUIRED_A_KEYS)
         e_ready = all(self._key_available(key) for key in REQUIRED_E_KEYS)
 
@@ -190,9 +199,7 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "shadow_comparison": compare_with_legacy(
                         self.hass, shadow_plan, shadow_calibration
                     ),
-                    "shadow_proposed_commands": shadow.get(
-                        "proposed_commands", []
-                    ),
+                    "shadow_proposed_commands": shadow.get("proposed_commands", []),
                 }
             )
         except Exception as err:  # noqa: BLE001 - keep observation sensors alive
@@ -208,6 +215,8 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         "matches": None,
                         "fields_compared": 0,
                         "differences": [],
+                        "referenz_plan_entitaet": None,
+                        "referenz_kalibrierung_entitaet": None,
                     },
                     "shadow_proposed_commands": [],
                 }
