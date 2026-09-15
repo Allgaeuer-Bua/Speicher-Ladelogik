@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 TARGET_RELEASE_HYSTERESIS_PERCENT = 2.0
+PEER_DISCHARGE_RELEASE_PERCENT = 14.0
 
 DELIBERATE_ZERO_STATUSES = {
     "Datenfehler",
@@ -40,6 +41,29 @@ def target_latch(
         return True, f"Ziel gehalten bis unter {release_at:g} %"
 
     return False, f"Ladebedarf unter {goal:g} %"
+
+
+def peer_discharge_release(
+    *,
+    phase: str,
+    target_soc: float | None,
+    highest_pack_soc: float | None,
+    prior_released: bool,
+) -> tuple[bool, str]:
+    """Release the peer battery once during calibration drain at 14 %."""
+    if phase != "drain":
+        return False, "Nur während der Entladevorbereitung"
+    if prior_released:
+        return True, "Freigabe bei 14 % bereits verriegelt"
+
+    decisive_soc = highest_pack_soc
+    if decisive_soc is None:
+        decisive_soc = target_soc
+    if decisive_soc is None:
+        return False, "SoC für 14-%-Freigabe fehlt"
+    if decisive_soc <= PEER_DISCHARGE_RELEASE_PERCENT:
+        return True, "Kalibrierspeicher hat 14 % erreicht"
+    return False, "Kalibrierspeicher noch über 14 %"
 
 
 def stable_charge_limit(
