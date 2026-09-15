@@ -11,6 +11,8 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from . import persistence
+
 
 def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     """Calculate a plan without performing Home Assistant service calls."""
@@ -21,7 +23,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
 
     output = {}
 
-    VERSION = "1.0.0-beta.4"
+    VERSION = "1.0.0-beta.5"
     NOW = float(data.get("now", time.time()))
     DAY0 = float(data.get("day0", 0))
     DAY1 = float(data.get("day1", 0))
@@ -349,66 +351,17 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
                 "longest_h": round(longest / 3600, 2), "required_h": required / 3600}
 
 
-    def read_session(value):
-        fields = str(value).split("|")
-        empty = {"p": "idle", "b": "", "t": 0, "s": 0, "x": 0, "l": 0,
-                 "f": 0, "h": 0, "w": 0, "v": 0, "q": 0, "r": "", "z": 0, "n": 0, "u": "", "i": 0}
-        if value in ["", "unknown", "unavailable"]:
-            return empty
-        if len(fields) != 17 or fields[0] != "state1":
-            empty["p"] = "error"
-            empty["r"] = "state_corrupt"
-            return empty
-        keys = ["p", "b", "t", "s", "x", "l", "f", "h", "w", "v", "q", "r", "z"]
-        keys.extend(["n", "u", "i"])
-        for index in range(len(keys)):
-            key = keys[index]
-            val = fields[index + 1]
-            if key not in ["p", "b", "r", "u"]:
-                val = number(val)
-                if val is None or val < 0:
-                    empty["p"] = "error"
-                    empty["r"] = "state_corrupt"
-                    return empty
-            empty[key] = val
-        if empty["p"] not in ["idle", "requested", "drain", "wait", "charge", "rest", "paused", "restore", "incomplete", "done", "cancelled", "error"]:
-            empty["p"] = "error"
-            empty["r"] = "state_corrupt"
-        if empty["p"] not in ["idle", "error"] and empty["b"] not in ["A", "E"]:
-            empty["p"] = "error"
-            empty["r"] = "state_corrupt"
-        if empty["u"] not in ["", "requested", "drain", "wait", "charge", "rest"]:
-            empty["p"] = "error"
-            empty["r"] = "state_corrupt"
-        return empty
-
-
-    def encode_session(session):
-        fields = ["state1"]
-        for key in ["p", "b", "t", "s", "x", "l", "f", "h", "w", "v", "q", "r", "z", "n", "u", "i"]:
-            value = session[key]
-            fields.append(str(round(value, 3)) if isinstance(value, float) else str(value))
-        return "|".join(fields)
-
-
-    def read_backup(value):
-        fields = str(value).split("|")
-        if len(fields) == 5 and fields[0] == "backup1":
-            values = [number(item) for item in fields[1:]]
-            maxima = [1500, 2500, 1500, 2500]
-            if all([values[i] is not None and (values[i] == -1 or
-                    (0 <= values[i] <= maxima[i] and values[i] % 50 == 0)) for i in range(4)]):
-                return {"A": values[0], "E": values[1], "DA": values[2], "DE": values[3]}
-        return None
+    read_session = persistence.read_session
+    encode_session = persistence.encode_session
+    read_backup = persistence.read_backup
+    encode_backup = persistence.encode_backup
+    read_queue = persistence.read_queue
+    encode_queue = persistence.encode_queue
 
 
     def cap_snapshot():
         return {"A": number(raw(BATTERIES["A"]["charge"])), "E": number(raw(BATTERIES["E"]["charge"])),
                 "DA": number(raw(BATTERIES["A"]["discharge"])), "DE": number(raw(BATTERIES["E"]["discharge"]))}
-
-
-    def encode_backup(values):
-        return "backup1|" + "|".join([str(values[key]) for key in ["A", "E", "DA", "DE"]])
 
 
     def backup_restored(saved, current):
@@ -422,36 +375,6 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         session["l"] = 0
         session["f"] = 0
         session["r"] = reason
-
-
-    def read_queue(value):
-        if value == "":
-            return {}
-        fields = str(value).split("|")
-        if not fields or fields[0] != "queue1" or len(fields) > 3:
-            return None
-        queue = {}
-        for field in fields[1:]:
-            parts = field.split(",")
-            if len(parts) != 4 or parts[0] not in ["A", "E"] or parts[0] in queue:
-                return None
-            day = number(parts[1])
-            stamp = number(parts[2])
-            if day is None or day < 0 or stamp is None or stamp < 0 or parts[3] not in ["-", "A", "E"]:
-                return None
-            if parts[3] == parts[0]:
-                return None
-            queue[parts[0]] = {"n": int(day), "t": int(stamp), "d": parts[3]}
-        return queue
-
-
-    def encode_queue(queue):
-        result = ["queue1"]
-        for key in ["A", "E"]:
-            if key in queue:
-                q = queue[key]
-                result.append(key + "," + str(int(q["n"])) + "," + str(int(q["t"])) + "," + q["d"])
-        return "|".join(result)
 
 
     def pause_session(session, reason):
