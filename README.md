@@ -20,6 +20,8 @@ Die Integrations-Beta ist ausschließlich zur sicheren Datenprüfung und Schatte
 - Ziel-Latch mit 2 Prozentpunkten Hysterese gegen 99/100-%-Pendeln
 - zustandsbasierte Sollwertstabilisierung: ein sinnvoller Registerwert bleibt
   bis zu einer echten Fahrplan-, Ziel- oder Sicherheitsänderung erhalten
+- Ziel-Latch und stabiler Fahrplanwert bleiben über einen HA-Neustart erhalten;
+  gespeichert wird ausschließlich bei einer tatsächlichen Zustandsänderung
 - getrennte Anzeige von rohem und stabilem Fahrplanwert sowie Haltegrund
 - kennzeichnet erwartete Abweichungen zur V2.2.1 im Planvergleich
 - optionale Nicht-laden-Helfer für A und E
