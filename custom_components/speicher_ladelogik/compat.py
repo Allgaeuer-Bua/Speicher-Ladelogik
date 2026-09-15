@@ -18,6 +18,14 @@ _EXACT_LEGACY_ENTITY_IDS = {
 }
 
 _PREFIX_LEGACY_ENTITY_IDS = (
+    (
+        "input_datetime.speicher_ladelogik_kalibrierung_",
+        "input_datetime.pv_kalibrierung_",
+    ),
+    (
+        "input_number.speicher_ladelogik_kalibrierung_",
+        "input_number.pv_kalibrierung_",
+    ),
     ("input_number.speicher_ladelogik_", "input_number.pv_ladelogik_"),
     (
         "input_boolean.speicher_ladelogik_kalibrierung_",

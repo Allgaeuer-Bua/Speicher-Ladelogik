@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Gemeinsame Datenquellen",
-        "description": "Die erste Beta arbeitet ausschließlich im Beobachtungsmodus und führt keine Schreibzugriffe aus.",
+        "description": "Datenquellen auswählen. Die Registersteuerung bleibt nach Installation und jedem Neustart zunächst ausgeschaltet.",
         "data": {
           "name": "Name",
           "pv_ac": "Aktuelle PV-AC-Leistung",
@@ -18,7 +18,7 @@
       },
       "venus_a": {
         "title": "Venus A",
-        "description": "Datenquellen und Stellglieder für Venus A auswählen. Es wird noch nichts geschrieben.",
+        "description": "Datenquellen und Stellglieder für Venus A auswählen. Schreibzugriffe müssen später ausdrücklich am Gerät aktiviert werden.",
         "data": {
           "a_soc": "SoC",
           "a_ac_power": "AC-Leistung",
@@ -38,7 +38,7 @@
       },
       "venus_e": {
         "title": "Venus E",
-        "description": "Datenquellen und Stellglieder für Venus E auswählen. Es wird noch nichts geschrieben.",
+        "description": "Datenquellen und Stellglieder für Venus E auswählen. Schreibzugriffe müssen später ausdrücklich am Gerät aktiviert werden.",
         "data": {
           "e_soc": "SoC",
           "e_ac_power": "AC-Leistung",

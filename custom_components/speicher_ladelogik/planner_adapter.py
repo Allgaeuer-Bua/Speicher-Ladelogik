@@ -93,15 +93,17 @@ def calculate(
     hass: HomeAssistant,
     config: dict[str, Any],
     prior_plan: dict[str, Any] | None = None,
+    request: str = "tick",
 ) -> dict[str, Any]:
-    """Run one read-only shadow calculation."""
+    """Run one planner calculation."""
     now = dt_util.now()
     today = now.date()
-    proxy = _MappedHomeAssistant(hass, _entity_mapping(config))
-    return calculate_shadow_plan(
+    mapping = _entity_mapping(config)
+    proxy = _MappedHomeAssistant(hass, mapping)
+    result = calculate_shadow_plan(
         proxy,
         {
-            "request": "tick",
+            "request": request,
             "now": now.timestamp(),
             "day0": _local_timestamp(today, 0),
             "day1": _local_timestamp(today + timedelta(days=1), 0),
@@ -113,6 +115,10 @@ def calculate(
             "prior_plan": prior_plan,
         },
     )
+    for command_key in ("commands", "proposed_commands"):
+        for command in result.get(command_key, []):
+            command["entity"] = mapping.get(command["entity"], command["entity"])
+    return result
 
 
 def _equal(left: Any, right: Any, tolerance: float | None) -> bool:
