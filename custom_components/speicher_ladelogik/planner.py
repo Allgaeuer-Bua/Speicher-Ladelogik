@@ -21,7 +21,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
 
     output = {}
 
-    VERSION = "1.0.0-beta.7"
+    VERSION = "1.0.0-rc.1"
     NOW = float(data.get("now", time.time()))
     DAY0 = float(data.get("day0", 0))
     DAY1 = float(data.get("day1", 0))
@@ -56,6 +56,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
             "active": "switch.astrameter_venus_a_active",
             "override": "input_boolean.venus_a_nicht_laden",
             "top": "number.marstek_venus_a_maximaler_soc",
+            "bottom": "number.marstek_venus_a_minimaler_soc",
             "vmax": "sensor.marstek_venus_a_maximale_zellenspannung",
             "tmax": "sensor.marstek_venus_a_maximale_zellentemperatur",
             "tmin": "sensor.marstek_venus_a_minimale_zellentemperatur",
@@ -74,6 +75,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
             "active": "switch.astrameter_venus_e_active",
             "override": "input_boolean.venus_e_nicht_laden",
             "top": "number.marstek_venus_e_obere_ladegrenze_kapazitat",
+            "bottom": "number.marstek_venus_e_untere_ladegrenze_kapazitat",
             "vmax": "sensor.marstek_venus_e_max_zellspannung",
             "tmax": "sensor.marstek_venus_e_max_zelltemperatur",
             "tmin": "sensor.marstek_venus_e_min_zelltemperatur",
@@ -198,6 +200,13 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
 
     def rounded_limit(value, maximum):
         return int(max(0, min(maximum, round(value / 50) * 50)))
+
+
+    def advertised_maximum(entity, fallback):
+        state = hass.states.get(entity)
+        if state is None:
+            return fallback
+        return max(0, number(state.attributes.get("max"), fallback))
 
 
     def energy(nominal, floor, soc, goal):
@@ -549,7 +558,13 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
                     if s["h"]
                     else 0
                 )
-        elif s["p"] in ["wait", "rest", "paused"]:
+        elif s["p"] == "wait":
+            result["charge"][key] = 0
+            # Nach Erreichen von 13 % bleibt die zuvor gesicherte Entladegrenze
+            # stehen. Das BMS stoppt an seiner unteren Gerätegrenze (12 %).
+            if context["backup"] is not None and context["backup"]["D" + key] >= 0:
+                result["discharge"][key] = context["backup"]["D" + key]
+        elif s["p"] in ["rest", "paused"]:
             result["charge"][key] = 0
             result["discharge"][key] = 0
         elif s["p"] == "charge":
@@ -606,7 +621,6 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     safety = setting("prognose_sicherheit", 90, 50, 100) / 100
     extra = setting("unplanbare_reserve", 1, 0, 4)
     reserve = setting("mindestreserve", 2, 0, 5)
-    goal = setting("ziel_soc", 100, 50, 100)
     weak = setting("schwacher_tag", 25, 5, 50)
     middle = max(weak + 1, setting("mittlerer_tag", 50, 20, 100))
     strong = max(middle + 1, setting("starker_tag", 85, 50, 200))
@@ -628,10 +642,25 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     manual_requested = {key: raw(MANUAL_ENABLED[key]) == "on" for key in ["A", "E"]}
     manual_active_by_key = {key: manual_requested[key] and automatic for key in ["A", "E"]}
     manual_active = any(manual_active_by_key.values())
+    for key in ["A", "E"]:
+        cfg = BATTERIES[key]
+        cfg["maximum"] = advertised_maximum(cfg["charge"], cfg["maximum"])
+        cfg["discharge_maximum"] = advertised_maximum(
+            cfg["discharge"], cfg["maximum"]
+        )
+        cfg["preferred"] = rounded_limit(
+            setting(
+                "bevorzugte_ladeleistung_" + key.lower() + "_w",
+                cfg["preferred"],
+                0,
+                cfg["maximum"],
+            ),
+            cfg["maximum"],
+        )
     manual_charge = {key: rounded_limit(number(raw(MANUAL_CHARGE[key]), 0),
                                         BATTERIES[key]["maximum"]) for key in ["A", "E"]}
     manual_discharge = {key: rounded_limit(number(raw(MANUAL_DISCHARGE[key]), 0),
-                                           BATTERIES[key]["maximum"]) for key in ["A", "E"]}
+                                           BATTERIES[key]["discharge_maximum"]) for key in ["A", "E"]}
     failure_counts = {}
     for key in ["A", "E"]:
         failure_counts[key] = number(raw("input_number.speicher_ladelogik_schreibfehler_" + key.lower()),
@@ -676,13 +705,29 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         power = power_usable
         if power_fresh is None and power_usable is not None:
             warnings.append("Venus " + key + ": AC-Leistung verzögert; letzter Wert wird kurz weiterverwendet")
-        usable = number(raw(cfg["usable"]), cfg["usable_default"])
-        nominal = usable / (1 - cfg["floor"] / 100)
+        floor = number(raw(cfg["bottom"]), cfg["floor"])
+        top = number(raw(cfg["top"]), 100)
+        limits_ok = (
+            floor is not None
+            and top is not None
+            and 0 <= floor < top <= 100
+        )
+        if not limits_ok:
+            errors.append(key + ": Gerätegrenzen ungültig")
+            floor = cfg["floor"]
+            top = 100
+        nominal = setting(
+            "nennkapazitaet_" + key.lower() + "_kwh",
+            cfg["usable_default"] / (1 - cfg["floor"] / 100),
+            0.1,
+            30,
+        )
+        usable = nominal * (1 - floor / 100)
         capacity_ok = 0 < usable < 20
         if not capacity_ok:
             errors.append(key + ": Kapazität ungültig")
-            usable = cfg["usable_default"]
-            nominal = usable / (1 - cfg["floor"] / 100)
+            nominal = cfg["usable_default"] / (1 - cfg["floor"] / 100)
+            usable = nominal * (1 - floor / 100)
         if key == "A" and abs(nominal - pack_count * 2.08) > 0.1:
             capacity_ok = False
             errors.append("A: Packzahl und hinterlegte Nennkapazität passen nicht zusammen")
@@ -698,9 +743,8 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         else:
             packs_ok = soc is not None
             packs = [soc] if soc is not None else []
-        top = number(raw(cfg["top"]))
-        effective_goal = min(goal, top) if top is not None else goal
-        values = energy(nominal, cfg["floor"], soc if soc is not None else cfg["floor"], effective_goal)
+        effective_goal = top
+        values = energy(nominal, floor, soc if soc is not None else floor, effective_goal)
         lower_soc = min(packs) if packs else soc
         higher_soc = max(packs) if packs else soc
 
@@ -729,7 +773,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         owns = (raw(cfg["auto"]) == "on" and raw(cfg["active"]) == "on"
                 and raw(cfg["override"]) != "on")
 
-        usable_data = (soc is not None and packs_ok and capacity_ok
+        usable_data = (soc is not None and packs_ok and capacity_ok and limits_ok
                        and writable(cfg["charge"], 0) and writable(cfg["charge"], cap))
         if not usable_data:
             errors.append(key + ": Gesamt-/Pack-SoC oder Ladegrenze fehlt/ist ungueltig")
@@ -740,7 +784,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
                        "power_held_zero": power_held_zero, "power_for_cal": power_for_cal,
                        "charge_power": charging_power(key, power),
                        "grid_effect": power_usable * cfg["charge_sign"] if power_usable is not None else None,
-                       "nominal": nominal, "usable": usable,
+                       "nominal": nominal, "usable": usable, "floor": floor,
                        "goal": effective_goal, "packs_ok": packs_ok, "packs": packs,
                        "lowest_soc": lower_soc, "highest_soc": higher_soc,
                        "cal_empty_ready": cal_empty_ready,
@@ -893,6 +937,8 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
             problems.append("Venus " + key + ": Zellspannung fehlt oder ausserhalb des Kalibrierfensters")
         if number(raw(cfg["top"])) != 100:
             problems.append("Venus " + key + ": oberes SoC-Limit muss 100 % sein")
+        if number(raw(cfg["bottom"]), cfg["floor"]) != 12:
+            problems.append("Venus " + key + ": unteres SoC-Limit muss für die Kalibrierung 12 % sein")
         if not writable(cfg["discharge"], 0) or not writable(cfg["charge"], 500):
             problems.append("Venus " + key + ": eigene 0-W-Entlade-/500-W-Ladegrenze fehlt")
         if failure_counts[key] >= 3:
@@ -1180,9 +1226,10 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     # gesetzt und gehalten; die Feinregelung am Netzanschlusspunkt macht AstraMeter.
     automatic_status = status
     automatic_reason = reason
-    dispatch_caps = {key: min(caps[key], BATTERIES[key]["tail"])
-                     if bats[key]["soc"] is not None and bats[key]["soc"] >= 90
-                     else caps[key] for key in ["A", "E"]}
+    # Oberhalb von 90 % reduziert das Gerät seine reale Aufnahme selbst. Die
+    # Planung modelliert diese Endphase, schreibt deswegen aber keinen kleineren
+    # Registerwert und erzeugt so keine unnötigen Schreibzyklen.
+    dispatch_caps = caps.copy()
     if cal_draw:
         total = min(total, max(0, live_surplus - 600))
         if bats[session["b"]]["charge_power"] < 400 and not bats[session["b"]]["all_full"]:
@@ -1224,7 +1271,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         stable_limit, limit_held, limit_reason = stable_charge_limit(
             raw_limit=automatic_limits_raw[key],
             previous_limit=previous_limit,
-            current_cap=dispatch_caps[key],
+            current_cap=BATTERIES[key]["maximum"],
             eligible=eligible,
             target_reached=bats[key]["target_met"],
             within_window=within_charge_window,
@@ -1489,7 +1536,8 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         "ladefenster_start_ts": start, "ladefenster_ende_ts": end,
         "ladefenster_dauer_h": round(max(0, end - start) / 3600, 2),
         "fenster_fortschritt_prozent": round(max(0, min(100, (NOW - start) / max(1, end - start) * 100)), 1),
-        "fahrplan_basisleistung_w": sum(limits.values()), "max_ladeleistung_gesamt_w": 4000,
+        "fahrplan_basisleistung_w": sum(limits.values()),
+        "max_ladeleistung_gesamt_w": sum(BATTERIES[key]["maximum"] for key in ["A", "E"]),
         "sicher_speicherbar_rest_kwh": round(safe_rest, 3),
         "sicher_speicherbar_fenster_rest_kwh": round(window_wh / 1000 * eta, 3),
         "deckungsfaktor": round(safe_rest / reported_need, 2) if reported_need > 0.001 else 99,
@@ -1522,6 +1570,8 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         plan["restbedarf_venus_" + name + "_kwh"] = round(bats[key]["need"], 4)
         plan["kapazitaet_venus_" + name + "_kwh"] = round(bats[key]["usable"], 4)
         plan["nennkapazitaet_venus_" + name + "_kwh"] = round(bats[key]["nominal"], 4)
+        plan["untere_geraetegrenze_venus_" + name + "_prozent"] = bats[key]["floor"]
+        plan["obere_geraetegrenze_venus_" + name + "_prozent"] = bats[key]["goal"]
         plan["ziel_venus_" + name + "_erreicht"] = bats[key]["target_met"]
         plan["ziel_venus_" + name + "_latch_soc"] = bats[key]["goal"]
         plan["ziel_venus_" + name + "_latch_grund"] = bats[key]["target_latch_reason"]
@@ -1705,7 +1755,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         start_soc = number(active.get("soc")) if has_start else None
         reference = number(active.get("usable_reference"), 0)
         sample_eta = number(active.get("eta"), eta)
-        normalized_ac = sample * (100 - BATTERIES[key]["floor"]) / max(1, 100 - start_soc) if start_soc is not None else 0
+        normalized_ac = sample * (100 - bats[key]["floor"]) / max(1, 100 - start_soc) if start_soc is not None else 0
         sample_ok = (cal["finish"] and not session["i"] and has_start
                      and start_soc is not None and 0 <= start_soc <= 15
                      and abs(reference - bats[key]["usable"]) < 0.01
