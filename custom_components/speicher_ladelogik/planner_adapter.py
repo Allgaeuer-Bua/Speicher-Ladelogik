@@ -89,7 +89,11 @@ def _local_timestamp(local_date, hour: int) -> float:
     return datetime.combine(local_date, time(hour=hour), tzinfo=zone).timestamp()
 
 
-def calculate(hass: HomeAssistant, config: dict[str, Any]) -> dict[str, Any]:
+def calculate(
+    hass: HomeAssistant,
+    config: dict[str, Any],
+    prior_plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Run one read-only shadow calculation."""
     now = dt_util.now()
     today = now.date()
@@ -106,6 +110,7 @@ def calculate(hass: HomeAssistant, config: dict[str, Any]) -> dict[str, Any]:
             "eleven": _local_timestamp(today, 11),
             "deadline": _local_timestamp(today, 15),
             "prepare": _local_timestamp(today, 18),
+            "prior_plan": prior_plan,
         },
     )
 
@@ -171,11 +176,42 @@ def compare_with_legacy(
                 {"feld": "kalibrierphase", "alt": old_phase, "schatten": new_phase}
             )
 
+    held = {
+        key: bool(shadow_plan.get("sollwert_venus_" + key + "_gehalten"))
+        for key in ("a", "e")
+    }
+    latched = {
+        key: bool(shadow_plan.get("ziel_venus_" + key + "_latch_aktiv"))
+        for key in ("a", "e")
+    }
+    stability_active = any((*held.values(), *latched.values()))
+    aggregate_fields = {
+        "status",
+        "sicher_speicherbar_rest_kwh",
+        "normaler_fahrplan_status",
+        "entscheidungsgrund",
+    }
+    for difference in differences:
+        field = difference["feld"]
+        difference["beabsichtigt"] = bool(
+            (stability_active and field in aggregate_fields)
+            or (field == "restbedarf_venus_a_kwh" and latched["a"])
+            or (field == "restbedarf_venus_e_kwh" and latched["e"])
+            or (field == "soll_ladegrenze_venus_a_w" and held["a"])
+            or (field == "soll_ladegrenze_venus_e_w" and held["e"])
+        )
+    unintentional = [
+        difference for difference in differences if not difference["beabsichtigt"]
+    ]
+
     return {
         "available": True,
         "matches": not differences,
+        "funktional_passend": not unintentional,
         "fields_compared": compared,
         "differences": differences,
+        "beabsichtigte_abweichungen": len(differences) - len(unintentional),
+        "sonstige_abweichungen": len(unintentional),
         "referenz_plan_entitaet": legacy_plan_entity_id,
         "referenz_kalibrierung_entitaet": legacy_calibration_entity_id,
     }

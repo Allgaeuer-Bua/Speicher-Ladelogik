@@ -43,6 +43,8 @@ def _comparison_state(data: dict[str, Any]) -> str:
         return "Referenz fehlt"
     if comparison.get("matches"):
         return "Übereinstimmend"
+    if comparison.get("funktional_passend"):
+        return "Nur gewollte Abweichungen"
     return f"{len(comparison.get('differences', []))} Abweichungen"
 
 
@@ -194,6 +196,28 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "soll_ladeleistung_gesamt_w",
                 "soll_ladegrenze_venus_a_w",
                 "soll_ladegrenze_venus_e_w",
+                "fahrplan_ladegrenze_roh_venus_a_w",
+                "fahrplan_ladegrenze_stabil_venus_a_w",
+                "sollwert_venus_a_gehalten",
+                "sollwert_venus_a_grund",
+                "ziel_venus_a_erreicht",
+                "ziel_venus_a_latch_soc",
+                "ziel_venus_a_latch_grund",
+                "ziel_venus_a_latch_aktiv",
+                "ac_leistung_venus_a_frisch",
+                "ac_leistung_venus_a_status",
+                "ac_leistung_venus_a_alter_min",
+                "fahrplan_ladegrenze_roh_venus_e_w",
+                "fahrplan_ladegrenze_stabil_venus_e_w",
+                "sollwert_venus_e_gehalten",
+                "sollwert_venus_e_grund",
+                "ziel_venus_e_erreicht",
+                "ziel_venus_e_latch_soc",
+                "ziel_venus_e_latch_grund",
+                "ziel_venus_e_latch_aktiv",
+                "ac_leistung_venus_e_frisch",
+                "ac_leistung_venus_e_status",
+                "ac_leistung_venus_e_alter_min",
                 "verteilungsmodus",
                 "entscheidungsgrund",
                 "warnungen",

@@ -49,6 +49,7 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.entry = entry
         self.config = dict(entry.data)
+        self._last_shadow_plan: dict[str, Any] | None = None
 
     @property
     def source_entities(self) -> list[str]:
@@ -187,7 +188,7 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
         try:
-            shadow = calculate(self.hass, self.config)
+            shadow = calculate(self.hass, self.config, self._last_shadow_plan)
             shadow_plan = shadow.get("plan", {})
             shadow_calibration = shadow.get("calibration", {})
             result.update(
@@ -202,6 +203,7 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "shadow_proposed_commands": shadow.get("proposed_commands", []),
                 }
             )
+            self._last_shadow_plan = shadow_plan
         except Exception as err:  # noqa: BLE001 - keep observation sensors alive
             _LOGGER.exception("Schattenplanung konnte nicht berechnet werden")
             result.update(
@@ -213,8 +215,11 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "shadow_comparison": {
                         "available": False,
                         "matches": None,
+                        "funktional_passend": None,
                         "fields_compared": 0,
                         "differences": [],
+                        "beabsichtigte_abweichungen": 0,
+                        "sonstige_abweichungen": 0,
                         "referenz_plan_entitaet": None,
                         "referenz_kalibrierung_entitaet": None,
                     },
