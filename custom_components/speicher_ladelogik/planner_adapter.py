@@ -164,17 +164,11 @@ def compare_with_legacy(
     """Compare selected shadow values with the still-running legacy sensors."""
     legacy_plan, legacy_plan_entity_id = first_existing_state(
         hass.states,
-        (
-            "sensor.speicher_ladelogik_planung",
-            "sensor.pv_ladelogik_planung",
-        ),
+        ("sensor.pv_ladelogik_planung",),
     )
     legacy_calibration, legacy_calibration_entity_id = first_existing_state(
         hass.states,
-        (
-            "sensor.speicher_ladelogik_kalibrierung_planung",
-            "sensor.pv_kalibrierung_planung",
-        ),
+        ("sensor.pv_kalibrierung_planung",),
     )
     if legacy_plan is None:
         return {
