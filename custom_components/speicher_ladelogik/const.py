@@ -8,9 +8,9 @@ from homeassistant.const import Platform
 
 DOMAIN: Final = "speicher_ladelogik"
 NAME: Final = "Speicher-Ladelogik"
-VERSION: Final = "1.0.0-beta.6"
+VERSION: Final = "1.0.0-beta.7"
 
-PLATFORMS: Final = [Platform.SENSOR]
+PLATFORMS: Final = [Platform.SENSOR, Platform.SWITCH]
 UPDATE_INTERVAL_SECONDS: Final = 30
 
 SHADOW_TRACKED_ENTITIES: Final = (
