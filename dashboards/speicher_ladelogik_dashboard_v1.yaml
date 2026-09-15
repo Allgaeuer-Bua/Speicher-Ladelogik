@@ -1,0 +1,578 @@
+# Speicher-Ladelogik Dashboard V1.0
+# Kompatibel mit Speicher-Ladelogik 1.0.0-rc.2
+# Verwendet ausschließlich integrierte Home-Assistant-Karten.
+# Die physischen Standard-Entitäten im Bereich "Speicher" entsprechen der
+# Referenzinstallation und können bei abweichenden Geräten ersetzt werden.
+
+title: Speicher-Ladelogik
+views:
+  - title: Übersicht
+    path: uebersicht
+    icon: mdi:view-dashboard-outline
+    type: sections
+    max_columns: 4
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Systemstatus
+            heading_style: title
+            icon: mdi:shield-check-outline
+          - type: markdown
+            content: |-
+              {% set s = 'sensor.speicher_ladelogik_status' %}
+              {% set p = 'sensor.speicher_ladelogik_planung' %}
+              {% set ok = is_state(s, 'Bereit') %}
+              {% set mode = state_attr(s, 'betriebsart') or '–' %}
+              # {{ '🟢' if ok else '🔴' }} Speicher-Ladelogik
+              **{{ mode }} · Version {{ state_attr(s, 'version') or '–' }}**
+
+              {{ states(p) }}  
+              {{ state_attr(p, 'entscheidungsgrund') or 'Kein Entscheidungsgrund vorhanden.' }}
+
+              {% set warnings = state_attr(s, 'warnungen') or [] %}
+              {% if warnings %}
+              ⚠️ **{{ warnings | join('; ') }}**
+              {% endif %}
+          - type: tile
+            entity: select.speicher_ladelogik_betriebsart
+            name: Betriebsart
+            vertical: false
+            features:
+              - type: select-options
+          - type: tile
+            entity: sensor.speicher_ladelogik_planung
+            name: Aktueller Fahrplan
+            vertical: false
+          - type: tile
+            entity: sensor.speicher_ladelogik_kalibrierung
+            name: Kalibrierung
+            vertical: false
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: sensor.speicher_ladelogik_status
+                state_not: Bereit
+            card:
+              type: markdown
+              content: |-
+                ## ⚠️ Datenprüfung fehlgeschlagen
+                Öffne die Ansicht **Diagnose**, bevor du die Automatik aktivierst.
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Energiefluss · Live
+            heading_style: title
+            icon: mdi:transmission-tower
+          - type: markdown
+            content: |-
+              {% set s = 'sensor.speicher_ladelogik_status' %}
+              {% set pv = state_attr(s, 'pv_planungswert_w') | float(0) %}
+              {% set house = states('sensor.hausleistung_gesamt') | float(0) %}
+              {% set grid = states('sensor.stromzahler_leistung') | float(0) %}
+              {% set a = state_attr(s, 'ac_leistung_venus_a_w') | float(0) %}
+              {% set e = state_attr(s, 'ac_leistung_venus_e_w') | float(0) %}
+              | Quelle | Leistung | Zustand |
+              | :--- | ---: | :--- |
+              | ☀️ PV | **{{ pv | round(0) }} W** | {{ state_attr(s, 'pv_planungswert_quelle') or '–' }} |
+              | 🏠 Haus | **{{ house | round(0) }} W** | Verbrauch |
+              | 🌐 Netz | **{{ grid | round(0) }} W** | {{ 'Bezug' if grid > 20 else 'Einspeisung' if grid < -20 else 'ausgeglichen' }} |
+              | 🔋 Venus A | **{{ a | round(0) }} W** | {{ 'Entladen' if a > 20 else 'Laden' if a < -20 else 'Bereit' }} |
+              | 🔋 Venus E | **{{ e | round(0) }} W** | {{ 'Entladen' if e > 20 else 'Laden' if e < -20 else 'Bereit' }} |
+          - type: history-graph
+            title: Leistung · 12 Stunden
+            hours_to_show: 12
+            entities:
+              - entity: sensor.speicher_ladelogik_pv_planungswert
+                name: PV
+              - entity: sensor.hausleistung_gesamt
+                name: Haus
+              - entity: sensor.stromzahler_leistung
+                name: Netz
+              - entity: sensor.marstek_venus_a_ac_leistung
+                name: Venus A
+              - entity: sensor.marstek_venus_e_ac_leistung
+                name: Venus E
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Speicher
+            heading_style: title
+            icon: mdi:battery-high
+          - type: gauge
+            entity: sensor.marstek_venus_a_soc_batterie
+            name: Venus A
+            needle: true
+            min: 0
+            max: 100
+            severity:
+              red: 0
+              yellow: 20
+              green: 60
+          - type: gauge
+            entity: sensor.marstek_venus_e_soc
+            name: Venus E
+            needle: true
+            min: 0
+            max: 100
+            severity:
+              red: 0
+              yellow: 20
+              green: 60
+          - type: markdown
+            content: |-
+              {% set p = 'sensor.speicher_ladelogik_planung' %}
+              | Speicher | Bis Ziel | Sollgrenze | Wirkungsgrad |
+              | :--- | ---: | ---: | ---: |
+              | Venus A | **{{ state_attr(p, 'restbedarf_venus_a_kwh') | float(0) | round(2) }} kWh** | {{ state_attr(p, 'soll_ladegrenze_venus_a_w') | int(0) }} W | {{ states('sensor.speicher_ladelogik_wirkungsgrad_venus_a') }} % |
+              | Venus E | **{{ state_attr(p, 'restbedarf_venus_e_kwh') | float(0) | round(2) }} kWh** | {{ state_attr(p, 'soll_ladegrenze_venus_e_w') | int(0) }} W | {{ states('sensor.speicher_ladelogik_wirkungsgrad_venus_e') }} % |
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Tagesplanung
+            heading_style: title
+            icon: mdi:timeline-clock-outline
+          - type: markdown
+            content: |-
+              {% set p = 'sensor.speicher_ladelogik_planung' %}
+              {% set start = state_attr(p, 'ladefenster_start_ts') %}
+              {% set ende = state_attr(p, 'ladefenster_ende_ts') %}
+              **{{ state_attr(p, 'normaler_fahrplan_status') or states(p) }}**
+
+              {{ state_attr(p, 'normaler_fahrplan_grund') or '–' }}
+
+              | Planung | Wert |
+              | :--- | ---: |
+              | Prognose heute | **{{ state_attr(p, 'prognose_heute_erwartet_kwh') | float(0) | round(1) }} kWh** |
+              | Prognose morgen | **{{ state_attr(p, 'prognose_morgen_kwh') | float(0) | round(1) }} kWh** |
+              | Tagesklasse | **{{ state_attr(p, 'tagesklasse') or '–' }}** |
+              | Ladefenster | **{{ start | timestamp_custom('%H:%M', true) if start else '–' }}–{{ ende | timestamp_custom('%H:%M', true) if ende else '–' }}** |
+              | Sicher speicherbar | **{{ state_attr(p, 'sicher_speicherbar_rest_kwh') | float(0) | round(2) }} kWh** |
+              | Restbedarf | **{{ state_attr(p, 'restbedarf_kwh') | float(0) | round(2) }} kWh** |
+              | Überschuss | **{{ state_attr(p, 'netto_ueberschuss_w') | int(0) }} W** |
+
+  - title: Speicher
+    path: speicher
+    icon: mdi:battery-charging-medium
+    type: sections
+    max_columns: 3
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Venus A
+            heading_style: title
+            icon: mdi:battery
+          - type: gauge
+            entity: sensor.marstek_venus_a_soc_batterie
+            name: Ladezustand
+            needle: true
+            min: 0
+            max: 100
+            severity:
+              red: 0
+              yellow: 20
+              green: 60
+          - type: markdown
+            content: |-
+              {% set s = 'sensor.speicher_ladelogik_status' %}
+              {% set p = 'sensor.speicher_ladelogik_planung' %}
+              {% set w = state_attr(s, 'ac_leistung_venus_a_w') | float(0) %}
+              **{{ 'Entlädt' if w > 20 else 'Lädt' if w < -20 else 'Bereit' }} mit {{ w | abs | round(0) }} W**
+
+              Restbedarf: **{{ state_attr(p, 'restbedarf_venus_a_kwh') | float(0) | round(2) }} kWh**  
+              Gerätebereich: **{{ state_attr(p, 'untere_geraetegrenze_venus_a_prozent') | int(0) }}–{{ state_attr(p, 'obere_geraetegrenze_venus_a_prozent') | int(100) }} %**  
+              Sollwert: **{{ state_attr(p, 'soll_ladegrenze_venus_a_w') | int(0) }} W**  
+              {{ state_attr(p, 'sollwert_venus_a_grund') or '–' }}
+          - type: entities
+            title: Werte und Grenzen
+            show_header_toggle: false
+            entities:
+              - entity: sensor.speicher_ladelogik_wirkungsgrad_venus_a
+              - entity: sensor.speicher_ladelogik_verlustleistung_venus_a
+              - entity: number.speicher_ladelogik_bevorzugte_ladeleistung_venus_a
+              - entity: number.speicher_ladelogik_nennkapazitat_venus_a
+              - entity: number.marstek_venus_a_maximale_ladeleistung
+              - entity: number.marstek_venus_a_maximale_entladeleistung
+              - entity: number.marstek_venus_a_minimaler_soc
+              - entity: number.marstek_venus_a_maximaler_soc
+          - type: history-graph
+            title: Venus A · 24 Stunden
+            hours_to_show: 24
+            entities:
+              - entity: sensor.marstek_venus_a_soc_batterie
+                name: SoC
+              - entity: sensor.marstek_venus_a_ac_leistung
+                name: AC-Leistung
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Venus E
+            heading_style: title
+            icon: mdi:battery
+          - type: gauge
+            entity: sensor.marstek_venus_e_soc
+            name: Ladezustand
+            needle: true
+            min: 0
+            max: 100
+            severity:
+              red: 0
+              yellow: 20
+              green: 60
+          - type: markdown
+            content: |-
+              {% set s = 'sensor.speicher_ladelogik_status' %}
+              {% set p = 'sensor.speicher_ladelogik_planung' %}
+              {% set w = state_attr(s, 'ac_leistung_venus_e_w') | float(0) %}
+              **{{ 'Entlädt' if w > 20 else 'Lädt' if w < -20 else 'Bereit' }} mit {{ w | abs | round(0) }} W**
+
+              Restbedarf: **{{ state_attr(p, 'restbedarf_venus_e_kwh') | float(0) | round(2) }} kWh**  
+              Gerätebereich: **{{ state_attr(p, 'untere_geraetegrenze_venus_e_prozent') | int(0) }}–{{ state_attr(p, 'obere_geraetegrenze_venus_e_prozent') | int(100) }} %**  
+              Sollwert: **{{ state_attr(p, 'soll_ladegrenze_venus_e_w') | int(0) }} W**  
+              {{ state_attr(p, 'sollwert_venus_e_grund') or '–' }}
+          - type: entities
+            title: Werte und Grenzen
+            show_header_toggle: false
+            entities:
+              - entity: sensor.speicher_ladelogik_wirkungsgrad_venus_e
+              - entity: sensor.speicher_ladelogik_verlustleistung_venus_e
+              - entity: number.speicher_ladelogik_bevorzugte_ladeleistung_venus_e
+              - entity: number.speicher_ladelogik_nennkapazitat_venus_e
+              - entity: number.marstek_venus_e_ladeleistung
+              - entity: number.marstek_venus_e_entladeleistung
+              - entity: number.marstek_venus_e_untere_ladegrenze_kapazitat
+              - entity: number.marstek_venus_e_obere_ladegrenze_kapazitat
+          - type: history-graph
+            title: Venus E · 24 Stunden
+            hours_to_show: 24
+            entities:
+              - entity: sensor.marstek_venus_e_soc
+                name: SoC
+              - entity: sensor.marstek_venus_e_ac_leistung
+                name: AC-Leistung
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Wirkungsgrad
+            heading_style: title
+            icon: mdi:chart-line
+          - type: history-graph
+            title: Wirkungsgrad · 24 Stunden
+            hours_to_show: 24
+            entities:
+              - entity: sensor.speicher_ladelogik_wirkungsgrad_venus_a
+                name: Venus A
+              - entity: sensor.speicher_ladelogik_wirkungsgrad_venus_e
+                name: Venus E
+          - type: history-graph
+            title: Verlustleistung · 24 Stunden
+            hours_to_show: 24
+            entities:
+              - entity: sensor.speicher_ladelogik_verlustleistung_venus_a
+                name: Venus A
+              - entity: sensor.speicher_ladelogik_verlustleistung_venus_e
+                name: Venus E
+
+  - title: Steuerung
+    path: steuerung
+    icon: mdi:tune-variant
+    type: sections
+    max_columns: 3
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Betriebsart und Fahrplan
+            heading_style: title
+            icon: mdi:cog-transfer-outline
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: select.speicher_ladelogik_betriebsart
+              - entity: switch.speicher_ladelogik_mittagsspitzen_reduzieren
+              - entity: number.speicher_ladelogik_bevorzugte_ladeleistung_venus_a
+              - entity: number.speicher_ladelogik_bevorzugte_ladeleistung_venus_e
+          - type: markdown
+            content: |-
+              **Aus:** keine Planung und keine Registersteuerung  
+              **Beobachten:** vollständige Planung ohne Schreibzugriffe  
+              **Automatik:** Planung und abgesicherte Registersteuerung
+
+              Die Feinregelung am Netzanschlusspunkt bleibt Aufgabe von AstraMeter.
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Handbetrieb
+            heading_style: title
+            icon: mdi:hand-back-right-outline
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: switch.speicher_ladelogik_handbetrieb_venus_a
+                state: "on"
+            card:
+              type: markdown
+              content: |-
+                # ⚠️ Handbetrieb Venus A aktiv
+                Venus A folgt dauerhaft den manuellen Grenzen. Venus E bleibt im automatischen Fahrplan.
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: switch.speicher_ladelogik_handbetrieb_venus_e
+                state: "on"
+            card:
+              type: markdown
+              content: |-
+                # ⚠️ Handbetrieb Venus E aktiv
+                Venus E folgt dauerhaft den manuellen Grenzen. Venus A bleibt im automatischen Fahrplan.
+          - type: entities
+            title: Venus A
+            show_header_toggle: false
+            entities:
+              - entity: switch.speicher_ladelogik_handbetrieb_venus_a
+              - entity: number.speicher_ladelogik_handbetrieb_laden_venus_a
+              - entity: number.speicher_ladelogik_handbetrieb_entladen_venus_a
+          - type: entities
+            title: Venus E
+            show_header_toggle: false
+            entities:
+              - entity: switch.speicher_ladelogik_handbetrieb_venus_e
+              - entity: number.speicher_ladelogik_handbetrieb_laden_venus_e
+              - entity: number.speicher_ladelogik_handbetrieb_entladen_venus_e
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Kalibrierung
+            heading_style: title
+            icon: mdi:battery-sync
+          - type: markdown
+            content: |-
+              {% set c = 'sensor.speicher_ladelogik_kalibrierung' %}
+              **{{ states(c) }}{% if state_attr(c, 'batterie') %} · Venus {{ state_attr(c, 'batterie') }}{% endif %}**
+
+              {{ state_attr(c, 'grund') or 'Kein Kalibrierauftrag aktiv.' }}
+
+              Letzter Erfolg A: **{{ state_attr(c, 'kalibrierung_letzter_erfolg_a_ts') | timestamp_custom('%d.%m.%Y %H:%M', true) if state_attr(c, 'kalibrierung_letzter_erfolg_a_ts') else 'unbekannt' }}**  
+              Letzter Erfolg E: **{{ state_attr(c, 'kalibrierung_letzter_erfolg_e_ts') | timestamp_custom('%d.%m.%Y %H:%M', true) if state_attr(c, 'kalibrierung_letzter_erfolg_e_ts') else 'unbekannt' }}**
+          - type: grid
+            columns: 2
+            square: false
+            cards:
+              - type: button
+                entity: button.speicher_ladelogik_kalibrierung_venus_a_anfordern
+                name: Venus A vormerken
+                icon: mdi:battery-sync
+                tap_action:
+                  action: perform-action
+                  perform_action: button.press
+                  target:
+                    entity_id: button.speicher_ladelogik_kalibrierung_venus_a_anfordern
+                  confirmation:
+                    text: Kalibrierung für Venus A anfordern?
+              - type: button
+                entity: button.speicher_ladelogik_kalibrierung_venus_e_anfordern
+                name: Venus E vormerken
+                icon: mdi:battery-sync
+                tap_action:
+                  action: perform-action
+                  perform_action: button.press
+                  target:
+                    entity_id: button.speicher_ladelogik_kalibrierung_venus_e_anfordern
+                  confirmation:
+                    text: Kalibrierung für Venus E anfordern?
+              - type: button
+                entity: button.speicher_ladelogik_kalibrierung_venus_a_morgen
+                name: Venus A morgen
+                icon: mdi:calendar-arrow-right
+                tap_action:
+                  action: perform-action
+                  perform_action: button.press
+                  target:
+                    entity_id: button.speicher_ladelogik_kalibrierung_venus_a_morgen
+                  confirmation:
+                    text: Venus A für morgen vormerken?
+              - type: button
+                entity: button.speicher_ladelogik_kalibrierung_venus_e_morgen
+                name: Venus E morgen
+                icon: mdi:calendar-arrow-right
+                tap_action:
+                  action: perform-action
+                  perform_action: button.press
+                  target:
+                    entity_id: button.speicher_ladelogik_kalibrierung_venus_e_morgen
+                  confirmation:
+                    text: Venus E für morgen vormerken?
+          - type: entities
+            title: Aufträge beenden
+            show_header_toggle: false
+            entities:
+              - entity: button.speicher_ladelogik_kalibrierauftrag_venus_a_entfernen
+              - entity: button.speicher_ladelogik_kalibrierauftrag_venus_e_entfernen
+              - entity: button.speicher_ladelogik_laufende_kalibrierung_abbrechen
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Planungsparameter
+            heading_style: title
+            icon: mdi:tune
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: number.speicher_ladelogik_mindestreserve
+              - entity: number.speicher_ladelogik_prognosesicherheit
+              - entity: number.speicher_ladelogik_unplanbare_reserve
+              - entity: number.speicher_ladelogik_planungswirkungsgrad
+              - entity: number.speicher_ladelogik_planungshysterese
+              - entity: number.speicher_ladelogik_minimale_effiziente_ladeleistung
+          - type: entities
+            title: Tagesklassen
+            show_header_toggle: false
+            entities:
+              - entity: number.speicher_ladelogik_schwacher_pv_tag
+              - entity: number.speicher_ladelogik_mittlerer_pv_tag
+              - entity: number.speicher_ladelogik_starker_pv_tag
+              - entity: number.speicher_ladelogik_knappheitsreserve
+
+  - title: Diagnose
+    path: diagnose
+    icon: mdi:stethoscope
+    type: sections
+    max_columns: 3
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Datenqualität
+            heading_style: title
+            icon: mdi:database-check-outline
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: sensor.speicher_ladelogik_status
+              - entity: sensor.speicher_ladelogik_gemeinsame_daten
+              - entity: sensor.speicher_ladelogik_daten_venus_a
+              - entity: sensor.speicher_ladelogik_daten_venus_e
+              - entity: sensor.speicher_ladelogik_pv_planungswert
+          - type: markdown
+            content: |-
+              {% set s = 'sensor.speicher_ladelogik_status' %}
+              **Quellen:** {{ state_attr(s, 'quellen_verfuegbar') | int(0) }}/{{ state_attr(s, 'quellen_gesamt') | int(0) }} verfügbar
+
+              {% set missing = state_attr(s, 'fehlende_entitaeten') or [] %}
+              **Fehlende Entitäten:**  
+              {% if missing %}{% for item in missing %}• `{{ item }}`  
+              {% endfor %}{% else %}Keine{% endif %}
+
+              {% set warnings = state_attr(s, 'warnungen') or [] %}
+              **Warnungen:**  
+              {% if warnings %}{% for item in warnings %}• {{ item }}  
+              {% endfor %}{% else %}Keine{% endif %}
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Registersteuerung
+            heading_style: title
+            icon: mdi:register-outline
+          - type: markdown
+            content: |-
+              {% set s = 'sensor.speicher_ladelogik_status' %}
+              {% set ts = state_attr(s, 'letzter_schreibzugriff_ts') %}
+              **Schreibzugriffe:** {{ 'aktiv' if state_attr(s, 'schreibzugriffe_aktiv') else 'gesperrt' }}  
+              **Letzter Zugriff:** {{ ts | timestamp_custom('%d.%m.%Y %H:%M:%S', true) if ts else 'noch keiner' }}  
+              **Letzter Fehler:** {{ state_attr(s, 'letzter_schreibfehler') or 'keiner' }}
+
+              {% set results = state_attr(s, 'letzte_schreibergebnisse') or [] %}
+              **Letzte Ergebnisse:**  
+              {% if results %}{% for item in results %}• {{ item }}  
+              {% endfor %}{% else %}Keine Registeränderung erforderlich{% endif %}
+          - type: button
+            entity: button.speicher_ladelogik_schreibfehler_quittieren
+            name: Schreibfehler quittieren
+            icon: mdi:check-decagram-outline
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.speicher_ladelogik_schreibfehler_quittieren
+              confirmation:
+                text: Schreibfehlersperre wirklich quittieren?
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Planungsdetails
+            heading_style: title
+            icon: mdi:clipboard-text-clock-outline
+          - type: markdown
+            content: |-
+              {% set p = 'sensor.speicher_ladelogik_planung' %}
+              | Feld | Venus A | Venus E |
+              | :--- | :--- | :--- |
+              | Daten gültig | {{ state_attr(p, 'daten_gueltig_venus_a') }} | {{ state_attr(p, 'daten_gueltig_venus_e') }} |
+              | AC-Sensor | {{ state_attr(p, 'ac_leistung_venus_a_status') or '–' }} | {{ state_attr(p, 'ac_leistung_venus_e_status') or '–' }} |
+              | Alter | {{ state_attr(p, 'ac_leistung_venus_a_alter_min') or 0 }} min | {{ state_attr(p, 'ac_leistung_venus_e_alter_min') or 0 }} min |
+              | Rohwert | {{ state_attr(p, 'fahrplan_ladegrenze_roh_venus_a_w') | int(0) }} W | {{ state_attr(p, 'fahrplan_ladegrenze_roh_venus_e_w') | int(0) }} W |
+              | Stabil | {{ state_attr(p, 'fahrplan_ladegrenze_stabil_venus_a_w') | int(0) }} W | {{ state_attr(p, 'fahrplan_ladegrenze_stabil_venus_e_w') | int(0) }} W |
+              | Sollwert gehalten | {{ state_attr(p, 'sollwert_venus_a_gehalten') }} | {{ state_attr(p, 'sollwert_venus_e_gehalten') }} |
+              | Ziel erreicht | {{ state_attr(p, 'ziel_venus_a_erreicht') }} | {{ state_attr(p, 'ziel_venus_e_erreicht') }} |
+
+              **Verteilung:** {{ state_attr(p, 'verteilungsmodus') or 'aus' }}  
+              **Entscheidung:** {{ state_attr(p, 'entscheidungsgrund') or '–' }}
+
+              {% set errors = state_attr(p, 'datenfehler_aktuell') or [] %}
+              {% if errors %}
+              **Datenfehler:**  
+              {% for item in errors %}• {{ item }}  
+              {% endfor %}
+              {% endif %}
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Kalibrierdiagnose
+            heading_style: title
+            icon: mdi:battery-sync-outline
+          - type: markdown
+            content: |-
+              {% set c = 'sensor.speicher_ladelogik_kalibrierung' %}
+              **Phase:** {{ state_attr(c, 'phase') or 'idle' }}  
+              **Grundcode:** {{ state_attr(c, 'grund_code') or '–' }}  
+              **Energie:** {{ state_attr(c, 'energie_ac_kwh') | float(0) | round(2) }} kWh AC  
+              **Peer-Freigabe:** {{ state_attr(c, 'peer_entladesperre_freigegeben') }} ab {{ state_attr(c, 'peer_freigabe_schwelle_prozent') | int(14) }} %
+
+              | Drift | Wert |
+              | :--- | ---: |
+              | Venus A Pack 1 | {{ state_attr(c, 'drift_a_p1_mv') | float(0) | round(1) }} mV |
+              | Venus A Pack 2 | {{ state_attr(c, 'drift_a_p2_mv') | float(0) | round(1) }} mV |
+              | Venus E | {{ state_attr(c, 'drift_e_mv') | float(0) | round(1) }} mV |
+
+              **Vorprüfung A:** {{ (state_attr(c, 'a_pruefhinweise') or []) | join('; ') or 'bestanden' }}  
+              **Vorprüfung E:** {{ (state_attr(c, 'e_pruefhinweise') or []) | join('; ') or 'bestanden' }}
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Aktivität
+            heading_style: title
+            icon: mdi:history
+          - type: logbook
+            title: Letzte 24 Stunden
+            hours_to_show: 24
+            target:
+              entity_id:
+                - select.speicher_ladelogik_betriebsart
+                - switch.speicher_ladelogik_mittagsspitzen_reduzieren
+                - switch.speicher_ladelogik_handbetrieb_venus_a
+                - switch.speicher_ladelogik_handbetrieb_venus_e
+                - sensor.speicher_ladelogik_planung
+                - sensor.speicher_ladelogik_kalibrierung
