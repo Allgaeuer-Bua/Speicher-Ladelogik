@@ -1,0 +1,151 @@
+"""Tests for state-based register stability."""
+
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+
+STABILITY_PATH = (
+    Path(__file__).parents[1]
+    / "custom_components"
+    / "speicher_ladelogik"
+    / "stability.py"
+)
+SPEC = spec_from_file_location("speicher_ladelogik_stability", STABILITY_PATH)
+assert SPEC is not None and SPEC.loader is not None
+STABILITY = module_from_spec(SPEC)
+SPEC.loader.exec_module(STABILITY)
+
+stable_charge_limit = STABILITY.stable_charge_limit
+target_latch = STABILITY.target_latch
+
+
+def test_target_is_latched_across_small_soc_jitter() -> None:
+    reached, _ = target_latch(
+        goal=100,
+        soc=99.3,
+        lowest_soc=99.3,
+        prior_latched=True,
+        prior_goal=100,
+    )
+    assert reached is True
+
+
+def test_target_latch_releases_two_percent_below_goal() -> None:
+    reached, _ = target_latch(
+        goal=100,
+        soc=97.9,
+        lowest_soc=97.9,
+        prior_latched=True,
+        prior_goal=100,
+    )
+    assert reached is False
+
+
+def test_target_latch_does_not_survive_changed_goal() -> None:
+    reached, _ = target_latch(
+        goal=100,
+        soc=80,
+        lowest_soc=80,
+        prior_latched=True,
+        prior_goal=80,
+    )
+    assert reached is False
+
+
+def test_limit_is_kept_during_short_surplus_pause() -> None:
+    value, held, _ = stable_charge_limit(
+        raw_limit=0,
+        previous_limit=1100,
+        current_cap=1500,
+        eligible=True,
+        target_reached=False,
+        within_window=True,
+        planner_status="Keine PV-Ladechance",
+        safety_stop=False,
+    )
+    assert value == 1100
+    assert held is True
+
+
+def test_lower_nonzero_limit_does_not_cause_an_extra_write() -> None:
+    value, held, _ = stable_charge_limit(
+        raw_limit=500,
+        previous_limit=1100,
+        current_cap=1500,
+        eligible=True,
+        target_reached=False,
+        within_window=True,
+        planner_status="Fahrplanladen",
+        safety_stop=False,
+    )
+    assert value == 1100
+    assert held is True
+
+
+def test_hardware_cap_reduction_is_applied() -> None:
+    value, held, _ = stable_charge_limit(
+        raw_limit=500,
+        previous_limit=1100,
+        current_cap=500,
+        eligible=True,
+        target_reached=False,
+        within_window=True,
+        planner_status="Fahrplanladen",
+        safety_stop=False,
+    )
+    assert value == 500
+    assert held is False
+
+
+def test_deliberate_peak_hold_sets_zero_immediately() -> None:
+    value, held, _ = stable_charge_limit(
+        raw_limit=0,
+        previous_limit=1100,
+        current_cap=1500,
+        eligible=True,
+        target_reached=False,
+        within_window=True,
+        planner_status="Platz für Mittagsspitze halten",
+        safety_stop=False,
+    )
+    assert value == 0
+    assert held is False
+
+
+def test_safety_stop_sets_zero_immediately() -> None:
+    value, held, _ = stable_charge_limit(
+        raw_limit=1100,
+        previous_limit=1100,
+        current_cap=1500,
+        eligible=True,
+        target_reached=False,
+        within_window=True,
+        planner_status="Fahrplanladen",
+        safety_stop=True,
+    )
+    assert value == 0
+    assert held is False
+
+
+def test_target_and_window_end_set_zero_immediately() -> None:
+    target_value, _, _ = stable_charge_limit(
+        raw_limit=500,
+        previous_limit=500,
+        current_cap=500,
+        eligible=True,
+        target_reached=True,
+        within_window=True,
+        planner_status="Fahrplanladen",
+        safety_stop=False,
+    )
+    window_value, _, _ = stable_charge_limit(
+        raw_limit=0,
+        previous_limit=500,
+        current_cap=500,
+        eligible=True,
+        target_reached=False,
+        within_window=False,
+        planner_status="Keine PV-Ladechance",
+        safety_stop=False,
+    )
+    assert target_value == 0
+    assert window_value == 0

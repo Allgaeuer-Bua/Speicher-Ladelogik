@@ -8,6 +8,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
@@ -35,6 +36,17 @@ from .planner_adapter import calculate, compare_with_legacy
 
 _LOGGER = logging.getLogger(__name__)
 
+_STABILITY_STORAGE_VERSION = 1
+_STABILITY_KEYS = tuple(
+    field
+    for name in ("a", "e")
+    for field in (
+        f"ziel_venus_{name}_erreicht",
+        f"ziel_venus_{name}_latch_soc",
+        f"fahrplan_ladegrenze_stabil_venus_{name}_w",
+    )
+)
+
 
 class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Collect configured Home Assistant entity states without writing anything."""
@@ -49,6 +61,13 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.entry = entry
         self.config = dict(entry.data)
+        self._last_shadow_plan: dict[str, Any] | None = None
+        self._stored_stability: dict[str, Any] = {}
+        self._stability_store: Store[dict[str, Any]] = Store(
+            hass,
+            _STABILITY_STORAGE_VERSION,
+            f"{DOMAIN}.{entry.entry_id}.stability",
+        )
 
     @property
     def source_entities(self) -> list[str]:
@@ -71,6 +90,11 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return list(dict.fromkeys([*self.source_entities, *shadow_entities]))
 
     async def _async_update_data(self) -> dict[str, Any]:
+        if self._last_shadow_plan is None:
+            stored = await self._stability_store.async_load()
+            if isinstance(stored, dict):
+                self._stored_stability = stored
+                self._last_shadow_plan = stored
         return self._collect_data()
 
     @callback
@@ -187,7 +211,7 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
         try:
-            shadow = calculate(self.hass, self.config)
+            shadow = calculate(self.hass, self.config, self._last_shadow_plan)
             shadow_plan = shadow.get("plan", {})
             shadow_calibration = shadow.get("calibration", {})
             result.update(
@@ -202,6 +226,17 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "shadow_proposed_commands": shadow.get("proposed_commands", []),
                 }
             )
+            self._last_shadow_plan = shadow_plan
+            stability = {
+                key: shadow_plan.get(key)
+                for key in _STABILITY_KEYS
+            }
+            if stability != self._stored_stability:
+                self._stored_stability = stability
+                self._stability_store.async_delay_save(
+                    lambda: self._stored_stability,
+                    10,
+                )
         except Exception as err:  # noqa: BLE001 - keep observation sensors alive
             _LOGGER.exception("Schattenplanung konnte nicht berechnet werden")
             result.update(
@@ -213,8 +248,11 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "shadow_comparison": {
                         "available": False,
                         "matches": None,
+                        "funktional_passend": None,
                         "fields_compared": 0,
                         "differences": [],
+                        "beabsichtigte_abweichungen": 0,
+                        "sonstige_abweichungen": 0,
                         "referenz_plan_entitaet": None,
                         "referenz_kalibrierung_entitaet": None,
                     },

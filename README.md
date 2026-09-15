@@ -2,7 +2,7 @@
 
 Intelligente Speicher-Ladesteuerung für Home Assistant mit Venus A, Venus E und AstraMeter.
 
-## V1.0 Beta 5
+## V1.0 Beta 6
 
 Die Integrations-Beta ist ausschließlich zur sicheren Datenprüfung und Schattenplanung gedacht:
 
@@ -17,6 +17,13 @@ Die Integrations-Beta ist ausschließlich zur sicheren Datenprüfung und Schatte
   `pv_kalibrierung_*`-Entity-IDs
 - liest bestehende V2.2.1-Sitzungen, Sicherungen und Vormerkungen ohne Migration
 - vorgeschlagene Stellbefehle ausschließlich als Diagnosewerte
+- Ziel-Latch mit 2 Prozentpunkten Hysterese gegen 99/100-%-Pendeln
+- zustandsbasierte Sollwertstabilisierung: ein sinnvoller Registerwert bleibt
+  bis zu einer echten Fahrplan-, Ziel- oder Sicherheitsänderung erhalten
+- Ziel-Latch und stabiler Fahrplanwert bleiben über einen HA-Neustart erhalten;
+  gespeichert wird ausschließlich bei einer tatsächlichen Zustandsänderung
+- getrennte Anzeige von rohem und stabilem Fahrplanwert sowie Haltegrund
+- kennzeichnet erwartete Abweichungen zur V2.2.1 im Planvergleich
 - optionale Nicht-laden-Helfer für A und E
 - keine Schreibzugriffe auf Lade- oder Entladegrenzen
 

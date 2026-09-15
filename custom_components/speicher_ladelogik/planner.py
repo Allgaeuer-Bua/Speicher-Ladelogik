@@ -12,6 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from . import persistence
+from .stability import stable_charge_limit, target_latch
 
 
 def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
@@ -23,7 +24,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
 
     output = {}
 
-    VERSION = "1.0.0-beta.5"
+    VERSION = "1.0.0-beta.6"
     NOW = float(data.get("now", time.time()))
     DAY0 = float(data.get("day0", 0))
     DAY1 = float(data.get("day1", 0))
@@ -86,9 +87,6 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
             "tail": 1100, "measured_ac": 5.35, "preferred": 1300,
         },
     }
-
-    WRITE_THRESHOLD_W = 100   # W: erst bei >= 100 W Abweichung neu schreiben
-    WRITE_THRESHOLD_HOLD = 3  # Ticks: bei konstanter Anforderung stabil halten
 
     PACKS = [
         "sensor.marstek_venus_a_soc_batteriepack_1",
@@ -603,6 +601,15 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     mode = raw("input_select.speicher_ladelogik_betriebsart")
     automatic = mode == "Automatik" and raw("input_boolean.speicher_ladelogik_aktiv") == "on"
 
+    supplied_prior_plan = data.get("prior_plan")
+    prior_plan_state = hass.states.get("sensor.speicher_ladelogik_planung")
+    if isinstance(supplied_prior_plan, dict):
+        prior_attributes = supplied_prior_plan
+    elif prior_plan_state is not None:
+        prior_attributes = prior_plan_state.attributes
+    else:
+        prior_attributes = {}
+
     # Manuelle A/E-Grenzwerte bleiben aktiv, bis der Benutzer den Schalter ausschaltet.
     # Es wird keine Leistung erzwungen; AstraMeter entscheidet weiterhin die Richtung.
     manual_requested = {key: raw(MANUAL_ENABLED[key]) == "on" for key in ["A", "E"]}
@@ -639,19 +646,23 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     for key in ["A", "E"]:
         cfg = BATTERIES[key]
         soc = measurement(cfg["soc"], "soc")
-        power_fresh = measurement(cfg["power"], "power", 180)
+        power_fresh = measurement(cfg["power"], "power", 90)
+        power_usable = measurement(cfg["power"], "power", 180)
         power_latest = measurement(cfg["power"], "power")
         power_reported_ts = reported_timestamp(cfg["power"])
         power_age_min = max(0, (NOW - power_reported_ts) / 60) if power_reported_ts is not None else None
         # Ein unveraenderter numerischer Wert bleibt verwendbar. "Frisch" ist
         # weiterhin separat sichtbar und wird fuer Netz-/Batteriebilanzen benutzt.
-        power_held_zero = power_fresh is None and power_latest is not None and abs(power_latest) <= 0.5
-        power_for_cal = power_latest
+        power_held_zero = power_usable is None and power_latest is not None and abs(power_latest) <= 0.5
+        power_for_cal = power_usable
         power_display = power_latest
         power_status = ("frisch" if power_fresh is not None else
-                        ("unveraendert; letzter numerischer Wert" if power_latest is not None
-                         else "nicht verfuegbar"))
-        power = power_latest
+                        ("verzögert; letzter Wert nutzbar" if power_usable is not None else
+                         ("veraltet; letzter numerischer Wert" if power_latest is not None
+                          else "nicht verfuegbar")))
+        power = power_usable
+        if power_fresh is None and power_usable is not None:
+            warnings.append("Venus " + key + ": AC-Leistung verzögert; letzter Wert wird kurz weiterverwendet")
         usable = number(raw(cfg["usable"]), cfg["usable_default"])
         nominal = usable / (1 - cfg["floor"] / 100)
         capacity_ok = 0 < usable < 20
@@ -683,9 +694,23 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         cal_empty_ready = (soc is not None and soc <= 13 and higher_soc is not None
                            and higher_soc <= 13.5)
         all_full = packs_ok and lower_soc is not None and lower_soc >= 100 and soc is not None and soc >= 100
-        target_met = packs_ok and lower_soc is not None and lower_soc >= effective_goal and soc is not None and soc >= effective_goal
+        prior_target_met = flag(
+            prior_attributes.get("ziel_venus_" + key.lower() + "_erreicht", False)
+        )
+        prior_target_goal = prior_attributes.get(
+            "ziel_venus_" + key.lower() + "_latch_soc"
+        )
+        target_met, target_latch_reason = target_latch(
+            goal=effective_goal,
+            soc=soc,
+            lowest_soc=lower_soc if packs_ok else None,
+            prior_latched=prior_target_met,
+            prior_goal=prior_target_goal,
+        )
 
-        if packs_ok and not target_met and soc is not None:
+        if target_met:
+            values["need"] = 0
+        elif packs_ok and soc is not None:
             values["need"] = max(values["need"], nominal / len(packs) * max(0, effective_goal - lower_soc) / 100, 0.001)
         cap = cfg["maximum"]
         owns = (raw(cfg["auto"]) == "on" and raw(cfg["active"]) == "on"
@@ -695,18 +720,19 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
                        and writable(cfg["charge"], 0) and writable(cfg["charge"], cap))
         if not usable_data:
             errors.append(key + ": Gesamt-/Pack-SoC oder Ladegrenze fehlt/ist ungueltig")
-        values.update({"soc": soc, "power": power, "power_live": power_fresh,
+        values.update({"soc": soc, "power": power, "power_live": power_usable,
                        "power_display": power_display,
                        "power_fresh": power_fresh is not None, "power_status": power_status,
                        "power_reported_ts": power_reported_ts, "power_age_min": power_age_min,
                        "power_held_zero": power_held_zero, "power_for_cal": power_for_cal,
                        "charge_power": charging_power(key, power),
-                       "grid_effect": power_fresh * cfg["charge_sign"] if power_fresh is not None else None,
+                       "grid_effect": power_usable * cfg["charge_sign"] if power_usable is not None else None,
                        "nominal": nominal, "usable": usable,
                        "goal": effective_goal, "packs_ok": packs_ok, "packs": packs,
                        "lowest_soc": lower_soc, "highest_soc": higher_soc,
                        "cal_empty_ready": cal_empty_ready,
-                       "all_full": all_full, "target_met": target_met, "owns": owns,
+                       "all_full": all_full, "target_met": target_met,
+                       "target_latch_reason": target_latch_reason, "owns": owns,
                        "usable_data": usable_data, "cap": cap})
         bats[key] = values
 
@@ -805,7 +831,6 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         data_errors.append("Weder aktuelle Hauslast noch vollständige Batteriebilanz verfügbar")
     data_errors.extend(errors)
     pv_chance = live_valid and live_surplus >= 200
-    prior_plan = hass.states.get("sensor.speicher_ladelogik_planung")
     reaction_blocked_prior = {}
     for key in ["A", "E"]:
         # Eine ausbleibende AC-Reaktion ist nur ein Hinweis.
@@ -813,9 +838,9 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         reaction_blocked_prior[key] = False
     last_data_errors = data_errors
     last_data_error_ts = NOW if data_errors else None
-    if not data_errors and prior_plan is not None:
-        last_data_errors = prior_plan.attributes.get("letzte_datenfehler", [])
-        last_data_error_ts = number(prior_plan.attributes.get("letzter_datenfehler_ts"))
+    if not data_errors and prior_attributes:
+        last_data_errors = prior_attributes.get("letzte_datenfehler", [])
+        last_data_error_ts = number(prior_attributes.get("letzter_datenfehler_ts"))
 
     previews_today = {}
     previews_tomorrow = {}
@@ -1065,7 +1090,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         else:
             afternoon = afternoon + row["wh"] / 1000
     safe_rest = max(0, safe_rest - extra)
-    was_scarce = prior_plan is not None and prior_plan.attributes.get("knapp") is True
+    was_scarce = prior_attributes.get("knapp") is True
     scarce_threshold = need * setting("knappheitsreserve", 125, 100, 200) / 100
     if was_scarce:
         scarce_threshold = scarce_threshold + setting("hysterese", 0.2, 0.05, 1)
@@ -1152,7 +1177,42 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
                       for key in ["A", "E"]}
     else:
         limits = {"A": 0, "E": 0}
-    automatic_limits = limits.copy()
+    automatic_limits_raw = limits.copy()
+    automatic_limits = {}
+    automatic_limit_held = {}
+    automatic_limit_reason = {}
+    within_charge_window = start <= NOW < end
+    for key in ["A", "E"]:
+        name = key.lower()
+        previous_limit = number(
+            prior_attributes.get(
+                "fahrplan_ladegrenze_stabil_venus_" + name + "_w"
+            ),
+            0,
+        )
+        eligible = caps[key] > 0 and key != cal_active and not held[key]
+        safety_stop = (
+            not automatic
+            or not records_ok
+            or not live_valid
+            or not bats[key]["usable_data"]
+            or not bats[key]["owns"]
+            or failure_counts[key] >= 3
+        )
+        stable_limit, limit_held, limit_reason = stable_charge_limit(
+            raw_limit=automatic_limits_raw[key],
+            previous_limit=previous_limit,
+            current_cap=dispatch_caps[key],
+            eligible=eligible,
+            target_reached=bats[key]["target_met"],
+            within_window=within_charge_window,
+            planner_status=automatic_status,
+            safety_stop=safety_stop,
+        )
+        automatic_limits[key] = stable_limit
+        automatic_limit_held[key] = limit_held
+        automatic_limit_reason[key] = limit_reason
+    limits = automatic_limits.copy()
 
     manual_allowed = {}
     for key in ["A", "E"]:
@@ -1173,16 +1233,26 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     else:
         status = automatic_status
         reason = automatic_reason
+        if sum(automatic_limits_raw.values()) == 0 and sum(automatic_limits.values()) > 0:
+            status = "Sollwert wird gehalten"
+            reason = "Grenzwert bleibt gesetzt; AstraMeter begrenzt die reale Leistung am Netzanschlusspunkt"
 
     reaction = {}
     reaction_newly_blocked = []
     for key in ["A", "E"]:
         name = key.lower()
-        prior_limit = number(prior_plan.attributes.get("soll_ladegrenze_venus_" + name + "_w"), 0) if prior_plan is not None else 0
-        prior_since = number(prior_plan.attributes.get("ladeanforderung_venus_" + name + "_seit_ts")) if prior_plan is not None else None
-        prior_confirmed = flag(prior_plan.attributes.get("ladeleistung_venus_" + name + "_bestaetigt", False)) if prior_plan is not None else False
+        prior_limit = number(prior_attributes.get("soll_ladegrenze_venus_" + name + "_w"), 0)
+        prior_since = number(prior_attributes.get("ladeanforderung_venus_" + name + "_seit_ts"))
+        prior_confirmed = flag(prior_attributes.get("ladeleistung_venus_" + name + "_bestaetigt", False))
         blocked = reaction_blocked_prior[key]
-        requested = limits[key] > 0 and key not in cal["charge"]
+        requested = (
+            limits[key] > 0
+            and key not in cal["charge"]
+            and (
+                manual_active_by_key[key]
+                or automatic_limits_raw[key] > 0
+            )
+        )
         since = None
         confirmed = False
         status_text = "aus"
@@ -1381,7 +1451,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         "pv_planungswert_quelle": pv_estimate_source,
         "ueberschuss_untergrenze_w": balance_lower,
         "effizienzmodus": efficiency_mode,
-        "sollwertstrategie": "Stabile Grenzwerte; Register nur bei Sollwertänderung",
+        "sollwertstrategie": "Zustandsbasierte Grenzwerte; schreiben nur bei wirklicher Änderung",
         "bevorzugte_ladeleistung_a_w": BATTERIES["A"]["preferred"],
         "bevorzugte_ladeleistung_e_w": BATTERIES["E"]["preferred"],
         "prognose_tagesfaktor": round(day_factor, 3),
@@ -1431,6 +1501,15 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         plan["kapazitaet_venus_" + name + "_kwh"] = round(bats[key]["usable"], 4)
         plan["nennkapazitaet_venus_" + name + "_kwh"] = round(bats[key]["nominal"], 4)
         plan["ziel_venus_" + name + "_erreicht"] = bats[key]["target_met"]
+        plan["ziel_venus_" + name + "_latch_soc"] = bats[key]["goal"]
+        plan["ziel_venus_" + name + "_latch_grund"] = bats[key]["target_latch_reason"]
+        plan["ziel_venus_" + name + "_latch_aktiv"] = (
+            bats[key]["target_latch_reason"].startswith("Ziel gehalten")
+        )
+        plan["fahrplan_ladegrenze_roh_venus_" + name + "_w"] = automatic_limits_raw[key]
+        plan["fahrplan_ladegrenze_stabil_venus_" + name + "_w"] = automatic_limits[key]
+        plan["sollwert_venus_" + name + "_gehalten"] = automatic_limit_held[key]
+        plan["sollwert_venus_" + name + "_grund"] = automatic_limit_reason[key]
         plan["auto_target_venus_" + name] = raw(BATTERIES[key]["auto"])
         plan["aktuelle_ladegrenze_venus_" + name + "_w"] = current_caps[key]
         plan["ac_leistung_venus_" + name + "_roh_w"] = bats[key]["power_display"]
@@ -1540,6 +1619,9 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
             plan["status_venus_" + name] = "Manuelle Grenze"
             plan["grund_venus_" + name] = (key + " Laden/Entladen " + str(manual_charge[key])
                                                + "/" + str(manual_discharge[key]) + " W")
+        elif automatic_limit_held[key]:
+            plan["status_venus_" + name] = "Sollwert gehalten"
+            plan["grund_venus_" + name] = automatic_limit_reason[key]
         else:
             plan["status_venus_" + name] = automatic_status
             plan["grund_venus_" + name] = automatic_reason
