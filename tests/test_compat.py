@@ -64,6 +64,21 @@ def test_special_initialisation_helper_mapping() -> None:
     )
 
 
+def test_calibration_result_helper_mapping() -> None:
+    assert (
+        legacy_entity_id(
+            "input_number.speicher_ladelogik_kalibrierung_e_letzte_energie"
+        )
+        == "input_number.pv_kalibrierung_e_letzte_energie"
+    )
+    assert (
+        legacy_entity_id(
+            "input_datetime.speicher_ladelogik_kalibrierung_a_letzter_erfolg"
+        )
+        == "input_datetime.pv_kalibrierung_a_letzter_erfolg"
+    )
+
+
 def test_current_entity_has_priority() -> None:
     current = object()
     legacy = object()
