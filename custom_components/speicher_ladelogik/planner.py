@@ -1,7 +1,4 @@
-"""Read-only shadow planner ported from the proven V1 Beta calculation script.
-
-The planner may propose commands in its result, but this integration never executes them.
-"""
+"""Planner ported from the proven V1 Beta calculation script."""
 
 from __future__ import annotations
 
@@ -12,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from . import persistence
-from .stability import stable_charge_limit, target_latch
+from .stability import peer_discharge_release, stable_charge_limit, target_latch
 
 
 def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
@@ -24,7 +21,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
 
     output = {}
 
-    VERSION = "1.0.0-beta.6"
+    VERSION = "1.0.0-beta.7"
     NOW = float(data.get("now", time.time()))
     DAY0 = float(data.get("day0", 0))
     DAY1 = float(data.get("day1", 0))
@@ -439,6 +436,16 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
                 s["x"] = 0
                 s["r"] = "no_window"
         elif p == "drain":
+            released, _release_reason = peer_discharge_release(
+                phase=p,
+                target_soc=context["batteries"][key]["soc"],
+                highest_pack_soc=context["batteries"][key]["highest_soc"],
+                prior_released=bool(s["h"]),
+            )
+            if released:
+                # During drain, h is a one-way peer-release latch. It is reset
+                # before the later charge-confirmation use of the same field.
+                s["h"] = 1
             if context["batteries"][key]["cal_empty_ready"]:
                 transition(s, "wait", "waiting_pv")
             elif NOW >= s["s"]:
@@ -535,7 +542,13 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
             if context["backup"] is not None and context["backup"]["D" + key] >= 0:
                 result["discharge"][key] = context["backup"]["D" + key]
             if context["batteries"][other]["owns"] and context.get("peer_drain_ok", {}).get(other, False):
-                result["discharge"][other] = 0
+                result["discharge"][other] = (
+                    context.get("peer_discharge_max", {}).get(
+                        other, BATTERIES[other]["maximum"]
+                    )
+                    if s["h"]
+                    else 0
+                )
         elif s["p"] in ["wait", "rest", "paused"]:
             result["charge"][key] = 0
             result["discharge"][key] = 0
@@ -969,7 +982,16 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         "batteries": bats, "today": previews_today, "tomorrow": previews_tomorrow,
         "backup": cal_backup, "restored": cal_restored, "pv": pv,
         "prepare": PREPARE, "live_surplus": live_surplus, "pack_count": pack_count,
-        "peer_drain_ok": {key: failure_counts[key] < 3 and writable(BATTERIES[key]["discharge"], 0) for key in ["A", "E"]}})
+        "peer_drain_ok": {key: failure_counts[key] < 3 and writable(BATTERIES[key]["discharge"], 0) for key in ["A", "E"]},
+        "peer_discharge_max": {
+            key: number(
+                hass.states.get(BATTERIES[key]["discharge"]).attributes.get("max")
+                if hass.states.get(BATTERIES[key]["discharge"]) is not None
+                else None,
+                BATTERIES[key]["maximum"],
+            )
+            for key in ["A", "E"]
+        }})
     session = cal["session"]
     if not records_ok:
         cal["finish"] = False
@@ -1561,6 +1583,10 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         "drift_a_p1_mv": measurement("sensor.venus_a_pack_1_zelldrift", "delta", 600),
         "drift_a_p2_mv": measurement("sensor.venus_a_pack_2_zelldrift", "delta", 600),
         "drift_e_mv": measurement("sensor.marstek_venus_e_zellspannungs_differenz", "delta", 600),
+        "peer_entladesperre_freigegeben": bool(
+            session["p"] == "drain" and session["h"]
+        ),
+        "peer_freigabe_schwelle_prozent": 14,
         "hinweis": "Prognose ist keine Garantie; 500 W sind ein Limit. Pack 2 bekannt auffällig: kein Drift-Autostart.",
         "dashboard_a": bat_summary("A", bats, limits, session, cal_active, held, reaction, manual_active_by_key),
         "dashboard_e": bat_summary("E", bats, limits, session, cal_active, held, reaction, manual_active_by_key)}
