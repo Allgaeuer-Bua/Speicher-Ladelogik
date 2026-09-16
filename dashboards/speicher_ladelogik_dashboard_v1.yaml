@@ -1,5 +1,5 @@
 # Speicher-Ladelogik Dashboard V1.0
-# Kompatibel mit Speicher-Ladelogik 1.0.0-rc.3
+# Kompatibel mit Speicher-Ladelogik 1.0.0-rc.4
 # Verwendet ausschließlich integrierte Home-Assistant-Karten.
 # Die physischen Standard-Entitäten im Bereich "Speicher" entsprechen der
 # Referenzinstallation und können bei abweichenden Geräten ersetzt werden.
@@ -567,7 +567,13 @@ views:
               **Phase:** {{ state_attr(c, 'phase') or 'idle' }}  
               **Grundcode:** {{ state_attr(c, 'grund_code') or '–' }}  
               **Energie:** {{ state_attr(c, 'energie_ac_kwh') | float(0) | round(2) }} kWh AC  
-              **Peer-Freigabe:** {{ state_attr(c, 'peer_entladesperre_freigegeben') }} ab {{ state_attr(c, 'peer_freigabe_schwelle_prozent') | int(14) }} %
+              | Peer-Regelung | Zustand |
+              | :--- | :--- |
+              | Netzleistung | **{{ state_attr(c, 'netzleistung_w') | int(0) }} W** |
+              | Entladesperre | **{{ 'freigegeben' if state_attr(c, 'peer_entladesperre_freigegeben') else 'gesperrt' }}** |
+              | Freigabegrund | {{ state_attr(c, 'peer_freigabe_grund') or '–' }} |
+              | Netzbezugs-Ausnahme | **{{ 'aktiv' if state_attr(c, 'peer_netzbezug_freigegeben') else 'aus' }}** |
+              | Dauerfreigabe | ab **{{ state_attr(c, 'peer_freigabe_schwelle_prozent') | int(14) }} %** |
 
               | Drift | Wert |
               | :--- | ---: |
