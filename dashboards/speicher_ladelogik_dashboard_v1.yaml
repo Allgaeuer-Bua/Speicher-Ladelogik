@@ -501,9 +501,19 @@ views:
               **Letzter Fehler:** {{ state_attr(s, 'letzter_schreibfehler') or 'keiner' }}
 
               {% set results = state_attr(s, 'letzte_schreibergebnisse') or [] %}
-              **Letzte Ergebnisse:**  
-              {% if results %}{% for item in results %}• {{ item }}  
-              {% endfor %}{% else %}Keine Registeränderung erforderlich{% endif %}
+              **Letzte Ergebnisse:**
+              {% if results %}
+              | Speicher | Grenze | Wert | Ergebnis |
+              |:--:|:--|--:|:--|
+              {% for item in results %}
+              {% set entity = item.entity | default('', true) %}
+              {% set grenze = 'Entladen' if 'entlade' in entity else ('Laden' if 'lade' in entity else 'Register') %}
+              {% set ergebnis = 'Fehler' if not item.ok else ('wiederhergestellt' if item.restore else ('geschrieben' if item.written else 'bereits passend')) %}
+              | **{{ item.battery | default('–', true) }}** | {{ grenze }} | **{{ item.value | default('–') }} W** | {{ ergebnis }} |
+              {% endfor %}
+              {% else %}
+              Keine Registeränderung erforderlich
+              {% endif %}
           - type: button
             entity: button.speicher_ladelogik_schreibfehler_quittieren
             name: Schreibfehler quittieren
