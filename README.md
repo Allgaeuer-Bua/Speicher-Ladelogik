@@ -3,9 +3,9 @@
 Intelligente Speicher-Ladesteuerung für Home Assistant mit zwei unabhängig
 regelbaren Speichern und AstraMeter.
 
-## V1.0 RC 1
+## V1.0 RC 2
 
-Der erste Release Candidate ersetzt die bisherigen YAML-Helfer und
+Der Release Candidate ersetzt die bisherigen YAML-Helfer und
 Steuerautomationen durch native Entitäten der Integration.
 
 ### Funktionen
@@ -45,7 +45,7 @@ gewichtet.
 ### Wechsel von Beta 7
 
 1. Vor dem Update die alten Automationen deaktiviert lassen.
-2. RC 1 über HACS installieren und Home Assistant neu starten.
+2. RC 2 über HACS installieren und Home Assistant neu starten.
 3. Der erste RC-Start erfolgt absichtlich in **Beobachten**. Entitäten und Plan
    prüfen.
 4. Danach `select.speicher_ladelogik_betriebsart` auf **Automatik** stellen.
@@ -56,6 +56,15 @@ gewichtet.
 > Niemals die alte Registerautomation und die Integration gleichzeitig steuern
 > lassen. Die Integration verweigert Automatik, solange eine bekannte alte
 > Steuerautomation aktiv ist.
+
+### Dashboard V1.0
+
+Unter [`dashboards/`](dashboards/) liegt ein responsives Dashboard für die
+Integration. Es verwendet ausschließlich integrierte Home-Assistant-Karten und
+benötigt keine zusätzlichen Frontend-Erweiterungen. Die Ansichten **Übersicht**,
+**Speicher**, **Steuerung** und **Diagnose** sind für Desktop und Mobilgeräte
+ausgelegt. Hinweise zur Installation und zu anlagenspezifischen Entitäts-IDs
+stehen in der dortigen README.
 
 Projektseite und Fehlerberichte:
 
