@@ -62,6 +62,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     this._historyLoadedAt = 0;
     this._historyLoading = false;
     this._historyHours = 24;
+    this._historySeriesCache = new Map();
   }
 
   set hass(value) {
@@ -210,7 +211,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     if (!entityIds.length || this._historyLoading) return;
     const start = this._dayStart();
     const key = `${start.toISOString()}|${entityIds.join(",")}`;
-    const fresh = Date.now() - this._historyLoadedAt < 60_000;
+    const fresh = Date.now() - this._historyLoadedAt < 300_000;
     if (!force && this._historyKey === key && fresh) return;
     this._historyKey = key;
     this._historyLoading = true;
@@ -225,10 +226,12 @@ class SpeicherLadelogikPanel extends HTMLElement {
     }).then((history) => {
       this._history = history || {};
       this._historyLoadedAt = Date.now();
+      this._historySeriesCache.clear();
       this._historyLoading = false;
       this._render();
     }).catch(() => {
       this._historyLoading = false;
+      this._render();
     });
   }
 
@@ -246,16 +249,33 @@ class SpeicherLadelogikPanel extends HTMLElement {
   _historySeries(key) {
     const entityId = this._sid(key);
     if (!entityId) return [];
-    const points = this._historyRaw(entityId).map((item) => {
-      const value = this._num(item.state ?? item.s, NaN);
-      const stamp = item.last_updated ?? item.last_changed ?? item.lu ?? item.lc;
-      const time = typeof stamp === "number" ? stamp * 1000 : Date.parse(stamp);
-      return { t: time, v: value };
-    }).filter((point) => Number.isFinite(point.t) && Number.isFinite(point.v));
+    if (!this._historySeriesCache.has(entityId)) {
+      const historyPoints = this._historyRaw(entityId).map((item) => {
+        const value = this._num(item.state ?? item.s, NaN);
+        const stamp = item.last_updated ?? item.last_changed ?? item.lu ?? item.lc;
+        const time = typeof stamp === "number" ? stamp * 1000 : Date.parse(stamp);
+        return { t: time, v: value };
+      }).filter((point) => Number.isFinite(point.t) && Number.isFinite(point.v));
+      historyPoints.sort((left, right) => left.t - right.t);
+      this._historySeriesCache.set(entityId, historyPoints.filter((point, index) => !index || point.t !== historyPoints[index - 1].t));
+    }
+    const points = [...this._historySeriesCache.get(entityId)];
     const current = this._source(key);
     if (this._available(current)) points.push({ t: Date.now(), v: this._entityNum(current, 0) });
-    points.sort((left, right) => left.t - right.t);
-    return points.filter((point, index) => !index || point.t !== points[index - 1].t);
+    return points;
+  }
+
+  _downsample(points, maximum = 360) {
+    if (points.length <= maximum) return points;
+    const bucketSize = Math.ceil(points.length / Math.max(1, Math.floor(maximum / 2)));
+    const sampled = [];
+    for (let start = 0; start < points.length; start += bucketSize) {
+      const bucket = points.slice(start, start + bucketSize);
+      const minimum = bucket.reduce((best, point) => point.v < best.v ? point : best, bucket[0]);
+      const maximumPoint = bucket.reduce((best, point) => point.v > best.v ? point : best, bucket[0]);
+      sampled.push(...[minimum, maximumPoint].sort((left, right) => left.t - right.t));
+    }
+    return sampled;
   }
 
   _mergeSeries(seriesList, reducer) {
@@ -341,15 +361,20 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const end = Date.now();
     const visible = datasets.map((dataset) => ({
       ...dataset,
-      points: dataset.points.filter((point) => point.t >= start && point.t <= end),
+      points: this._downsample(dataset.points.filter((point) => point.t >= start && point.t <= end)),
     })).filter((dataset) => dataset.points.length);
     if (!visible.length) {
       return `<div class="chart-empty">${this._historyLoading ? "Verlauf wird geladen …" : "Keine Verlaufsdaten verfügbar"}</div>`;
     }
 
-    const values = visible.flatMap((dataset) => dataset.points.map((point) => point.v));
-    let low = Number.isFinite(min) ? min : Math.min(0, ...values);
-    let high = Number.isFinite(max) ? max : Math.max(0, ...values);
+    let observedLow = 0;
+    let observedHigh = 0;
+    visible.forEach((dataset) => dataset.points.forEach((point) => {
+      observedLow = Math.min(observedLow, point.v);
+      observedHigh = Math.max(observedHigh, point.v);
+    }));
+    let low = Number.isFinite(min) ? min : observedLow;
+    let high = Number.isFinite(max) ? max : observedHigh;
     if (low === high) {
       low -= 1;
       high += 1;
