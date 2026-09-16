@@ -320,6 +320,12 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "drift_a_p2_mv",
                 "drift_e_mv",
                 "peer_entladesperre_freigegeben",
+                "peer_dauerfreigabe_14_prozent",
+                "peer_netzbezug_freigegeben",
+                "peer_netzbezug_seit_ts",
+                "peer_netzfrei_seit_ts",
+                "peer_freigabe_grund",
+                "netzleistung_w",
                 "peer_freigabe_schwelle_prozent",
             )
             attributes = {key: calibration.get(key) for key in keys}
