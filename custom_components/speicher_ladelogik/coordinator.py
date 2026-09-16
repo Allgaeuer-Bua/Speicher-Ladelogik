@@ -70,6 +70,14 @@ _STABILITY_KEYS = tuple(
         f"ziel_venus_{name}_latch_soc",
         f"fahrplan_ladegrenze_stabil_venus_{name}_w",
     )
+) + (
+    "betriebsart",
+    "regelung_aktiv",
+    "mittagsspitzen_aktiv",
+    "fahrplan_slot_start_ts",
+    "fahrplan_slot_ende_ts",
+    "fahrplan_slot_aktiv_venus_a",
+    "fahrplan_slot_aktiv_venus_e",
 )
 
 

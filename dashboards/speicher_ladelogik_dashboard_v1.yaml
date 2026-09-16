@@ -1,5 +1,5 @@
 # Speicher-Ladelogik Dashboard V1.0
-# Kompatibel mit Speicher-Ladelogik 1.0.0-rc.2
+# Kompatibel mit Speicher-Ladelogik 1.0.0-rc.3
 # Verwendet ausschließlich integrierte Home-Assistant-Karten.
 # Die physischen Standard-Entitäten im Bereich "Speicher" entsprechen der
 # Referenzinstallation und können bei abweichenden Geräten ersetzt werden.
@@ -124,10 +124,12 @@ views:
           - type: markdown
             content: |-
               {% set p = 'sensor.speicher_ladelogik_planung' %}
+              {% set wa = states('sensor.speicher_ladelogik_wirkungsgrad_venus_a') %}
+              {% set we = states('sensor.speicher_ladelogik_wirkungsgrad_venus_e') %}
               | Speicher | Bis Ziel | Sollgrenze | Wirkungsgrad |
               | :--- | ---: | ---: | ---: |
-              | Venus A | **{{ state_attr(p, 'restbedarf_venus_a_kwh') | float(0) | round(2) }} kWh** | {{ state_attr(p, 'soll_ladegrenze_venus_a_w') | int(0) }} W | {{ states('sensor.speicher_ladelogik_wirkungsgrad_venus_a') }} % |
-              | Venus E | **{{ state_attr(p, 'restbedarf_venus_e_kwh') | float(0) | round(2) }} kWh** | {{ state_attr(p, 'soll_ladegrenze_venus_e_w') | int(0) }} W | {{ states('sensor.speicher_ladelogik_wirkungsgrad_venus_e') }} % |
+              | Venus A | **{{ state_attr(p, 'restbedarf_venus_a_kwh') | float(0) | round(2) }} kWh** | {{ state_attr(p, 'soll_ladegrenze_venus_a_w') | int(0) }} W | {{ wa ~ ' %' if wa not in ['unknown', 'unavailable'] else 'inaktiv' }} |
+              | Venus E | **{{ state_attr(p, 'restbedarf_venus_e_kwh') | float(0) | round(2) }} kWh** | {{ state_attr(p, 'soll_ladegrenze_venus_e_w') | int(0) }} W | {{ we ~ ' %' if we not in ['unknown', 'unavailable'] else 'inaktiv' }} |
 
       - type: grid
         cards:
@@ -140,6 +142,9 @@ views:
               {% set p = 'sensor.speicher_ladelogik_planung' %}
               {% set start = state_attr(p, 'ladefenster_start_ts') %}
               {% set ende = state_attr(p, 'ladefenster_ende_ts') %}
+              {% set fixiert = state_attr(p, 'fahrplan_entscheidung_fixiert_bis_ts') %}
+              {% set spitze_start = state_attr(p, 'spitzenfenster_start_ts') %}
+              {% set spitze_ende = state_attr(p, 'spitzenfenster_ende_ts') %}
               **{{ state_attr(p, 'normaler_fahrplan_status') or states(p) }}**
 
               {{ state_attr(p, 'normaler_fahrplan_grund') or '–' }}
@@ -150,6 +155,10 @@ views:
               | Prognose morgen | **{{ state_attr(p, 'prognose_morgen_kwh') | float(0) | round(1) }} kWh** |
               | Tagesklasse | **{{ state_attr(p, 'tagesklasse') or '–' }}** |
               | Ladefenster | **{{ start | timestamp_custom('%H:%M', true) if start else '–' }}–{{ ende | timestamp_custom('%H:%M', true) if ende else '–' }}** |
+              | Aktueller Slot | **{{ state_attr(p, 'fahrplan_slot_status') or '–' }} bis {{ fixiert | timestamp_custom('%H:%M', true) if fixiert else '–' }}** |
+              | Spitzenreserve | **{{ 'aus' if state_attr(p, 'mittagsspitzen_aktiv') == false else ('geplant' if state_attr(p, 'mittagsspitzen_planbar') else 'nicht planbar') }}** |
+              | Spitzenfenster | **{{ (spitze_start | timestamp_custom('%H:%M', true)) ~ '–' ~ (spitze_ende | timestamp_custom('%H:%M', true)) if spitze_start and spitze_ende else '–' }}** |
+              | Früher laden | **{{ 'ja' if state_attr(p, 'vorziehen_noetig') else 'nein' }}** |
               | Sicher speicherbar | **{{ state_attr(p, 'sicher_speicherbar_rest_kwh') | float(0) | round(2) }} kWh** |
               | Restbedarf | **{{ state_attr(p, 'restbedarf_kwh') | float(0) | round(2) }} kWh** |
               | Überschuss | **{{ state_attr(p, 'netto_ueberschuss_w') | int(0) }} W** |

@@ -17,6 +17,7 @@ SPEC.loader.exec_module(STABILITY)
 stable_charge_limit = STABILITY.stable_charge_limit
 target_latch = STABILITY.target_latch
 peer_discharge_release = STABILITY.peer_discharge_release
+quarter_hour_window = STABILITY.quarter_hour_window
 
 
 def test_target_is_latched_at_device_goal() -> None:
@@ -92,6 +93,15 @@ def test_peer_release_resets_outside_drain() -> None:
     assert released is False
 
 
+def test_quarter_hour_window_is_stable_inside_interval() -> None:
+    assert quarter_hour_window(1789546500) == (1789546500, 1789547400)
+    assert quarter_hour_window(1789547399.9) == (1789546500, 1789547400)
+
+
+def test_quarter_hour_window_advances_at_boundary() -> None:
+    assert quarter_hour_window(1789547400) == (1789547400, 1789548300)
+
+
 def test_limit_is_kept_during_short_surplus_pause() -> None:
     value, held, _ = stable_charge_limit(
         raw_limit=0,
@@ -147,6 +157,59 @@ def test_deliberate_peak_hold_sets_zero_immediately() -> None:
         within_window=True,
         planner_status="Platz für Mittagsspitze halten",
         safety_stop=False,
+    )
+    assert value == 0
+    assert held is False
+
+
+def test_active_slot_survives_recalculated_peak_pause() -> None:
+    value, held, reason = stable_charge_limit(
+        raw_limit=0,
+        previous_limit=1100,
+        current_cap=1500,
+        eligible=True,
+        target_reached=False,
+        within_window=False,
+        planner_status="Platz für Mittagsspitze halten",
+        safety_stop=False,
+        decision_locked=True,
+        slot_was_active=True,
+    )
+    assert value == 1100
+    assert held is True
+    assert "15-Minuten-Ladeslot" in reason
+
+
+def test_paused_slot_does_not_start_on_live_value_fluctuation() -> None:
+    value, held, reason = stable_charge_limit(
+        raw_limit=1300,
+        previous_limit=0,
+        current_cap=2500,
+        eligible=True,
+        target_reached=False,
+        within_window=True,
+        planner_status="Mittagsspitzen reduzieren",
+        safety_stop=False,
+        decision_locked=True,
+        slot_was_active=False,
+    )
+    assert value == 0
+    assert held is False
+    assert "Pausenslot" in reason
+
+
+def test_safety_stop_overrides_active_slot() -> None:
+    value, held, _ = stable_charge_limit(
+        raw_limit=1100,
+        previous_limit=1100,
+        current_cap=1500,
+        eligible=True,
+        target_reached=False,
+        within_window=True,
+        planner_status="Mittagsspitzen reduzieren",
+        safety_stop=True,
+        decision_locked=True,
+        slot_was_active=True,
     )
     assert value == 0
     assert held is False

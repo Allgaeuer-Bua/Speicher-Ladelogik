@@ -14,6 +14,7 @@ from .const import (
     CONF_E_CHARGE_OVERRIDE,
     DEFAULTS,
 )
+from .helpers import is_usable_state
 from .planner import calculate_shadow_plan
 from .runtime import PlannerState, planner_states
 
@@ -156,6 +157,15 @@ def _equal(left: Any, right: Any, tolerance: float | None) -> bool:
         return left == right
 
 
+def _usable_reference(state: Any) -> bool:
+    """Return whether a legacy comparison entity still provides real data."""
+    return bool(
+        state is not None
+        and is_usable_state(state.state)
+        and not state.attributes.get("restored", False)
+    )
+
+
 def compare_with_legacy(
     hass: HomeAssistant,
     shadow_plan: dict[str, Any],
@@ -170,15 +180,21 @@ def compare_with_legacy(
         hass.states,
         ("sensor.pv_kalibrierung_planung",),
     )
-    if legacy_plan is None:
+    if not _usable_reference(legacy_plan):
         return {
             "available": False,
             "matches": None,
+            "funktional_passend": None,
             "fields_compared": 0,
             "differences": [],
-            "referenz_plan_entitaet": None,
+            "beabsichtigte_abweichungen": 0,
+            "sonstige_abweichungen": 0,
+            "referenz_plan_entitaet": legacy_plan_entity_id,
             "referenz_kalibrierung_entitaet": legacy_calibration_entity_id,
         }
+
+    if not _usable_reference(legacy_calibration):
+        legacy_calibration = None
 
     differences: list[dict[str, Any]] = []
     compared = 0
