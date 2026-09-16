@@ -24,7 +24,7 @@ await import(
   "../custom_components/speicher_ladelogik/frontend/speicher-ladelogik-panel.js"
 );
 
-const Panel = registry.get("speicher-ladelogik-panel");
+const Panel = registry.get("speicher-ladelogik-panel-1-0-0-rc-8");
 
 function createPanel() {
   const calls = [];
@@ -159,15 +159,26 @@ test("daily battery energy separates charging and discharging signs", () => {
   assert.match(panel._batteryCard("A", true), /Heute entladen/);
 });
 
-test("rerender preserves the running SVG flow timeline", () => {
+test("energy flow uses stable curved direction paths without restarted motion", () => {
   const { panel } = createPanel();
-  let restored = null;
-  panel.isConnected = true;
-  panel.shadowRoot.querySelector = () => ({
-    getCurrentTime: () => 7.25,
-    setCurrentTime: (value) => { restored = value; },
-  });
+  const flow = panel._flowCard();
 
-  panel._render();
-  assert.equal(restored, 7.25);
+  assert.match(flow, /Erzeugung &amp; Netz/);
+  assert.match(flow, /flow-route active/);
+  assert.match(flow, /C 650 74 560 82 500 207/);
+  assert.doesNotMatch(flow, /animateMotion/);
+});
+
+test("every chart keeps its own selected history range", () => {
+  const { panel } = createPanel();
+
+  panel._historyHours.overviewPower = 1;
+  panel._historyHours.overviewSoc = 6;
+  panel._historyHours.batteryA = 12;
+  panel._historyHours.batteryE = 24;
+
+  assert.match(panel._historyButtons("overviewPower"), /data-history-hours="1" class="active"/);
+  assert.match(panel._historyButtons("overviewSoc"), /data-history-hours="6" class="active"/);
+  assert.match(panel._historyButtons("batteryA"), /data-history-hours="12" class="active"/);
+  assert.match(panel._historyButtons("batteryE"), /data-history-hours="24" class="active"/);
 });

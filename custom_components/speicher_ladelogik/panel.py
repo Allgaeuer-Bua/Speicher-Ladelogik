@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
@@ -41,6 +42,7 @@ PANEL_URL_PATH: Final = "speicher-ladelogik"
 PANEL_STATIC_PATH: Final = "/speicher_ladelogik_static"
 PANEL_TITLE: Final = "Speicher-Ladelogik"
 PANEL_ICON: Final = "mdi:battery-charging-medium"
+PANEL_ELEMENT: Final = f"speicher-ladelogik-panel-{VERSION.replace('.', '-')}"
 
 _STATIC_REGISTERED = "panel_static_registered"
 _PANEL_REGISTERED = "panel_registered"
@@ -193,7 +195,7 @@ async def async_register_panel(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
         js_file = frontend_dir / "speicher-ladelogik-panel.js"
         try:
-            cache_bust = str(int(js_file.stat().st_mtime))
+            cache_bust = sha256(js_file.read_bytes()).hexdigest()[:12]
         except OSError:
             cache_bust = VERSION
 
@@ -218,7 +220,7 @@ async def async_register_panel(hass: HomeAssistant, entry: ConfigEntry) -> None:
         await panel_custom.async_register_panel(
             hass,
             frontend_url_path=PANEL_URL_PATH,
-            webcomponent_name="speicher-ladelogik-panel",
+            webcomponent_name=PANEL_ELEMENT,
             module_url=(
                 f"{PANEL_STATIC_PATH}/speicher-ladelogik-panel.js?v={cache_bust}"
             ),

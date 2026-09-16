@@ -61,7 +61,12 @@ class SpeicherLadelogikPanel extends HTMLElement {
     this._historyKey = "";
     this._historyLoadedAt = 0;
     this._historyLoading = false;
-    this._historyHours = 24;
+    this._historyHours = {
+      overviewPower: 24,
+      overviewSoc: 24,
+      batteryA: 24,
+      batteryE: 24,
+    };
     this._historySeriesCache = new Map();
   }
 
@@ -188,9 +193,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return { label: "Bereit", tone: "idle" };
   }
 
-  _flowParticle(active, from, to, color) {
-    if (!active) return "";
-    return `<circle r="5" fill="${color}" class="flow-particle"><animateMotion dur="2.2s" repeatCount="indefinite" path="M ${from} L ${to}" /></circle>`;
+  _flowPath(active, path, color, marker) {
+    return `<path d="${path}" class="flow-route ${active ? "active" : "idle"}" ${active ? `style="--flow-color:${color}" marker-end="url(#${marker})"` : ""}></path>`;
   }
 
   _historySourceIds() {
@@ -313,9 +317,9 @@ class SpeicherLadelogikPanel extends HTMLElement {
     );
   }
 
-  _historyRangeStart() {
+  _historyRangeStart(hours = 24) {
     const dayStart = this._dayStart().getTime();
-    return this._historyHours >= 24 ? dayStart : Math.max(dayStart, Date.now() - this._historyHours * 3_600_000);
+    return hours >= 24 ? dayStart : Math.max(dayStart, Date.now() - hours * 3_600_000);
   }
 
   _integrateEnergy(series, selector) {
@@ -356,8 +360,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return Number.isFinite(value) ? this._energy(value) : "—";
   }
 
-  _chart(datasets, { min = null, max = null, unit = "", fill = false } = {}) {
-    const start = this._historyRangeStart();
+  _chart(datasets, { min = null, max = null, unit = "", fill = false, hours = 24 } = {}) {
+    const start = this._historyRangeStart(hours);
     const end = Date.now();
     const visible = datasets.map((dataset) => ({
       ...dataset,
@@ -403,15 +407,16 @@ class SpeicherLadelogikPanel extends HTMLElement {
       const area = fill && visible.length === 1
         ? `<path d="M${x(dataset.points[0].t).toFixed(1)},${bottom} ${path.replace(/^M/, "L")} L${x(dataset.points.at(-1).t).toFixed(1)},${bottom} Z" fill="${dataset.color}" opacity=".13"></path>`
         : "";
-      return `${area}<path d="${path}" fill="none" stroke="${dataset.color}" stroke-width="2.2" vector-effect="non-scaling-stroke"></path>`;
+      return `${area}<path d="${path}" fill="none" stroke="${dataset.color}" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>`;
     }).join("");
     const startLabel = new Date(start).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
     const legend = visible.map((dataset) => `<span><i style="background:${dataset.color}"></i>${esc(dataset.name)}</span>`).join("");
     return `<div class="chart-legend">${legend}</div><svg class="history-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">${ticks}${lines}<text x="${left}" y="184" class="chart-axis">${startLabel}</text><text x="${right}" y="184" text-anchor="end" class="chart-axis">jetzt</text></svg>`;
   }
 
-  _historyButtons() {
-    return `<div class="chart-ranges">${[[1, "1 h"], [6, "6 h"], [12, "12 h"], [24, "Alles"]].map(([hours, label]) => `<button data-history-hours="${hours}" class="${this._historyHours === hours ? "active" : ""}">${label}</button>`).join("")}</div>`;
+  _historyButtons(key) {
+    const selected = this._historyHours[key] ?? 24;
+    return `<div class="chart-ranges">${[[1, "1 h"], [6, "6 h"], [12, "12 h"], [24, "Alles"]].map(([hours, label]) => `<button data-history-key="${key}" data-history-hours="${hours}" class="${selected === hours ? "active" : ""}">${label}</button>`).join("")}</div>`;
   }
 
   _energyRow(label, value, color, maximum) {
@@ -447,21 +452,22 @@ class SpeicherLadelogikPanel extends HTMLElement {
       { name: "Haus", color: "#8bd8e9", points: this._historySeries("house").map((point) => ({ ...point, v: point.v / 1000 })) },
       { name: "Batterie", color: "#52d990", points: this._combinedBatteryPower().map((point) => ({ ...point, v: point.v / 1000 })) },
       { name: "Netz", color: "#8ea8ff", points: this._historySeries("grid").map((point) => ({ ...point, v: point.v / 1000 })) },
-    ], { unit: " kW" })}${this._historyButtons()}</section>`;
+    ], { unit: " kW", hours: this._historyHours.overviewPower })}${this._historyButtons("overviewPower")}</section>`;
   }
 
   _overviewSocCard() {
     return `<section class="card summary-card">${this._cardTitle("mdi:chart-line", "SoC · heute")}${this._chart([
       { name: "Gesamt-SoC", color: "#48d88b", points: this._combinedSoc() },
-    ], { min: 0, max: 100, unit: " %", fill: true })}${this._historyButtons()}</section>`;
+    ], { min: 0, max: 100, unit: " %", fill: true, hours: this._historyHours.overviewSoc })}${this._historyButtons("overviewSoc")}</section>`;
   }
 
   _batteryHistory(letter) {
     const suffix = letter.toLowerCase();
+    const historyKey = `battery${letter}`;
     return `<div class="battery-history"><div class="battery-history-title">SoC und Leistungsverlauf</div><div class="battery-chart-wrap">${this._chart([
       { name: "Leistung", color: "#8ea8ff", points: this._historySeries(`power_${suffix}`).map((point) => ({ ...point, v: point.v / 1000 })) },
       { name: "SoC", color: "#48d88b", points: this._historySeries(`soc_${suffix}`).map((point) => ({ ...point, v: point.v / 100 * 6 - 3 })) },
-    ], { min: -3, max: 3, unit: " kW" })}<div class="battery-soc-axis"><span>100 %</span><span>50 %</span><span>0 %</span></div></div></div>`;
+    ], { min: -3, max: 3, unit: " kW", hours: this._historyHours[historyKey] })}<div class="battery-soc-axis"><span>100 %</span><span>50 %</span><span>0 %</span></div></div>${this._historyButtons(historyKey)}</div>`;
   }
 
   _time(timestamp) {
@@ -562,27 +568,39 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const powerE = this._entityNum(this._source("power_e"), this._num(this._attr("status", "ac_leistung_venus_e_w", 0)));
     const modeA = this._batteryMode(powerA);
     const modeE = this._batteryMode(powerE);
-    const gridPath = grid >= 0 ? ["170 90", "500 240"] : ["500 240", "170 90"];
-    const aPath = powerA < -10 ? ["500 240", "170 400"] : ["170 400", "500 240"];
-    const ePath = powerE < -10 ? ["500 240", "830 400"] : ["830 400", "500 240"];
+    const gridPath = grid >= 0
+      ? "M 185 74 C 350 74 440 82 500 207"
+      : "M 500 207 C 440 82 350 74 185 74";
+    const pvPath = "M 815 74 C 650 74 560 82 500 207";
+    const aPath = powerA < -10
+      ? "M 482 228 C 405 286 330 350 185 350"
+      : "M 185 350 C 330 350 405 286 482 228";
+    const ePath = powerE < -10
+      ? "M 518 228 C 595 286 670 350 815 350"
+      : "M 815 350 C 670 350 595 286 518 228";
     return `
       <section class="card flow-card span-7">
         ${this._cardTitle("mdi:transmission-tower", "Energiefluss", this._badge("Live", "good"))}
         <div class="flow-canvas">
+          <div class="flow-zone flow-zone-top"><span>Erzeugung &amp; Netz</span></div>
+          <div class="flow-zone flow-zone-bottom"><span>Speicher</span></div>
+          <div class="flow-home-label">Haus &amp; Verbrauch</div>
           <div class="flow-node grid"><ha-icon icon="mdi:transmission-tower"></ha-icon><strong>${this._power(Math.abs(grid))}</strong><span>Netz · ${Math.abs(grid) <= 10 ? "neutral" : grid > 0 ? "Bezug" : "Einspeisung"}</span></div>
           <div class="flow-node pv"><ha-icon icon="mdi:solar-power-variant"></ha-icon><strong>${this._power(pv)}</strong><span>PV</span></div>
           <div class="flow-core"><ha-icon icon="mdi:home-lightning-bolt-outline"></ha-icon><strong>${this._power(home)}</strong><span>Haus</span></div>
           <div class="flow-node batt-a"><ha-icon icon="mdi:battery-charging-60"></ha-icon><strong>${this._power(Math.abs(powerA))}</strong><span>Venus A · ${modeA.label.toLowerCase()}</span></div>
           <div class="flow-node batt-e"><ha-icon icon="mdi:battery-charging-60"></ha-icon><strong>${this._power(Math.abs(powerE))}</strong><span>Venus E · ${modeE.label.toLowerCase()}</span></div>
-          <svg class="flow-lines" viewBox="0 0 1000 480" preserveAspectRatio="none" aria-hidden="true">
-            <line x1="170" y1="90" x2="500" y2="240"></line>
-            <line x1="830" y1="90" x2="500" y2="240"></line>
-            <line x1="170" y1="400" x2="500" y2="240"></line>
-            <line x1="830" y1="400" x2="500" y2="240"></line>
-            ${this._flowParticle(Math.abs(grid) > 10, gridPath[0], gridPath[1], "#ff9a55")}
-            ${this._flowParticle(pv > 10, "830 90", "500 240", "#ffbd45")}
-            ${this._flowParticle(Math.abs(powerA) > 10, aPath[0], aPath[1], modeA.tone === "charge" ? "#38d582" : "#b493ff")}
-            ${this._flowParticle(Math.abs(powerE) > 10, ePath[0], ePath[1], modeE.tone === "charge" ? "#38d582" : "#b493ff")}
+          <svg class="flow-lines" viewBox="0 0 1000 420" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <marker id="flow-arrow-grid" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 Z" fill="#ff9a55"></path></marker>
+              <marker id="flow-arrow-pv" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 Z" fill="#ffbd45"></path></marker>
+              <marker id="flow-arrow-charge" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 Z" fill="#38d582"></path></marker>
+              <marker id="flow-arrow-discharge" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 Z" fill="#b493ff"></path></marker>
+            </defs>
+            ${this._flowPath(Math.abs(grid) > 10, gridPath, "#ff9a55", "flow-arrow-grid")}
+            ${this._flowPath(pv > 10, pvPath, "#ffbd45", "flow-arrow-pv")}
+            ${this._flowPath(Math.abs(powerA) > 10, aPath, modeA.tone === "charge" ? "#38d582" : "#b493ff", modeA.tone === "charge" ? "flow-arrow-charge" : "flow-arrow-discharge")}
+            ${this._flowPath(Math.abs(powerE) > 10, ePath, modeE.tone === "charge" ? "#38d582" : "#b493ff", modeE.tone === "charge" ? "flow-arrow-charge" : "flow-arrow-discharge")}
           </svg>
         </div>
       </section>`;
@@ -833,27 +851,19 @@ class SpeicherLadelogikPanel extends HTMLElement {
       @media(max-width:1350px){.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.summary-grid .energy-card{grid-row:span 2}.battery-upper{grid-template-columns:1fr}.battery-history .history-chart{height:190px}}
       @media(max-width:1050px){.summary-grid{grid-template-columns:1fr}.summary-grid .energy-card{grid-row:auto}.summary-card{min-height:0}.battery-upper{grid-template-columns:minmax(205px,.52fr) minmax(320px,1.48fr)}}
       @media(max-width:720px){.flow-canvas{min-height:320px}.window-label{align-items:flex-start;flex-direction:column;gap:3px}.ack-state{grid-template-columns:1fr}.number-input{width:94px}.summary-grid{gap:9px}.battery-upper{grid-template-columns:1fr}.history-chart{height:190px}.chart-empty{height:190px}.brand-copy strong{font-size:15px}.nav-item span{font-size:11px}.flow-node span{font-size:9px}}
+      .flow-canvas{display:block;min-height:360px;position:relative;overflow:hidden}
+      .flow-zone{position:absolute;left:8%;right:8%;height:105px;border:1px solid rgba(144,177,164,.16);border-radius:14px;background:rgba(7,15,18,.2);z-index:0}.flow-zone>span{position:absolute;top:7px;left:50%;transform:translateX(-50%);font-size:10px;font-weight:700;letter-spacing:.055em;text-transform:uppercase;color:var(--muted);white-space:nowrap}.flow-zone-top{top:4px}.flow-zone-bottom{top:248px}.flow-home-label{position:absolute;left:50%;top:118px;transform:translateX(-50%);z-index:2;color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.055em;text-transform:uppercase;white-space:nowrap}
+      .flow-node,.flow-core{position:absolute;transform:translateX(-50%);z-index:3}.flow-node.grid{left:18.5%;top:17px}.flow-node.pv{left:81.5%;top:17px}.flow-core{left:50%;top:137px}.flow-node.batt-a{left:18.5%;top:270px}.flow-node.batt-e{left:81.5%;top:270px}.flow-lines{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible}.flow-route{fill:none;stroke:rgba(132,169,156,.22);stroke-width:1;stroke-dasharray:7 8;vector-effect:non-scaling-stroke}.flow-route.active{stroke:var(--flow-color);stroke-width:1.6;stroke-dasharray:none;stroke-linecap:round;filter:drop-shadow(0 0 3px var(--flow-color))}.flow-node ha-icon{box-shadow:none}.flow-core ha-icon{box-shadow:0 0 18px rgba(82,184,255,.16)}
+      @media(max-width:720px){.flow-canvas{min-height:330px}.flow-zone{left:3%;right:3%;height:96px}.flow-zone-bottom{top:229px}.flow-home-label{top:107px}.flow-node.grid,.flow-node.pv{top:15px}.flow-node.grid{left:17%}.flow-node.pv{left:83%}.flow-core{top:123px}.flow-node.batt-a,.flow-node.batt-e{top:245px}.flow-node.batt-a{left:17%}.flow-node.batt-e{left:83%}}
     `;
   }
 
   _render() {
     if (!this.isConnected || !this._hass || !this._panel) return;
-    const oldFlow = typeof this.shadowRoot.querySelector === "function"
-      ? this.shadowRoot.querySelector(".flow-lines")
-      : null;
-    const flowTime = oldFlow && typeof oldFlow.getCurrentTime === "function"
-      ? oldFlow.getCurrentTime()
-      : null;
     const content = this._tab === "overview" ? this._overview()
       : this._tab === "batteries" ? this._batteries()
         : this._tab === "control" ? this._control() : this._diagnostics();
     this.shadowRoot.innerHTML = `<style>${this._styles()}</style>${this._header()}${content}`;
-    const newFlow = typeof this.shadowRoot.querySelector === "function"
-      ? this.shadowRoot.querySelector(".flow-lines")
-      : null;
-    if (newFlow && Number.isFinite(flowTime) && typeof newFlow.setCurrentTime === "function") {
-      newFlow.setCurrentTime(flowTime);
-    }
     this._bind();
   }
 
@@ -875,7 +885,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
     this.shadowRoot.querySelectorAll("[data-number]").forEach((input) => input.addEventListener("change", () => this._setNumber(input.dataset.number, input.value)));
     this.shadowRoot.querySelectorAll("[data-press]").forEach((button) => button.addEventListener("click", () => this._press(button.dataset.press)));
     this.shadowRoot.querySelectorAll("[data-history-hours]").forEach((button) => button.addEventListener("click", () => {
-      this._historyHours = Number(button.dataset.historyHours);
+      const key = button.dataset.historyKey;
+      if (key) this._historyHours[key] = Number(button.dataset.historyHours);
       this._render();
     }));
   }
@@ -923,6 +934,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 }
 
-if (!customElements.get("speicher-ladelogik-panel")) {
-  customElements.define("speicher-ladelogik-panel", SpeicherLadelogikPanel);
+const PANEL_ELEMENT = "speicher-ladelogik-panel-1-0-0-rc-8";
+
+if (!customElements.get(PANEL_ELEMENT)) {
+  customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);
 }

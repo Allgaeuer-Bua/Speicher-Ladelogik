@@ -27,7 +27,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
 
     output = {}
 
-    VERSION = "1.0.0-rc.7"
+    VERSION = "1.0.0-rc.8"
     NOW = float(data.get("now", time.time()))
     DAY0 = float(data.get("day0", 0))
     DAY1 = float(data.get("day1", 0))
