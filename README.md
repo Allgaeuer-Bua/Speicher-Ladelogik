@@ -3,7 +3,7 @@
 Intelligente Speicher-Ladesteuerung für Home Assistant mit zwei unabhängig
 regelbaren Speichern und AstraMeter.
 
-## V1.0 RC 2
+## V1.0 RC 3
 
 Der Release Candidate ersetzt die bisherigen YAML-Helfer und
 Steuerautomationen durch native Entitäten der Integration.
@@ -20,6 +20,11 @@ Steuerautomationen durch native Entitäten der Integration.
   gelesen; die Integration erzeugt und schreibt keine zweite SoC-Grenze
 - stabile Leistungsgrenzen: Register werden nur bei einer wirklichen Änderung
   geschrieben; die Feinregelung übernimmt AstraMeter
+- verbindliche 15-Minuten-Entscheidungsslots verhindern ein erneutes Ein- und
+  Ausschalten innerhalb desselben Prognoseintervalls; Sicherheitsstopps und
+  Benutzereingriffe wirken weiterhin sofort
+- die Planung veröffentlicht Spitzenfenster, Einspeiseziel, Vorziehen,
+  Deckungsfaktor und die bis zur nächsten Viertelstunde fixierte Entscheidung
 - kein künstliches Absenken des Registers oberhalb 90 % und kein 0-W-Schreiben
   beim Erreichen der oberen Gerätegrenze
 - dauerhafter Handbetrieb getrennt je Speicher; der andere Speicher bleibt im
@@ -45,7 +50,7 @@ gewichtet.
 ### Wechsel von Beta 7
 
 1. Vor dem Update die alten Automationen deaktiviert lassen.
-2. RC 2 über HACS installieren und Home Assistant neu starten.
+2. RC 3 über HACS installieren und Home Assistant neu starten.
 3. Der erste RC-Start erfolgt absichtlich in **Beobachten**. Entitäten und Plan
    prüfen.
 4. Danach `select.speicher_ladelogik_betriebsart` auf **Automatik** stellen.

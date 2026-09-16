@@ -9,7 +9,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from . import persistence
-from .stability import peer_discharge_release, stable_charge_limit, target_latch
+from .stability import (
+    peer_discharge_release,
+    quarter_hour_window,
+    stable_charge_limit,
+    target_latch,
+)
 
 
 def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
@@ -21,7 +26,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
 
     output = {}
 
-    VERSION = "1.0.0-rc.2"
+    VERSION = "1.0.0-rc.3"
     NOW = float(data.get("now", time.time()))
     DAY0 = float(data.get("day0", 0))
     DAY1 = float(data.get("day1", 0))
@@ -1250,6 +1255,22 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     automatic_limits = {}
     automatic_limit_held = {}
     automatic_limit_reason = {}
+    slot_start_ts, slot_end_ts = quarter_hour_window(NOW)
+    prior_slot_start_ts = number(prior_attributes.get("fahrplan_slot_start_ts"))
+    prior_automatic = (
+        prior_attributes.get("betriebsart") == "Automatik"
+        and flag(prior_attributes.get("regelung_aktiv", False))
+    )
+    prior_peak_enabled = prior_attributes.get("mittagsspitzen_aktiv")
+    peak_setting_unchanged = (
+        prior_peak_enabled is None or flag(prior_peak_enabled) == peak_enabled
+    )
+    decision_slot_locked = (
+        prior_slot_start_ts is not None
+        and int(prior_slot_start_ts) == slot_start_ts
+        and prior_automatic
+        and peak_setting_unchanged
+    )
     within_charge_window = start <= NOW < end
     for key in ["A", "E"]:
         name = key.lower()
@@ -1277,11 +1298,22 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
             within_window=within_charge_window,
             planner_status=automatic_status,
             safety_stop=safety_stop,
+            decision_locked=decision_slot_locked,
+            slot_was_active=flag(
+                prior_attributes.get(
+                    "fahrplan_slot_aktiv_venus_" + name,
+                    False,
+                )
+            ),
         )
         automatic_limits[key] = stable_limit
         automatic_limit_held[key] = limit_held
         automatic_limit_reason[key] = limit_reason
     limits = automatic_limits.copy()
+    automatic_slot_active = {
+        key: automatic_limits[key] > 0
+        for key in ["A", "E"]
+    }
 
     manual_allowed = {}
     for key in ["A", "E"]:
@@ -1564,6 +1596,22 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         "packs_a_erwartet": pack_count, "packs_a_gueltig": len(bats["A"]["packs"]),
         "packs_a_soc": bats["A"]["packs"], "netto_ueberschuss_w": round(live_surplus),
     }
+    plan["fahrplan_slot_start_ts"] = slot_start_ts
+    plan["fahrplan_slot_ende_ts"] = slot_end_ts
+    plan["fahrplan_entscheidung_fixiert_bis_ts"] = (
+        slot_end_ts if automatic else None
+    )
+    plan["fahrplan_slot_verriegelt"] = automatic and decision_slot_locked
+    plan["fahrplan_slot_aktiv"] = any(automatic_slot_active.values())
+    plan["fahrplan_slot_status"] = (
+        "Beobachten"
+        if not automatic
+        else ("Laden" if any(automatic_slot_active.values()) else "Pause")
+    )
+    for key in ["A", "E"]:
+        name = key.lower()
+        plan["fahrplan_slot_aktiv_venus_" + name] = automatic_slot_active[key]
+        plan["fahrplan_slot_grund_venus_" + name] = automatic_limit_reason[key]
     for key in ["A", "E"]:
         name = key.lower()
         plan["soc_venus_" + name] = bats[key]["soc"]
