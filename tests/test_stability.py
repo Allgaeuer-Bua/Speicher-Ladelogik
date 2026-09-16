@@ -17,6 +17,7 @@ SPEC.loader.exec_module(STABILITY)
 stable_charge_limit = STABILITY.stable_charge_limit
 target_latch = STABILITY.target_latch
 peer_discharge_release = STABILITY.peer_discharge_release
+peer_grid_support = STABILITY.peer_grid_support
 quarter_hour_window = STABILITY.quarter_hour_window
 
 
@@ -91,6 +92,92 @@ def test_peer_release_resets_outside_drain() -> None:
         prior_released=True,
     )
     assert released is False
+
+
+def test_peer_grid_support_releases_after_fifteen_seconds_import() -> None:
+    released, since, clear_since, _ = peer_grid_support(
+        phase="drain",
+        now_ts=100,
+        grid_power_w=500,
+        permanent_release=False,
+        temporary_release=False,
+        import_since_ts=None,
+        clear_since_ts=None,
+    )
+    assert released is False
+    assert since == 100
+    assert clear_since is None
+
+    released, since, clear_since, _ = peer_grid_support(
+        phase="drain",
+        now_ts=115,
+        grid_power_w=500,
+        permanent_release=False,
+        temporary_release=False,
+        import_since_ts=since,
+        clear_since_ts=clear_since,
+    )
+    assert released is True
+    assert since == 100
+    assert clear_since is None
+
+
+def test_peer_grid_support_blocks_again_after_fifteen_seconds_without_import() -> None:
+    released, since, clear_since, _ = peer_grid_support(
+        phase="drain",
+        now_ts=200,
+        grid_power_w=0,
+        permanent_release=False,
+        temporary_release=True,
+        import_since_ts=100,
+        clear_since_ts=None,
+    )
+    assert released is True
+    assert clear_since == 200
+
+    released, since, clear_since, _ = peer_grid_support(
+        phase="drain",
+        now_ts=215,
+        grid_power_w=0,
+        permanent_release=False,
+        temporary_release=True,
+        import_since_ts=since,
+        clear_since_ts=clear_since,
+    )
+    assert released is False
+    assert since is None
+    assert clear_since is None
+
+
+def test_peer_grid_support_does_not_override_fourteen_percent_release() -> None:
+    released, since, clear_since, reason = peer_grid_support(
+        phase="drain",
+        now_ts=300,
+        grid_power_w=0,
+        permanent_release=True,
+        temporary_release=True,
+        import_since_ts=100,
+        clear_since_ts=200,
+    )
+    assert released is False
+    assert since is None
+    assert clear_since is None
+    assert "14 %" in reason
+
+
+def test_peer_grid_support_ignores_zero_point_noise() -> None:
+    released, since, clear_since, _ = peer_grid_support(
+        phase="drain",
+        now_ts=400,
+        grid_power_w=40,
+        permanent_release=False,
+        temporary_release=False,
+        import_since_ts=None,
+        clear_since_ts=None,
+    )
+    assert released is False
+    assert since is None
+    assert clear_since is None
 
 
 def test_quarter_hour_window_is_stable_inside_interval() -> None:
