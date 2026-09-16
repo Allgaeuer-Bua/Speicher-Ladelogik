@@ -3,7 +3,7 @@
 Intelligente Speicher-Ladesteuerung für Home Assistant mit zwei unabhängig
 regelbaren Speichern und AstraMeter.
 
-## V1.0 RC 3
+## V1.0 RC 4
 
 Der Release Candidate ersetzt die bisherigen YAML-Helfer und
 Steuerautomationen durch native Entitäten der Integration.
@@ -32,9 +32,13 @@ Steuerautomationen durch native Entitäten der Integration.
 - Kalibrierwarteschlange und 500-W-Kalibrierung; Vorbereitung durch natürlichen
   Hausverbrauch bis 13 %, das BMS begrenzt anschließend an der unteren
   Gerätegrenze (für die Kalibrierung 12 %)
-- der jeweils andere Speicher bleibt während der Vorbereitung bis 14 % gesperrt
-  und wird danach mit seiner vom Gerät gemeldeten maximalen Entladeleistung
-  freigegeben
+- die Entladevorbereitung beginnt auf ausdrücklichen Tastendruck sofort, ohne
+  feste Uhrzeit und ohne PV-Leistungsschwelle
+- der jeweils andere Speicher bleibt während der Vorbereitung bis 14 % gesperrt;
+  bei mindestens 15 Sekunden Netzbezug wird er vorübergehend freigegeben und
+  nach 15 Sekunden ohne Netzbezug wieder gesperrt
+- ab 14 % bleibt der andere Speicher mit seiner vom Gerät gemeldeten maximalen
+  Entladeleistung dauerhaft freigegeben
 - drei nicht bestätigte Schreibvorgänge sperren nur den betroffenen Speicher;
   Home Assistant meldet die Sperre dauerhaft bis zur Quittierung
 - momentaner Lade- und Entladewirkungsgrad sowie Verlustleistung je Speicher;
@@ -50,7 +54,7 @@ gewichtet.
 ### Wechsel von Beta 7
 
 1. Vor dem Update die alten Automationen deaktiviert lassen.
-2. RC 3 über HACS installieren und Home Assistant neu starten.
+2. RC 4 über HACS installieren und Home Assistant neu starten.
 3. Der erste RC-Start erfolgt absichtlich in **Beobachten**. Entitäten und Plan
    prüfen.
 4. Danach `select.speicher_ladelogik_betriebsart` auf **Automatik** stellen.

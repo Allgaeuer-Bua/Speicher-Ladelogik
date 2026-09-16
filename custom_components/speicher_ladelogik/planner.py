@@ -11,6 +11,7 @@ from homeassistant.util import dt as dt_util
 from . import persistence
 from .stability import (
     peer_discharge_release,
+    peer_grid_support,
     quarter_hour_window,
     stable_charge_limit,
     target_latch,
@@ -26,7 +27,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
 
     output = {}
 
-    VERSION = "1.0.0-rc.3"
+    VERSION = "1.0.0-rc.4"
     NOW = float(data.get("now", time.time()))
     DAY0 = float(data.get("day0", 0))
     DAY1 = float(data.get("day1", 0))
@@ -34,7 +35,6 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     NINE = float(data.get("nine", 0))
     ELEVEN = float(data.get("eleven", 0))
     DEADLINE = float(data.get("deadline", 0))
-    PREPARE = float(data.get("prepare", 0))
     REQUEST = str(data.get("request", "tick"))
     MANUAL_ENABLED = {
         "A": "input_boolean.speicher_ladelogik_manuell_a_aktiv",
@@ -397,7 +397,8 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         s = session.copy()
         p = s["p"]
         result = {"session": s, "charge": {}, "discharge": {}, "finish": False,
-                  "notify": "", "release": False, "retry": False}
+                  "notify": "", "release": False, "retry": False,
+                  "peer_grid_release": False, "peer_grid_reason": ""}
         if p not in ACTIVE_PHASES:
             return result
         key = s["b"]
@@ -437,17 +438,19 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
             if preview["ok"] and preview["start"] >= s["n"]:
                 s["s"] = int(preview["start"])
                 s["x"] = int(preview["end"])
-                if not context["safe"][key]:
-                    s["r"] = "waiting_data"
-                elif bat["cal_empty_ready"]:
-                    transition(s, "wait", "waiting_pv")
-                elif NOW >= context["prepare"] and context["pv"] is not None and context["pv"] < 200 and s["n"] <= DAY1:
-                    transition(s, "drain", "natural_discharge")
-                else:
-                    s["r"] = "scheduled"
             else:
                 s["s"] = 0
                 s["x"] = 0
+            if not context["safe"][key]:
+                s["r"] = "waiting_data"
+            elif bat["cal_empty_ready"]:
+                transition(s, "wait", "waiting_pv")
+            else:
+                # Der Tastendruck ist die ausdrückliche Benutzerfreigabe für
+                # die Vorbereitung. Uhrzeit, momentane PV-Leistung und ein
+                # bereits sicher prognostiziertes Ladefenster verzögern das
+                # Entladen daher nicht.
+                transition(s, "drain", "natural_discharge")
                 s["r"] = "no_window"
         elif p == "drain":
             released, _release_reason = peer_discharge_release(
@@ -462,7 +465,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
                 s["h"] = 1
             if context["batteries"][key]["cal_empty_ready"]:
                 transition(s, "wait", "waiting_pv")
-            elif NOW >= s["s"]:
+            elif s["s"] and NOW >= s["s"]:
                 transition(s, "restore", "retry_empty")
         elif p == "wait":
             if NOW >= s["s"] and s["n"] <= DAY0:
@@ -552,6 +555,20 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
                 transition(s, phase, s["r"])
                 result["notify"] = "Kalibrierung Venus " + key + ": " + s["r"]
         elif s["p"] == "drain":
+            temporary_release, import_since, clear_since, grid_reason = peer_grid_support(
+                phase=s["p"],
+                now_ts=NOW,
+                grid_power_w=context.get("grid_power"),
+                permanent_release=bool(s["h"]),
+                temporary_release=bool(s["v"]),
+                import_since_ts=number(s["l"]),
+                clear_since_ts=number(s["f"]),
+            )
+            s["v"] = 1 if temporary_release else 0
+            s["l"] = import_since or 0
+            s["f"] = clear_since or 0
+            result["peer_grid_reason"] = grid_reason
+            result["peer_grid_release"] = temporary_release
             result["charge"][key] = 0
             if context["backup"] is not None and context["backup"]["D" + key] >= 0:
                 result["discharge"][key] = context["backup"]["D" + key]
@@ -560,7 +577,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
                     context.get("peer_discharge_max", {}).get(
                         other, BATTERIES[other]["maximum"]
                     )
-                    if s["h"]
+                    if s["h"] or temporary_release
                     else 0
                 )
         elif s["p"] == "wait":
@@ -1031,8 +1048,8 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     cal = calibration_step(session, {"request": effective_request, "automatic": automatic,
         "armed": cal_armed, "safe": cal_safe, "critical": cal_critical,
         "batteries": bats, "today": previews_today, "tomorrow": previews_tomorrow,
-        "backup": cal_backup, "restored": cal_restored, "pv": pv,
-        "prepare": PREPARE, "live_surplus": live_surplus, "pack_count": pack_count,
+        "backup": cal_backup, "restored": cal_restored,
+        "grid_power": grid, "live_surplus": live_surplus, "pack_count": pack_count,
         "peer_drain_ok": {key: failure_counts[key] < 3 and writable(BATTERIES[key]["discharge"], 0) for key in ["A", "E"]},
         "peer_discharge_max": {
             key: number(
@@ -1682,8 +1699,26 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         "drift_a_p2_mv": measurement("sensor.venus_a_pack_2_zelldrift", "delta", 600),
         "drift_e_mv": measurement("sensor.marstek_venus_e_zellspannungs_differenz", "delta", 600),
         "peer_entladesperre_freigegeben": bool(
+            session["p"] == "drain" and (session["h"] or session["v"])
+        ),
+        "peer_dauerfreigabe_14_prozent": bool(
             session["p"] == "drain" and session["h"]
         ),
+        "peer_netzbezug_freigegeben": bool(
+            session["p"] == "drain" and session["v"]
+        ),
+        "peer_netzbezug_seit_ts": (
+            (session["l"] or None) if session["p"] == "drain" else None
+        ),
+        "peer_netzfrei_seit_ts": (
+            (session["f"] or None) if session["p"] == "drain" else None
+        ),
+        "peer_freigabe_grund": (
+            "Kalibrierspeicher hat 14 % erreicht"
+            if session["p"] == "drain" and session["h"]
+            else cal.get("peer_grid_reason", "")
+        ),
+        "netzleistung_w": round(grid) if grid is not None else None,
         "peer_freigabe_schwelle_prozent": 14,
         "hinweis": "Prognose ist keine Garantie; 500 W sind ein Limit. Pack 2 bekannt auffällig: kein Drift-Autostart.",
         "dashboard_a": bat_summary("A", bats, limits, session, cal_active, held, reaction, manual_active_by_key),

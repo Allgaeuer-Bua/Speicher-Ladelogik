@@ -131,7 +131,6 @@ def calculate(
             "nine": _local_timestamp(today, 9),
             "eleven": _local_timestamp(today, 11),
             "deadline": _local_timestamp(today, 15),
-            "prepare": _local_timestamp(today, 18),
             "prior_plan": prior_plan,
         },
     )

@@ -5,6 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 PEER_DISCHARGE_RELEASE_PERCENT = 14.0
+PEER_GRID_IMPORT_RELEASE_W = 50.0
+PEER_GRID_IMPORT_CLEAR_W = 25.0
+PEER_GRID_DELAY_SECONDS = 15.0
 DECISION_SLOT_SECONDS = 15 * 60
 
 DELIBERATE_ZERO_STATUSES = {
@@ -55,6 +58,52 @@ def peer_discharge_release(
     if decisive_soc <= PEER_DISCHARGE_RELEASE_PERCENT:
         return True, "Kalibrierspeicher hat 14 % erreicht"
     return False, "Kalibrierspeicher noch über 14 %"
+
+
+def peer_grid_support(
+    *,
+    phase: str,
+    now_ts: float,
+    grid_power_w: float | None,
+    permanent_release: bool,
+    temporary_release: bool,
+    import_since_ts: float | None,
+    clear_since_ts: float | None,
+) -> tuple[bool, float | None, float | None, str]:
+    """Temporarily release the peer after sustained grid import.
+
+    Positive grid power means import. The small on/off power hysteresis keeps
+    normal zero-point noise from toggling the peer discharge register. The
+    timers are stored in otherwise unused drain-session fields so the decision
+    survives coordinator updates and Home Assistant restarts.
+    """
+    if phase != "drain":
+        return False, None, None, "Nur während der Entladevorbereitung"
+    if permanent_release:
+        return False, None, None, "Dauerfreigabe bei 14 % hat Vorrang"
+    if grid_power_w is None:
+        return (
+            temporary_release,
+            import_since_ts,
+            clear_since_ts,
+            "Netzleistung fehlt; bisherigen Zustand beibehalten",
+        )
+
+    grid_power = float(grid_power_w)
+    if temporary_release:
+        if grid_power <= PEER_GRID_IMPORT_CLEAR_W:
+            clear_since = clear_since_ts or now_ts
+            if now_ts - clear_since >= PEER_GRID_DELAY_SECONDS:
+                return False, None, None, "Seit 15 Sekunden kein Netzbezug"
+            return True, import_since_ts, clear_since, "Netzbezug klingt ab"
+        return True, import_since_ts, None, "Partner wegen Netzbezug freigegeben"
+
+    if grid_power >= PEER_GRID_IMPORT_RELEASE_W:
+        import_since = import_since_ts or now_ts
+        if now_ts - import_since >= PEER_GRID_DELAY_SECONDS:
+            return True, import_since, None, "Netzbezug seit 15 Sekunden"
+        return False, import_since, None, "Netzbezug wird bestätigt"
+    return False, None, None, "Kein anhaltender Netzbezug"
 
 
 def quarter_hour_window(now_ts: float) -> tuple[int, int]:
