@@ -37,7 +37,10 @@ function createPanel() {
         mindestreserve: "number.speicher_ladelogik_mindestreserve",
         fehler_quittieren: "button.speicher_ladelogik_fehler_quittieren",
       },
-      sources: { pv: "sensor.pv_power" },
+      sources: {
+        pv: "sensor.pv_power",
+        drift_e: "sensor.venus_e_cell_delta",
+      },
     },
   };
   panel._hass = {
@@ -45,6 +48,10 @@ function createPanel() {
       "switch.speicher_ladelogik_mittagsspitzen": { state: "on", attributes: {} },
       "number.speicher_ladelogik_mindestreserve": { state: "2", attributes: {} },
       "sensor.pv_power": { state: "4200", attributes: {} },
+      "sensor.venus_e_cell_delta": {
+        state: "0.008000135",
+        attributes: { unit_of_measurement: "V" },
+      },
     },
     callService: async (...args) => calls.push(args),
   };
@@ -82,4 +89,31 @@ test("panel controls call the matching Home Assistant services", async () => {
       entity_id: "button.speicher_ladelogik_fehler_quittieren",
     }],
   ]);
+});
+
+test("panel uses the Venus AC sign convention and translates calibration phases", () => {
+  const { panel } = createPanel();
+
+  assert.deepEqual(panel._batteryMode(-945), { label: "Lädt", tone: "charge" });
+  assert.deepEqual(panel._batteryMode(945), { label: "Entlädt", tone: "discharge" });
+  assert.deepEqual(panel._batteryMode(0), { label: "Bereit", tone: "idle" });
+  assert.equal(panel._statusLabel("Kalibrierung A: drain"), "Kalibrierung A: Entladen auf 13 %");
+});
+
+test("panel formats single-value drift sensors and register results", () => {
+  const { panel } = createPanel();
+  const [drift] = panel._sourceStates("drift_e");
+
+  assert.equal(panel._drift(drift), "8 mV");
+  assert.equal(
+    panel._formatWriteResult({
+      entity: "number.marstek_venus_e_entladeleistung",
+      value: 0,
+      battery: "E",
+      restore: false,
+      ok: true,
+      written: true,
+    }),
+    "Venus E: Entladeleistung auf 0 W gesetzt und bestätigt",
+  );
 });

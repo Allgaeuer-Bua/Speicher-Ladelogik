@@ -7,6 +7,21 @@ const TABS = [
   ["diagnostics", "mdi:stethoscope", "Diagnose"],
 ];
 
+const PHASE_LABELS = {
+  idle: "Bereit",
+  requested: "Auftrag vorgemerkt",
+  drain: "Entladen auf 13 %",
+  wait: "Warten auf PV-Fenster",
+  charge: "Kalibrierladung mit 500 W",
+  rest: "Ruheprüfung",
+  paused: "Pausiert",
+  restore: "Grenzwerte wiederherstellen",
+  done: "Erfolgreich beendet",
+  incomplete: "Wiederholung vorgemerkt",
+  cancelled: "Abgebrochen",
+  error: "Fehler",
+};
+
 const NUMBER_GROUPS = {
   leistung: [
     ["bevorzugte_ladeleistung_venus_a", "Venus A", "Bevorzugte Ladeleistung"],
@@ -123,6 +138,52 @@ class SpeicherLadelogikPanel extends HTMLElement {
       : "—";
   }
 
+  _decimal(value, digits = 2) {
+    const number = this._num(value, NaN);
+    return Number.isFinite(number)
+      ? number.toLocaleString("de-DE", { maximumFractionDigits: digits })
+      : "—";
+  }
+
+  _measurement(entity, defaultUnit = "", digits = 2) {
+    if (!this._available(entity)) return "—";
+    const unit = entity.attributes?.unit_of_measurement || defaultUnit;
+    return `${this._decimal(entity.state, digits)}${unit ? ` ${unit}` : ""}`;
+  }
+
+  _drift(entity) {
+    if (!this._available(entity)) return "—";
+    const unit = String(entity.attributes?.unit_of_measurement || "mV").toLowerCase();
+    const raw = this._num(entity.state, NaN);
+    if (!Number.isFinite(raw)) return "—";
+    const millivolts = unit === "v" ? raw * 1000 : raw;
+    return `${this._decimal(millivolts)} mV`;
+  }
+
+  _sourceStates(key) {
+    const source = this._config().sources?.[key];
+    const entityIds = Array.isArray(source) ? source : source ? [source] : [];
+    return entityIds.map((entityId) => this._hass?.states?.[entityId]).filter(Boolean);
+  }
+
+  _statusLabel(value) {
+    const text = String(value ?? "—");
+    const match = text.match(/^Kalibrierung\s+([AE]):\s*([a-z_]+)$/i);
+    if (match) return `Kalibrierung ${match[1].toUpperCase()}: ${PHASE_LABELS[match[2].toLowerCase()] || match[2]}`;
+    return PHASE_LABELS[text.toLowerCase()] || text;
+  }
+
+  _batteryMode(power) {
+    if (power < -10) return { label: "Lädt", tone: "charge" };
+    if (power > 10) return { label: "Entlädt", tone: "discharge" };
+    return { label: "Bereit", tone: "idle" };
+  }
+
+  _flowParticle(active, from, to, color) {
+    if (!active) return "";
+    return `<circle r="5" fill="${color}" class="flow-particle"><animateMotion dur="2.2s" repeatCount="indefinite" path="M ${from} L ${to}" /></circle>`;
+  }
+
   _time(timestamp) {
     const seconds = this._num(timestamp, 0);
     if (!seconds) return "—";
@@ -188,7 +249,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const capA = this._entityNum(this._state("nennkapazitaet_venus_a"), 4.16);
     const capE = this._entityNum(this._state("nennkapazitaet_venus_e"), 5.12);
     const combined = Math.max(0, Math.min(100, (socA * capA + socE * capE) / Math.max(0.1, capA + capE)));
-    const planStatus = this._state("planung")?.state || "—";
+    const planStatus = this._statusLabel(this._state("planung")?.state || "—");
     const calibration = this._state("kalibrierung")?.state || "—";
     const peak = this._isOn("mittagsspitzen");
     return `
@@ -219,29 +280,43 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const home = this._entityNum(this._source("house"), NaN);
     const powerA = this._entityNum(this._source("power_a"), this._num(this._attr("status", "ac_leistung_venus_a_w", 0)));
     const powerE = this._entityNum(this._source("power_e"), this._num(this._attr("status", "ac_leistung_venus_e_w", 0)));
-    const charging = powerA > 10 || powerE > 10;
+    const modeA = this._batteryMode(powerA);
+    const modeE = this._batteryMode(powerE);
+    const gridPath = grid >= 0 ? ["170 90", "500 240"] : ["500 240", "170 90"];
+    const aPath = powerA < -10 ? ["500 240", "170 400"] : ["170 400", "500 240"];
+    const ePath = powerE < -10 ? ["500 240", "830 400"] : ["830 400", "500 240"];
     return `
       <section class="card flow-card span-7">
         ${this._cardTitle("mdi:transmission-tower", "Energiefluss", this._badge("Live", "good"))}
-        <div class="flow-canvas ${charging ? "charging" : ""}">
-          <div class="flow-node pv"><ha-icon icon="mdi:solar-power-variant"></ha-icon><strong>${this._power(pv)}</strong><span>PV</span></div>
+        <div class="flow-canvas">
           <div class="flow-node grid"><ha-icon icon="mdi:transmission-tower"></ha-icon><strong>${this._power(Math.abs(grid))}</strong><span>${grid > 0 ? "Netzbezug" : "Einspeisung"}</span></div>
+          <div class="flow-node pv"><ha-icon icon="mdi:solar-power-variant"></ha-icon><strong>${this._power(pv)}</strong><span>PV</span></div>
           <div class="flow-core"><ha-icon icon="mdi:home-lightning-bolt-outline"></ha-icon><strong>${this._power(home)}</strong><span>Haus</span></div>
-          <div class="flow-node batt-a"><ha-icon icon="mdi:battery-charging-60"></ha-icon><strong>${this._power(Math.abs(powerA))}</strong><span>Venus A · ${powerA > 10 ? "lädt" : powerA < -10 ? "entlädt" : "bereit"}</span></div>
-          <div class="flow-node batt-e"><ha-icon icon="mdi:battery-charging-60"></ha-icon><strong>${this._power(Math.abs(powerE))}</strong><span>Venus E · ${powerE > 10 ? "lädt" : powerE < -10 ? "entlädt" : "bereit"}</span></div>
-          <i class="line l1"></i><i class="line l2"></i><i class="line l3"></i><i class="line l4"></i>
+          <div class="flow-node batt-a"><ha-icon icon="mdi:battery-charging-60"></ha-icon><strong>${this._power(Math.abs(powerA))}</strong><span>Venus A · ${modeA.label.toLowerCase()}</span></div>
+          <div class="flow-node batt-e"><ha-icon icon="mdi:battery-charging-60"></ha-icon><strong>${this._power(Math.abs(powerE))}</strong><span>Venus E · ${modeE.label.toLowerCase()}</span></div>
+          <svg class="flow-lines" viewBox="0 0 1000 480" preserveAspectRatio="none" aria-hidden="true">
+            <line x1="170" y1="90" x2="500" y2="240"></line>
+            <line x1="830" y1="90" x2="500" y2="240"></line>
+            <line x1="170" y1="400" x2="500" y2="240"></line>
+            <line x1="830" y1="400" x2="500" y2="240"></line>
+            ${this._flowParticle(Math.abs(grid) > 10, gridPath[0], gridPath[1], "#ff9a55")}
+            ${this._flowParticle(pv > 10, "830 90", "500 240", "#ffbd45")}
+            ${this._flowParticle(Math.abs(powerA) > 10, aPath[0], aPath[1], modeA.tone === "charge" ? "#38d582" : "#b493ff")}
+            ${this._flowParticle(Math.abs(powerE) > 10, ePath[0], ePath[1], modeE.tone === "charge" ? "#38d582" : "#b493ff")}
+          </svg>
         </div>
       </section>`;
   }
 
   _planningCard() {
     const state = this._state("planung");
+    const stateLabel = this._statusLabel(state?.state || "—");
     const reason = this._attr("planung", "entscheidungsgrund", this._attr("planung", "normaler_fahrplan_grund", "Keine Begründung verfügbar"));
     const progress = Math.max(0, Math.min(100, this._num(this._attr("planung", "fenster_fortschritt_prozent", 0))));
     const lockedUntil = this._attr("planung", "fahrplan_entscheidung_fixiert_bis_ts");
     return `
       <section class="card plan-card span-5 entity-card" data-entity="${esc(this._eid("planung"))}">
-        ${this._cardTitle("mdi:timeline-clock-outline", "Tagesplanung", this._badge(state?.state || "—", "accent"))}
+        ${this._cardTitle("mdi:timeline-clock-outline", "Tagesplanung", this._badge(stateLabel, "accent"))}
         <div class="decision"><strong>${esc(this._attr("planung", "normaler_fahrplan_status", state?.state || "—"))}</strong><p>${esc(reason)}</p></div>
         <div class="metric-pairs">
           ${this._metric("Prognose heute", this._energy(this._attr("planung", "prognose_heute_erwartet_kwh")), "mdi:weather-sunny")}
@@ -249,6 +324,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
           ${this._metric("Restbedarf", this._energy(this._attr("planung", "restbedarf_kwh")), "mdi:battery-arrow-up")}
           ${this._metric("Sollleistung", this._power(this._attr("planung", "soll_ladeleistung_gesamt_w")), "mdi:flash")}
         </div>
+        <div class="window-label"><span>Ladefenster</span><small>Zeitraum für die geplante PV-Ladung</small></div>
         <div class="window-row"><span>${this._time(this._attr("planung", "ladefenster_start_ts"))}</span><div class="progress"><i style="width:${progress}%"></i></div><span>${this._time(this._attr("planung", "ladefenster_ende_ts"))}</span></div>
         <div class="slot-note"><ha-icon icon="mdi:lock-clock"></ha-icon> Entscheidung fixiert bis ${this._time(lockedUntil)}</div>
       </section>`;
@@ -268,14 +344,13 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const valid = this._state(`daten_venus_${suffix}`)?.state === "bereit";
     const efficiency = this._state(`wirkungsgrad_venus_${suffix}`)?.state;
     const loss = this._state(`verlustleistung_venus_${suffix}`)?.state;
-    const mode = power > 10 ? "Lädt" : power < -10 ? "Entlädt" : "Bereit";
-    const tone = power > 10 ? "charge" : power < -10 ? "discharge" : "idle";
+    const mode = this._batteryMode(power);
     return `
       <section class="card battery-card ${full ? "battery-full" : ""}">
         ${this._cardTitle("mdi:battery-high", `Venus ${letter}`, this._badge(valid ? "Daten bereit" : "Daten fehlen", valid ? "good" : "bad"))}
         <div class="battery-main">
           <div class="battery-gauge"><div style="height:${Math.max(4, Math.min(100, soc))}%"></div><span>${Math.round(soc)}%</span></div>
-          <div class="battery-now"><span class="mode-dot ${tone}"></span><strong>${mode}</strong><b>${this._power(Math.abs(power))}</b><small>Sollgrenze ${this._power(target)}</small></div>
+          <div class="battery-now"><span class="mode-dot ${mode.tone}"></span><strong>${mode.label}</strong><b>${this._power(Math.abs(power))}</b><small>Sollgrenze ${this._power(target)}</small></div>
         </div>
         <div class="soc-scale"><span>Min ${this._percent(minSoc)}</span><i><b style="left:${Math.max(0, Math.min(100, soc))}%"></b></i><span>Max ${this._percent(maxSoc)}</span></div>
         <div class="metric-pairs compact">
@@ -290,20 +365,21 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _batteryDetails(letter) {
     const s = letter.toLowerCase();
-    const packSources = this._config().sources?.[`pack_soc_${s}`] || [];
-    const driftSources = this._config().sources?.[`drift_${s}`] || [];
-    const packs = Array.isArray(packSources) ? packSources.map((id) => this._hass?.states?.[id]?.state).filter(Boolean) : [];
-    const drifts = Array.isArray(driftSources) ? driftSources.map((id) => this._hass?.states?.[id]?.state).filter(Boolean) : [];
-    const voltage = this._source(`cell_voltage_${s}`)?.state;
-    const maxTemp = this._source(`cell_temp_max_${s}`)?.state;
-    const minTemp = this._source(`cell_temp_min_${s}`)?.state;
+    const packStates = this._sourceStates(`pack_soc_${s}`);
+    if (!packStates.length && s === "e" && this._source("soc_e")) packStates.push(this._source("soc_e"));
+    const driftStates = this._sourceStates(`drift_${s}`);
+    const packs = packStates.map((entity) => this._measurement(entity, "%"));
+    const drifts = driftStates.map((entity) => this._drift(entity));
+    const voltage = this._measurement(this._source(`cell_voltage_${s}`), "V");
+    const maxTemp = this._measurement(this._source(`cell_temp_max_${s}`), "°C");
+    const minTemp = this._measurement(this._source(`cell_temp_min_${s}`), "°C");
     const latch = Boolean(this._attr("planung", `ziel_venus_${s}_latch_aktiv`, false));
     return `
       <div class="detail-grid">
-        ${this._detail("Pack-SoC", packs.length ? packs.map((v) => `${v} %`).join(" / ") : "—")}
-        ${this._detail("Zellspannung max.", voltage ? `${voltage} V` : "—")}
-        ${this._detail("Zelltemperatur", maxTemp ? `${minTemp || "—"}–${maxTemp} °C` : "—")}
-        ${this._detail("Zelldrift", drifts.length ? drifts.map((v) => `${v} mV`).join(" / ") : "—")}
+        ${this._detail("Pack-SoC", packs.length ? packs.join(" / ") : "—")}
+        ${this._detail("Zellspannung max.", voltage)}
+        ${this._detail("Zelltemperatur", maxTemp !== "—" ? `${minTemp}–${maxTemp}` : "—")}
+        ${this._detail("Zelldrift", drifts.length ? drifts.join(" / ") : "—")}
         ${this._detail("Zielstatus", latch ? "Geräteziel erreicht" : "Ladebedarf vorhanden")}
         ${this._detail("Messwert", this._attr("planung", `ac_leistung_venus_${s}_status`, "—"))}
       </div>`;
@@ -407,11 +483,25 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return `<main class="grid control-view">${this._modeControl()}<section class="card span-full">${this._cardTitle("mdi:chart-bell-curve", "Fahrplanfunktionen")}${this._toggleRow("mittagsspitzen", "Mittagsspitzen reduzieren", "Speicherkapazität für die PV-Spitze freihalten", "mdi:chart-bell-curve")}</section><div class="control-columns span-full">${this._numberCard("Ladeleistungen", "mdi:battery-charging", "leistung")}${this._numberCard("Planungsreserven", "mdi:shield-sun-outline", "planung")}${this._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen")}</div><div class="control-columns two span-full">${this._manualCard("A")}${this._manualCard("E")}</div>${this._calibrationCard()}</main>`;
   }
 
+  _formatWriteResult(item) {
+    if (typeof item === "string") return item;
+    if (!item || typeof item !== "object") return String(item ?? "—");
+    const battery = item.battery ? `Venus ${item.battery}` : "Register";
+    const entityId = String(item.entity || "");
+    const register = entityId.includes("entlade")
+      ? "Entladeleistung"
+      : entityId.includes("lade") ? "Ladeleistung" : entityId.split(".").pop() || "Stellgröße";
+    const target = this._power(item.value);
+    if (item.ok && item.written) return `${battery}: ${register} auf ${target} gesetzt und bestätigt`;
+    if (item.ok) return `${battery}: ${register} stand bereits auf ${target}; kein Schreiben erforderlich`;
+    return `${battery}: ${register} auf ${target} fehlgeschlagen${item.error ? ` – ${item.error}` : ""}`;
+  }
+
   _diagnostics() {
     const status = this._state("status");
     const warnings = this._attr("status", "warnungen", []) || [];
     const missing = this._attr("status", "fehlende_entitaeten", []) || [];
-    const results = this._attr("status", "letzte_schreibergebnisse", []) || [];
+    const results = (this._attr("status", "letzte_schreibergebnisse", []) || []).map((item) => this._formatWriteResult(item));
     const dataErrors = this._attr("planung", "datenfehler_aktuell", []) || [];
     const comparison = this._state("planvergleich");
     return `
@@ -421,7 +511,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
         ${this._listCard("Aktuelle Hinweise", "mdi:alert-circle-outline", [...warnings, ...dataErrors], "Keine aktuellen Warnungen", "span-6")}
         ${this._listCard("Fehlende Entitäten", "mdi:database-remove-outline", missing, "Keine Entität fehlt", "span-6")}
         ${this._listCard("Letzte Schreibergebnisse", "mdi:pencil-outline", results, "Noch keine Schreibzugriffe", "span-full")}
-        <section class="card span-full raw-card">${this._cardTitle("mdi:code-json", "Entitäten")}<div class="entity-grid">${Object.entries(this._config().entities || {}).map(([key, id]) => `<button class="entity-link" data-entity="${esc(id)}"><span>${esc(key)}</span><strong>${esc(id)}</strong></button>`).join("")}</div><div class="ack-row">${this._actionButton("fehler_quittieren", "mdi:check-decagram-outline", "Schreibfehler quittieren")}</div></section>
+        <section class="card span-full ack-card">${this._cardTitle("mdi:shield-lock-open-outline", "Schreibsperren und Quittierung")}<p>Die Quittierung setzt die internen Schreibfehlerzähler von Venus A und Venus E zurück. Fehlende oder ungültige Sensorwerte werden dadurch nicht verändert.</p><div class="ack-state">${this._diagLine("Schreibzugriffe", this._attr("status", "schreibzugriffe_aktiv", false) ? "Aktiv" : "Gesperrt")}${this._diagLine("Letzter Schreibfehler", this._attr("status", "letzter_schreibfehler", "Keiner"))}</div><div class="ack-row">${this._actionButton("fehler_quittieren", "mdi:check-decagram-outline", "Schreibfehler quittieren")}</div></section>
       </main>`;
   }
 
@@ -440,6 +530,14 @@ class SpeicherLadelogikPanel extends HTMLElement {
       @media(max-width:1050px){.span-7,.span-5{grid-column:1/-1}.control-columns{grid-template-columns:1fr 1fr}.control-columns .control-card:last-child{grid-column:1/-1}.peak-layout{grid-template-columns:repeat(2,1fr)}.action-groups>div{flex-wrap:wrap}.entity-grid{grid-template-columns:repeat(2,1fr)}}
       @media(max-width:720px){header{padding:8px 10px;flex-wrap:wrap}.brand-copy{min-width:0}.brand-copy strong{font-size:14px}.live-pill{display:none}nav{order:3;width:calc(100% + 20px);margin:4px -10px -8px;overflow-x:auto;height:49px}.nav-item{flex:1;min-width:76px;padding:0 8px;justify-content:center}.nav-item span{font-size:10px}.grid{padding:9px;gap:9px}.card{padding:13px;border-radius:11px}.system-grid{grid-template-columns:1fr}.status-table{grid-template-columns:1fr}.soc-ring{width:128px;height:128px}.battery-pair,.control-columns,.control-columns.two,.comparison-grid,.action-groups{grid-template-columns:1fr}.control-columns .control-card:last-child{grid-column:auto}.flow-canvas{min-height:270px}.battery-main{grid-template-columns:76px 1fr}.detail-grid,.entity-grid{grid-template-columns:repeat(2,1fr)}.cal-state{grid-template-columns:1fr}.mode-select{grid-template-columns:1fr}.mode-select button{grid-template-columns:28px 1fr}.peak-layout{grid-template-columns:1fr}.action-groups>div{align-items:stretch}.action-groups>div>strong{width:100%}.metric-pairs{grid-template-columns:1fr 1fr}}
       @media(max-width:410px){.nav-item ha-icon{display:none}.metric-pairs,.detail-grid,.entity-grid{grid-template-columns:1fr}.flow-node strong{font-size:13px}.flow-node span{font-size:8px}.flow-core ha-icon{width:48px;height:48px}.number-row{grid-template-columns:23px 1fr}.number-input{grid-column:2;justify-self:end}}
+      :host{background:#0a1013;color:#eaf4ef;--primary-text-color:#eaf4ef;--secondary-text-color:#8da29a;--primary-background-color:#0a1013;--card:#11191d;--muted:#8da29a;--line:rgba(144,177,164,.14)}
+      header{background:#0d1418}.card{background:#11191d;box-shadow:0 10px 28px rgba(0,0,0,.22)}
+      .flow-canvas{min-height:360px;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr)}
+      .flow-node.grid{grid-area:1/1}.flow-node.pv{grid-area:1/3}.flow-core{grid-area:2/2}.flow-node.batt-a{grid-area:3/1}.flow-node.batt-e{grid-area:3/3}
+      .flow-lines{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible}.flow-lines line{stroke:rgba(132,169,156,.25);stroke-width:3;vector-effect:non-scaling-stroke}.flow-particle{filter:drop-shadow(0 0 5px currentColor)}
+      .window-label{display:flex;justify-content:space-between;align-items:baseline;margin-top:13px;color:var(--primary-text-color);font-size:10px;font-weight:700}.window-label small{color:var(--muted);font-weight:400}
+      .window-row{margin-top:6px}.number-input{width:100px;justify-content:flex-end}.number-input input{width:58px}.ack-card>p{color:var(--muted);font-size:11px;line-height:1.55;margin:0 0 8px}.ack-state{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px}
+      @media(max-width:720px){.flow-canvas{min-height:320px}.window-label{align-items:flex-start;flex-direction:column;gap:3px}.ack-state{grid-template-columns:1fr}.number-input{width:94px}}
     `;
   }
 
