@@ -1,8 +1,12 @@
-# Dashboard V1.0
+# YAML-Dashboard V1.0 (Alternative)
 
-Das Dashboard ist für **Speicher-Ladelogik 1.0.0-rc.4** ausgelegt und verwendet
+Das Dashboard ist für **Speicher-Ladelogik 1.0.0-rc.5** ausgelegt und verwendet
 ausschließlich Karten, die Home Assistant selbst mitbringt. Es sind keine
 zusätzlichen HACS-Karten oder Themes erforderlich.
+
+Ab RC5 installiert die Integration ein eigenständiges Dashboard automatisch in
+der Home-Assistant-Seitenleiste. Diese YAML-Variante bleibt für Nutzer erhalten,
+die lieber ein normales, frei bearbeitbares Home-Assistant-Dashboard verwenden.
 
 ## Installation
 

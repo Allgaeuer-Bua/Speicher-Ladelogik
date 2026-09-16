@@ -3,10 +3,15 @@
 Intelligente Speicher-Ladesteuerung für Home Assistant mit zwei unabhängig
 regelbaren Speichern und AstraMeter.
 
-## V1.0 RC 4
+## V1.0 RC 5
 
 Der Release Candidate ersetzt die bisherigen YAML-Helfer und
 Steuerautomationen durch native Entitäten der Integration.
+
+RC5 ergänzt ein eigenständiges, responsives Dashboard. Es wird von der
+Integration automatisch mitinstalliert und erscheint nach dem Neustart als
+**Speicher-Ladelogik** in der Home-Assistant-Seitenleiste. Zusätzliche Karten,
+Themes oder eine manuelle YAML-Konfiguration sind dafür nicht erforderlich.
 
 ### Funktionen
 
@@ -54,7 +59,7 @@ gewichtet.
 ### Wechsel von Beta 7
 
 1. Vor dem Update die alten Automationen deaktiviert lassen.
-2. RC 4 über HACS installieren und Home Assistant neu starten.
+2. RC5 über HACS installieren und Home Assistant neu starten.
 3. Der erste RC-Start erfolgt absichtlich in **Beobachten**. Entitäten und Plan
    prüfen.
 4. Danach `select.speicher_ladelogik_betriebsart` auf **Automatik** stellen.
@@ -66,14 +71,16 @@ gewichtet.
 > lassen. Die Integration verweigert Automatik, solange eine bekannte alte
 > Steuerautomation aktiv ist.
 
-### Dashboard V1.0
+### Eigenständiges Dashboard
 
-Unter [`dashboards/`](dashboards/) liegt ein responsives Dashboard für die
-Integration. Es verwendet ausschließlich integrierte Home-Assistant-Karten und
-benötigt keine zusätzlichen Frontend-Erweiterungen. Die Ansichten **Übersicht**,
-**Speicher**, **Steuerung** und **Diagnose** sind für Desktop und Mobilgeräte
-ausgelegt. Hinweise zur Installation und zu anlagenspezifischen Entitäts-IDs
-stehen in der dortigen README.
+Das Dashboard wird zusammen mit der Integration ausgeliefert und automatisch
+als Seitenleisten-Panel registriert. Es enthält die Ansichten **Übersicht**,
+**Speicher**, **Steuerung** und **Diagnose**. Entitäten werden über ihre stabilen
+Unique IDs aufgelöst, sodass das Panel auch nach einer Änderung der Entity-ID
+funktioniert.
+
+Das bisherige YAML-Dashboard bleibt im Verzeichnis [`dashboards/`](dashboards/)
+als kompatible Alternative erhalten.
 
 Projektseite und Fehlerberichte:
 

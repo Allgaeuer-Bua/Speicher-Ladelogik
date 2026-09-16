@@ -6,6 +6,17 @@ on:
   workflow_dispatch:
 
 jobs:
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check custom_components/speicher_ladelogik/frontend/speicher-ladelogik-panel.js
+      - run: node --test tests/test_frontend_panel.mjs
+
   hacs:
     name: HACS
     runs-on: ubuntu-latest
