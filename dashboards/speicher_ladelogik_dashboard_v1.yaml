@@ -1,5 +1,5 @@
 # Speicher-Ladelogik Dashboard V1.0
-# Kompatibel mit Speicher-Ladelogik 1.0.0-rc.6
+# Kompatibel mit Speicher-Ladelogik 1.0.0-rc.7
 # Verwendet ausschließlich integrierte Home-Assistant-Karten.
 # Die physischen Standard-Entitäten im Bereich "Speicher" entsprechen der
 # Referenzinstallation und können bei abweichenden Geräten ersetzt werden.

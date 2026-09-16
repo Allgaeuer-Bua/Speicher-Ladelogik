@@ -3,7 +3,7 @@
 Intelligente Speicher-Ladesteuerung für Home Assistant mit zwei unabhängig
 regelbaren Speichern und AstraMeter.
 
-## V1.0 RC 6
+## V1.0 RC 7
 
 Der Release Candidate ersetzt die bisherigen YAML-Helfer und
 Steuerautomationen durch native Entitäten der Integration.
@@ -16,6 +16,10 @@ Themes oder eine manuelle YAML-Konfiguration sind dafür nicht erforderlich.
 RC6 überarbeitet dieses Panel mit einem dauerhaft dunklen Design, einem
 richtungsgenauen Energiefluss, deutschen Kalibrierphasen, gerundeten Messwerten
 und einer verständlichen Diagnose der Schreibzugriffe.
+
+RC7 ergänzt Tagesenergie und Verlaufsdiagramme aus der Home-Assistant-Historie,
+verschiebt die Speicher-Detailkarten vollständig in den Reiter **Speicher** und
+verhindert, dass die Energieflussanimation bei Zustandsupdates neu beginnt.
 
 ### Funktionen
 
@@ -63,7 +67,7 @@ gewichtet.
 ### Wechsel von Beta 7
 
 1. Vor dem Update die alten Automationen deaktiviert lassen.
-2. RC6 über HACS installieren und Home Assistant neu starten.
+2. RC7 über HACS installieren und Home Assistant neu starten.
 3. Der erste RC-Start erfolgt absichtlich in **Beobachten**. Entitäten und Plan
    prüfen.
 4. Danach `select.speicher_ladelogik_betriebsart` auf **Automatik** stellen.

@@ -57,11 +57,17 @@ class SpeicherLadelogikPanel extends HTMLElement {
     this._tab = "overview";
     this._hass = null;
     this._panel = null;
+    this._history = null;
+    this._historyKey = "";
+    this._historyLoadedAt = 0;
+    this._historyLoading = false;
+    this._historyHours = 24;
   }
 
   set hass(value) {
     this._hass = value;
     this._render();
+    this._ensureHistory();
   }
 
   get hass() {
@@ -71,6 +77,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   set panel(value) {
     this._panel = value;
     this._render();
+    this._ensureHistory(true);
   }
 
   get panel() {
@@ -79,6 +86,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   connectedCallback() {
     this._render();
+    this._ensureHistory();
   }
 
   _config() {
@@ -184,6 +192,253 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return `<circle r="5" fill="${color}" class="flow-particle"><animateMotion dur="2.2s" repeatCount="indefinite" path="M ${from} L ${to}" /></circle>`;
   }
 
+  _historySourceIds() {
+    return ["pv", "grid", "house", "power_a", "power_e", "soc_a", "soc_e"]
+      .map((key) => this._sid(key))
+      .filter(Boolean);
+  }
+
+  _dayStart() {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    return start;
+  }
+
+  _ensureHistory(force = false) {
+    if (!this.isConnected || !this._hass?.callWS || !this._panel) return;
+    const entityIds = [...new Set(this._historySourceIds())];
+    if (!entityIds.length || this._historyLoading) return;
+    const start = this._dayStart();
+    const key = `${start.toISOString()}|${entityIds.join(",")}`;
+    const fresh = Date.now() - this._historyLoadedAt < 60_000;
+    if (!force && this._historyKey === key && fresh) return;
+    this._historyKey = key;
+    this._historyLoading = true;
+    this._hass.callWS({
+      type: "history/history_during_period",
+      start_time: start.toISOString(),
+      end_time: new Date().toISOString(),
+      entity_ids: entityIds,
+      minimal_response: true,
+      no_attributes: true,
+      significant_changes_only: true,
+    }).then((history) => {
+      this._history = history || {};
+      this._historyLoadedAt = Date.now();
+      this._historyLoading = false;
+      this._render();
+    }).catch(() => {
+      this._historyLoading = false;
+    });
+  }
+
+  _historyRaw(entityId) {
+    if (!entityId || !this._history) return [];
+    if (Array.isArray(this._history?.[entityId])) return this._history[entityId];
+    if (Array.isArray(this._history)) {
+      const group = this._history.find((items) => Array.isArray(items)
+        && items.some((item) => (item.entity_id || item.e) === entityId));
+      return group || [];
+    }
+    return [];
+  }
+
+  _historySeries(key) {
+    const entityId = this._sid(key);
+    if (!entityId) return [];
+    const points = this._historyRaw(entityId).map((item) => {
+      const value = this._num(item.state ?? item.s, NaN);
+      const stamp = item.last_updated ?? item.last_changed ?? item.lu ?? item.lc;
+      const time = typeof stamp === "number" ? stamp * 1000 : Date.parse(stamp);
+      return { t: time, v: value };
+    }).filter((point) => Number.isFinite(point.t) && Number.isFinite(point.v));
+    const current = this._source(key);
+    if (this._available(current)) points.push({ t: Date.now(), v: this._entityNum(current, 0) });
+    points.sort((left, right) => left.t - right.t);
+    return points.filter((point, index) => !index || point.t !== points[index - 1].t);
+  }
+
+  _mergeSeries(seriesList, reducer) {
+    const usable = seriesList.filter((series) => series.length);
+    if (!usable.length) return [];
+    const times = [...new Set(usable.flatMap((series) => series.map((point) => point.t)))].sort((a, b) => a - b);
+    const indexes = usable.map(() => 0);
+    const current = usable.map(() => NaN);
+    return times.map((time) => {
+      usable.forEach((series, seriesIndex) => {
+        while (indexes[seriesIndex] < series.length && series[indexes[seriesIndex]].t <= time) {
+          current[seriesIndex] = series[indexes[seriesIndex]].v;
+          indexes[seriesIndex] += 1;
+        }
+      });
+      return { t: time, v: reducer(current.filter(Number.isFinite)) };
+    }).filter((point) => Number.isFinite(point.v));
+  }
+
+  _combinedBatteryPower() {
+    return this._mergeSeries(
+      [this._historySeries("power_a"), this._historySeries("power_e")],
+      (values) => values.reduce((sum, value) => sum + value, 0),
+    );
+  }
+
+  _combinedSoc() {
+    const capA = this._entityNum(this._state("nennkapazitaet_venus_a"), 4.16);
+    const capE = this._entityNum(this._state("nennkapazitaet_venus_e"), 5.12);
+    return this._mergeSeries(
+      [this._historySeries("soc_a"), this._historySeries("soc_e")],
+      (values) => values.length > 1
+        ? (values[0] * capA + values[1] * capE) / Math.max(0.1, capA + capE)
+        : values[0],
+    );
+  }
+
+  _historyRangeStart() {
+    const dayStart = this._dayStart().getTime();
+    return this._historyHours >= 24 ? dayStart : Math.max(dayStart, Date.now() - this._historyHours * 3_600_000);
+  }
+
+  _integrateEnergy(series, selector) {
+    if (series.length < 2) return null;
+    const start = this._dayStart().getTime();
+    const end = Date.now();
+    let wattHours = 0;
+    for (let index = 0; index < series.length - 1; index += 1) {
+      const from = Math.max(start, series[index].t);
+      const to = Math.min(end, series[index + 1].t);
+      if (to <= from) continue;
+      wattHours += selector(series[index].v) * (to - from) / 3_600_000;
+    }
+    return wattHours / 1000;
+  }
+
+  _positiveEnergy(key) {
+    return this._integrateEnergy(this._historySeries(key), (value) => Math.max(0, value));
+  }
+
+  _negativeEnergy(key) {
+    return this._integrateEnergy(this._historySeries(key), (value) => Math.max(0, -value));
+  }
+
+  _batteryEnergy(suffix) {
+    return {
+      charged: this._negativeEnergy(`power_${suffix}`),
+      discharged: this._positiveEnergy(`power_${suffix}`),
+    };
+  }
+
+  _sumEnergy(values) {
+    const usable = values.filter((value) => Number.isFinite(value));
+    return usable.length ? usable.reduce((sum, value) => sum + value, 0) : null;
+  }
+
+  _historyEnergy(value) {
+    return Number.isFinite(value) ? this._energy(value) : "—";
+  }
+
+  _chart(datasets, { min = null, max = null, unit = "", fill = false } = {}) {
+    const start = this._historyRangeStart();
+    const end = Date.now();
+    const visible = datasets.map((dataset) => ({
+      ...dataset,
+      points: dataset.points.filter((point) => point.t >= start && point.t <= end),
+    })).filter((dataset) => dataset.points.length);
+    if (!visible.length) {
+      return `<div class="chart-empty">${this._historyLoading ? "Verlauf wird geladen …" : "Keine Verlaufsdaten verfügbar"}</div>`;
+    }
+
+    const values = visible.flatMap((dataset) => dataset.points.map((point) => point.v));
+    let low = Number.isFinite(min) ? min : Math.min(0, ...values);
+    let high = Number.isFinite(max) ? max : Math.max(0, ...values);
+    if (low === high) {
+      low -= 1;
+      high += 1;
+    } else if (!Number.isFinite(min) || !Number.isFinite(max)) {
+      const padding = (high - low) * 0.08;
+      low -= padding;
+      high += padding;
+    }
+
+    const width = 640;
+    const height = 190;
+    const left = 42;
+    const right = 628;
+    const top = 12;
+    const bottom = 158;
+    const x = (time) => left + (time - start) / Math.max(1, end - start) * (right - left);
+    const y = (value) => bottom - (value - low) / Math.max(0.001, high - low) * (bottom - top);
+    const ticks = [0, 1, 2, 3].map((index) => {
+      const value = high - index * (high - low) / 3;
+      const position = top + index * (bottom - top) / 3;
+      const label = Math.abs(value) >= 10 ? Math.round(value) : this._decimal(value, 1);
+      return `<line x1="${left}" y1="${position}" x2="${right}" y2="${position}" class="chart-grid-line"></line><text x="2" y="${position + 4}" class="chart-axis">${esc(label)}${esc(unit)}</text>`;
+    }).join("");
+    const lines = visible.map((dataset) => {
+      const path = dataset.points.map((point, index) => `${index ? "L" : "M"}${x(point.t).toFixed(1)},${y(point.v).toFixed(1)}`).join(" ");
+      const area = fill && visible.length === 1
+        ? `<path d="M${x(dataset.points[0].t).toFixed(1)},${bottom} ${path.replace(/^M/, "L")} L${x(dataset.points.at(-1).t).toFixed(1)},${bottom} Z" fill="${dataset.color}" opacity=".13"></path>`
+        : "";
+      return `${area}<path d="${path}" fill="none" stroke="${dataset.color}" stroke-width="2.2" vector-effect="non-scaling-stroke"></path>`;
+    }).join("");
+    const startLabel = new Date(start).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+    const legend = visible.map((dataset) => `<span><i style="background:${dataset.color}"></i>${esc(dataset.name)}</span>`).join("");
+    return `<div class="chart-legend">${legend}</div><svg class="history-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">${ticks}${lines}<text x="${left}" y="184" class="chart-axis">${startLabel}</text><text x="${right}" y="184" text-anchor="end" class="chart-axis">jetzt</text></svg>`;
+  }
+
+  _historyButtons() {
+    return `<div class="chart-ranges">${[[1, "1 h"], [6, "6 h"], [12, "12 h"], [24, "Alles"]].map(([hours, label]) => `<button data-history-hours="${hours}" class="${this._historyHours === hours ? "active" : ""}">${label}</button>`).join("")}</div>`;
+  }
+
+  _energyRow(label, value, color, maximum) {
+    const width = Number.isFinite(value) && maximum > 0 ? Math.max(2, value / maximum * 100) : 0;
+    return `<div class="energy-row"><div><span>${esc(label)}</span><strong>${this._historyEnergy(value)}</strong></div><i><b style="width:${width}%;background:${color}"></b></i></div>`;
+  }
+
+  _energyTodayCard() {
+    const a = this._batteryEnergy("a");
+    const e = this._batteryEnergy("e");
+    const values = {
+      charged: this._sumEnergy([a.charged, e.charged]),
+      discharged: this._sumEnergy([a.discharged, e.discharged]),
+      solar: this._positiveEnergy("pv"),
+      house: this._positiveEnergy("house"),
+      imported: this._positiveEnergy("grid"),
+      exported: this._negativeEnergy("grid"),
+    };
+    const maximum = Math.max(0.01, ...Object.values(values).filter(Number.isFinite));
+    return `<section class="card summary-card energy-card">${this._cardTitle("mdi:calendar-today-outline", "Energie heute")}<div class="energy-list">
+      ${this._energyRow("Geladen", values.charged, "#38d582", maximum)}
+      ${this._energyRow("Entladen", values.discharged, "#8ea8ff", maximum)}
+      ${this._energyRow("Solar", values.solar, "#ffcf4a", maximum)}
+      ${this._energyRow("Haus", values.house, "#8bd8e9", maximum)}
+      ${this._energyRow("Netzbezug", values.imported, "#9a45ff", maximum)}
+      ${this._energyRow("Netzeinspeisung", values.exported, "#ff942f", maximum)}
+    </div></section>`;
+  }
+
+  _overviewPowerCard() {
+    return `<section class="card summary-card">${this._cardTitle("mdi:flash-outline", "Leistung")}${this._chart([
+      { name: "Solar", color: "#ffcf4a", points: this._historySeries("pv").map((point) => ({ ...point, v: point.v / 1000 })) },
+      { name: "Haus", color: "#8bd8e9", points: this._historySeries("house").map((point) => ({ ...point, v: point.v / 1000 })) },
+      { name: "Batterie", color: "#52d990", points: this._combinedBatteryPower().map((point) => ({ ...point, v: point.v / 1000 })) },
+      { name: "Netz", color: "#8ea8ff", points: this._historySeries("grid").map((point) => ({ ...point, v: point.v / 1000 })) },
+    ], { unit: " kW" })}${this._historyButtons()}</section>`;
+  }
+
+  _overviewSocCard() {
+    return `<section class="card summary-card">${this._cardTitle("mdi:chart-line", "SoC · heute")}${this._chart([
+      { name: "Gesamt-SoC", color: "#48d88b", points: this._combinedSoc() },
+    ], { min: 0, max: 100, unit: " %", fill: true })}${this._historyButtons()}</section>`;
+  }
+
+  _batteryHistory(letter) {
+    const suffix = letter.toLowerCase();
+    return `<div class="battery-history"><div class="battery-history-title">SoC und Leistungsverlauf</div><div class="battery-chart-wrap">${this._chart([
+      { name: "Leistung", color: "#8ea8ff", points: this._historySeries(`power_${suffix}`).map((point) => ({ ...point, v: point.v / 1000 })) },
+      { name: "SoC", color: "#48d88b", points: this._historySeries(`soc_${suffix}`).map((point) => ({ ...point, v: point.v / 100 * 6 - 3 })) },
+    ], { min: -3, max: 3, unit: " kW" })}<div class="battery-soc-axis"><span>100 %</span><span>50 %</span><span>0 %</span></div></div></div>`;
+  }
+
   _time(timestamp) {
     const seconds = this._num(timestamp, 0);
     if (!seconds) return "—";
@@ -227,7 +482,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
         <div class="brand-mark"><ha-icon icon="mdi:battery-charging-medium"></ha-icon></div>
         <div class="brand-copy">
           <strong>Speicher-Ladelogik</strong>
-          <span>PV-Fahrplan${version ? ` · ${esc(version)}` : ""}</span>
+          <span>Speicher${version ? ` · ${esc(version)}` : ""}</span>
         </div>
         <nav>
           ${TABS.map(([id, icon, label]) => `
@@ -289,7 +544,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       <section class="card flow-card span-7">
         ${this._cardTitle("mdi:transmission-tower", "Energiefluss", this._badge("Live", "good"))}
         <div class="flow-canvas">
-          <div class="flow-node grid"><ha-icon icon="mdi:transmission-tower"></ha-icon><strong>${this._power(Math.abs(grid))}</strong><span>${grid > 0 ? "Netzbezug" : "Einspeisung"}</span></div>
+          <div class="flow-node grid"><ha-icon icon="mdi:transmission-tower"></ha-icon><strong>${this._power(Math.abs(grid))}</strong><span>Netz · ${Math.abs(grid) <= 10 ? "neutral" : grid > 0 ? "Bezug" : "Einspeisung"}</span></div>
           <div class="flow-node pv"><ha-icon icon="mdi:solar-power-variant"></ha-icon><strong>${this._power(pv)}</strong><span>PV</span></div>
           <div class="flow-core"><ha-icon icon="mdi:home-lightning-bolt-outline"></ha-icon><strong>${this._power(home)}</strong><span>Haus</span></div>
           <div class="flow-node batt-a"><ha-icon icon="mdi:battery-charging-60"></ha-icon><strong>${this._power(Math.abs(powerA))}</strong><span>Venus A · ${modeA.label.toLowerCase()}</span></div>
@@ -327,6 +582,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
         <div class="window-label"><span>Ladefenster</span><small>Zeitraum für die geplante PV-Ladung</small></div>
         <div class="window-row"><span>${this._time(this._attr("planung", "ladefenster_start_ts"))}</span><div class="progress"><i style="width:${progress}%"></i></div><span>${this._time(this._attr("planung", "ladefenster_ende_ts"))}</span></div>
         <div class="slot-note"><ha-icon icon="mdi:lock-clock"></ha-icon> Entscheidung fixiert bis ${this._time(lockedUntil)}</div>
+        ${this._peakDetails()}
       </section>`;
   }
 
@@ -345,19 +601,27 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const efficiency = this._state(`wirkungsgrad_venus_${suffix}`)?.state;
     const loss = this._state(`verlustleistung_venus_${suffix}`)?.state;
     const mode = this._batteryMode(power);
+    const energy = this._batteryEnergy(suffix);
     return `
       <section class="card battery-card ${full ? "battery-full" : ""}">
         ${this._cardTitle("mdi:battery-high", `Venus ${letter}`, this._badge(valid ? "Daten bereit" : "Daten fehlen", valid ? "good" : "bad"))}
-        <div class="battery-main">
-          <div class="battery-gauge"><div style="height:${Math.max(4, Math.min(100, soc))}%"></div><span>${Math.round(soc)}%</span></div>
-          <div class="battery-now"><span class="mode-dot ${mode.tone}"></span><strong>${mode.label}</strong><b>${this._power(Math.abs(power))}</b><small>Sollgrenze ${this._power(target)}</small></div>
+        <div class="${full ? "battery-upper" : ""}">
+          <div class="battery-current">
+            <div class="battery-main">
+              <div class="battery-gauge"><div style="height:${Math.max(4, Math.min(100, soc))}%"></div><span>${Math.round(soc)}%</span></div>
+              <div class="battery-now"><span class="mode-dot ${mode.tone}"></span><strong>${mode.label}</strong><b>${this._power(Math.abs(power))}</b><small>Sollgrenze ${this._power(target)}</small></div>
+            </div>
+            <div class="soc-scale"><span>Min ${this._percent(minSoc)}</span><i><b style="left:${Math.max(0, Math.min(100, soc))}%"></b></i><span>Max ${this._percent(maxSoc)}</span></div>
+          </div>
+          ${full ? this._batteryHistory(letter) : ""}
         </div>
-        <div class="soc-scale"><span>Min ${this._percent(minSoc)}</span><i><b style="left:${Math.max(0, Math.min(100, soc))}%"></b></i><span>Max ${this._percent(maxSoc)}</span></div>
         <div class="metric-pairs compact">
           ${this._metric("Restbedarf", this._energy(this._attr("planung", `restbedarf_venus_${suffix}_kwh`)), "mdi:battery-arrow-up")}
           ${this._metric("Wirkungsgrad", this._percent(efficiency, 1), "mdi:percent-outline")}
           ${this._metric("Verlust", this._power(loss), "mdi:lightning-bolt-outline")}
           ${this._metric("Register", this._power(this._attr("planung", `fahrplan_ladegrenze_stabil_venus_${suffix}_w`)), "mdi:knob")}
+          ${full ? this._metric("Heute geladen", this._historyEnergy(energy.charged), "mdi:battery-plus-outline") : ""}
+          ${full ? this._metric("Heute entladen", this._historyEnergy(energy.discharged), "mdi:battery-minus-outline") : ""}
         </div>
         ${full ? this._batteryDetails(letter) : ""}
       </section>`;
@@ -389,23 +653,23 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return `<div class="detail"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`;
   }
 
-  _peakCard() {
+  _peakDetails() {
     const active = this._isOn("mittagsspitzen");
     const planable = Boolean(this._attr("planung", "mittagsspitzen_planbar", false));
     return `
-      <section class="card peak-card span-full entity-card" data-entity="${esc(this._eid("mittagsspitzen"))}">
-        ${this._cardTitle("mdi:chart-bell-curve", "Mittagsspitzenkappung", this._badge(active ? "Aktiv" : "Aus", active ? "good" : "neutral"))}
+      <div class="peak-inline">
+        <div class="peak-inline-title"><span><ha-icon icon="mdi:chart-bell-curve"></ha-icon>Mittagsspitzenkappung</span>${this._badge(active ? "Aktiv" : "Aus", active ? "good" : "neutral")}</div>
         <div class="peak-layout">
           ${this._metric("Einspeiseziel", this._power(this._attr("planung", "einspeiseziel_w")), "mdi:transmission-tower-export")}
           ${this._metric("Spitzenfenster", `${this._time(this._attr("planung", "spitzenfenster_start_ts"))}–${this._time(this._attr("planung", "spitzenfenster_ende_ts"))}`, "mdi:clock-outline")}
           ${this._metric("Speicher voll", this._time(this._attr("planung", "spitzenplan_voll_ts")), "mdi:battery-check-outline")}
           ${this._metric("Planbar", planable ? "Ja" : "Derzeit nein", planable ? "mdi:check-circle-outline" : "mdi:information-outline")}
         </div>
-      </section>`;
+      </div>`;
   }
 
   _overview() {
-    return `<main class="grid overview">${this._systemCard()}${this._flowCard()}${this._planningCard()}<div class="battery-pair span-full">${this._batteryCard("A")}${this._batteryCard("E")}</div>${this._peakCard()}</main>`;
+    return `<main class="grid overview">${this._systemCard()}${this._flowCard()}${this._planningCard()}<div class="summary-grid span-full">${this._energyTodayCard()}${this._overviewPowerCard()}${this._overviewSocCard()}</div></main>`;
   }
 
   _batteries() {
@@ -537,16 +801,34 @@ class SpeicherLadelogikPanel extends HTMLElement {
       .flow-lines{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible}.flow-lines line{stroke:rgba(132,169,156,.25);stroke-width:3;vector-effect:non-scaling-stroke}.flow-particle{filter:drop-shadow(0 0 5px currentColor)}
       .window-label{display:flex;justify-content:space-between;align-items:baseline;margin-top:13px;color:var(--primary-text-color);font-size:10px;font-weight:700}.window-label small{color:var(--muted);font-weight:400}
       .window-row{margin-top:6px}.number-input{width:100px;justify-content:flex-end}.number-input input{width:58px}.ack-card>p{color:var(--muted);font-size:11px;line-height:1.55;margin:0 0 8px}.ack-state{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px}
-      @media(max-width:720px){.flow-canvas{min-height:320px}.window-label{align-items:flex-start;flex-direction:column;gap:3px}.ack-state{grid-template-columns:1fr}.number-input{width:94px}}
+      .summary-grid{display:grid;grid-template-columns:minmax(280px,.8fr) repeat(2,minmax(360px,1.15fr));gap:14px}.summary-card{min-height:360px}.energy-list{display:flex;flex-direction:column;gap:14px}.energy-row>div{display:flex;justify-content:space-between;gap:10px;margin-bottom:5px}.energy-row span{color:var(--muted)}.energy-row strong{font-size:14px}.energy-row>i{display:block;height:6px;border-radius:8px;background:rgba(120,150,140,.12);overflow:hidden}.energy-row>i b{display:block;height:100%;border-radius:8px}.chart-legend{display:flex;justify-content:center;gap:13px;flex-wrap:wrap;color:var(--muted);font-size:11px;margin:-4px 0 5px}.chart-legend span{display:inline-flex;align-items:center;gap:5px}.chart-legend i{width:9px;height:9px;border-radius:2px}.history-chart{display:block;width:100%;height:220px;overflow:visible}.chart-grid-line{stroke:rgba(144,177,164,.12);stroke-width:1;vector-effect:non-scaling-stroke}.chart-axis{fill:var(--muted);font-size:10px}.chart-empty{height:220px;display:grid;place-items:center;color:var(--muted)}.chart-ranges{display:flex;justify-content:flex-end;gap:6px;margin-top:3px}.chart-ranges button{border:1px solid var(--line);border-radius:8px;background:rgba(110,135,125,.07);color:var(--muted);padding:5px 9px;cursor:pointer}.chart-ranges button.active{color:var(--accent);border-color:rgba(56,213,130,.3);background:rgba(56,213,130,.1)}
+      .peak-inline{margin-top:14px;padding-top:13px;border-top:1px solid var(--line)}.peak-inline-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.peak-inline-title>span{display:flex;align-items:center;gap:7px}.peak-inline-title ha-icon{--mdc-icon-size:16px}.peak-inline .metric{padding:8px}.peak-inline .metric strong{font-size:12px}
+      .battery-upper{display:grid;grid-template-columns:minmax(205px,.52fr) minmax(320px,1.48fr);gap:18px;align-items:center}.battery-history{min-width:0}.battery-history-title{color:var(--muted);font-size:12px;font-weight:700;margin:0 0 6px}.battery-history .history-chart{height:175px}.battery-history .chart-empty{height:175px}.battery-chart-wrap{position:relative}.battery-soc-axis{position:absolute;right:0;top:24px;bottom:27px;display:flex;flex-direction:column;justify-content:space-between;color:var(--muted);font-size:10px;pointer-events:none}
+      :host{font-size:14px}.brand-copy strong{font-size:17px}.brand-copy span,.live-pill{font-size:12px}.card-title,.badge{font-size:11px}.soc-ring span{font-size:11px}.status-line{font-size:13px}.flow-node strong{font-size:18px}.flow-node span,.flow-core span{font-size:11px}.decision strong{font-size:16px}.decision p{font-size:12px}.metric span{font-size:10px}.metric strong{font-size:13px}.window-label,.window-row,.slot-note{font-size:11px}.battery-now strong{font-size:14px}.battery-now b{font-size:26px}.soc-scale{font-size:10px}.detail span{font-size:10px}.detail strong,.control-row strong,.number-row strong,.cal-state strong{font-size:13px}.comparison p,.diag-line{font-size:13px}.control-row span,.number-row span,.cal-state span{font-size:10px}.action-btn,.message-list>div,.empty,.ack-card>p{font-size:12px}
+      @media(max-width:1350px){.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.summary-grid .energy-card{grid-row:span 2}.battery-upper{grid-template-columns:1fr}.battery-history .history-chart{height:190px}}
+      @media(max-width:1050px){.summary-grid{grid-template-columns:1fr}.summary-grid .energy-card{grid-row:auto}.summary-card{min-height:0}.battery-upper{grid-template-columns:minmax(205px,.52fr) minmax(320px,1.48fr)}}
+      @media(max-width:720px){.flow-canvas{min-height:320px}.window-label{align-items:flex-start;flex-direction:column;gap:3px}.ack-state{grid-template-columns:1fr}.number-input{width:94px}.summary-grid{gap:9px}.battery-upper{grid-template-columns:1fr}.history-chart{height:190px}.chart-empty{height:190px}.brand-copy strong{font-size:15px}.nav-item span{font-size:11px}.flow-node span{font-size:9px}}
     `;
   }
 
   _render() {
     if (!this.isConnected || !this._hass || !this._panel) return;
+    const oldFlow = typeof this.shadowRoot.querySelector === "function"
+      ? this.shadowRoot.querySelector(".flow-lines")
+      : null;
+    const flowTime = oldFlow && typeof oldFlow.getCurrentTime === "function"
+      ? oldFlow.getCurrentTime()
+      : null;
     const content = this._tab === "overview" ? this._overview()
       : this._tab === "batteries" ? this._batteries()
         : this._tab === "control" ? this._control() : this._diagnostics();
     this.shadowRoot.innerHTML = `<style>${this._styles()}</style>${this._header()}${content}`;
+    const newFlow = typeof this.shadowRoot.querySelector === "function"
+      ? this.shadowRoot.querySelector(".flow-lines")
+      : null;
+    if (newFlow && Number.isFinite(flowTime) && typeof newFlow.setCurrentTime === "function") {
+      newFlow.setCurrentTime(flowTime);
+    }
     this._bind();
   }
 
@@ -567,6 +849,10 @@ class SpeicherLadelogikPanel extends HTMLElement {
     }));
     this.shadowRoot.querySelectorAll("[data-number]").forEach((input) => input.addEventListener("change", () => this._setNumber(input.dataset.number, input.value)));
     this.shadowRoot.querySelectorAll("[data-press]").forEach((button) => button.addEventListener("click", () => this._press(button.dataset.press)));
+    this.shadowRoot.querySelectorAll("[data-history-hours]").forEach((button) => button.addEventListener("click", () => {
+      this._historyHours = Number(button.dataset.historyHours);
+      this._render();
+    }));
   }
 
   _moreInfo(entityId) {

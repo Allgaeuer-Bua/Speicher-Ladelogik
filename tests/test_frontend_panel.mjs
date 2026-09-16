@@ -39,6 +39,12 @@ function createPanel() {
       },
       sources: {
         pv: "sensor.pv_power",
+        grid: "sensor.grid_power",
+        house: "sensor.house_power",
+        power_a: "sensor.venus_a_power",
+        power_e: "sensor.venus_e_power",
+        soc_a: "sensor.venus_a_soc",
+        soc_e: "sensor.venus_e_soc",
         drift_e: "sensor.venus_e_cell_delta",
       },
     },
@@ -48,6 +54,12 @@ function createPanel() {
       "switch.speicher_ladelogik_mittagsspitzen": { state: "on", attributes: {} },
       "number.speicher_ladelogik_mindestreserve": { state: "2", attributes: {} },
       "sensor.pv_power": { state: "4200", attributes: {} },
+      "sensor.grid_power": { state: "-250", attributes: {} },
+      "sensor.house_power": { state: "1200", attributes: {} },
+      "sensor.venus_a_power": { state: "300", attributes: {} },
+      "sensor.venus_e_power": { state: "0", attributes: {} },
+      "sensor.venus_a_soc": { state: "65", attributes: {} },
+      "sensor.venus_e_soc": { state: "98", attributes: {} },
       "sensor.venus_e_cell_delta": {
         state: "0.008000135",
         attributes: { unit_of_measurement: "V" },
@@ -116,4 +128,46 @@ test("panel formats single-value drift sensors and register results", () => {
     }),
     "Venus E: Entladeleistung auf 0 W gesetzt und bestätigt",
   );
+});
+
+test("overview replaces duplicate battery cards with daily history cards", () => {
+  const { panel } = createPanel();
+  const overview = panel._overview();
+
+  assert.match(overview, /Energie heute/);
+  assert.match(overview, /SoC · heute/);
+  assert.match(overview, /Mittagsspitzenkappung/);
+  assert.doesNotMatch(overview, /battery-pair span-full/);
+  assert.match(panel._header(), />Speicher</);
+});
+
+test("daily battery energy separates charging and discharging signs", () => {
+  const { panel } = createPanel();
+  const now = Date.now();
+  panel._history = {
+    "sensor.venus_a_power": [
+      { s: "-1000", lu: (now - 7_200_000) / 1000 },
+      { s: "500", lu: (now - 3_600_000) / 1000 },
+      { s: "500", lu: now / 1000 },
+    ],
+  };
+
+  const energy = panel._batteryEnergy("a");
+  assert.ok(energy.charged > 0.99 && energy.charged < 1.01);
+  assert.ok(energy.discharged > 0.49 && energy.discharged < 0.51);
+  assert.match(panel._batteryCard("A", true), /Heute geladen/);
+  assert.match(panel._batteryCard("A", true), /Heute entladen/);
+});
+
+test("rerender preserves the running SVG flow timeline", () => {
+  const { panel } = createPanel();
+  let restored = null;
+  panel.isConnected = true;
+  panel.shadowRoot.querySelector = () => ({
+    getCurrentTime: () => 7.25,
+    setCurrentTime: (value) => { restored = value; },
+  });
+
+  panel._render();
+  assert.equal(restored, 7.25);
 });
