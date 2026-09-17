@@ -158,20 +158,39 @@ test("daily battery energy separates charging and discharging signs", () => {
   const energy = panel._batteryEnergy("a");
   assert.ok(energy.charged > 0.99 && energy.charged < 1.01);
   assert.ok(energy.discharged > 0.49 && energy.discharged < 0.51);
-  assert.match(panel._batteryCard("A", true), /Heute geladen/);
-  assert.match(panel._batteryCard("A", true), /Heute entladen/);
+  const card = panel._batteryCard("A", true);
+  assert.match(card, /Heute geladen/);
+  assert.match(card, /Heute entladen/);
+  assert.match(card, /Fahrplanlimit/);
+  assert.doesNotMatch(card, /Restbedarf/);
+  assert.doesNotMatch(card, />Verlust</);
 });
 
-test("energy flow uses stable curved direction paths without restarted motion", () => {
+test("energy flow uses a compact aggregate layout with stable direction paths", () => {
   const { panel } = createPanel();
   const flow = panel._flowCard();
 
-  assert.match(flow, /Erzeugung &amp; Netz/);
   assert.match(flow, /flow-route active/);
-  assert.match(flow, /C 650 74 560 82 500 207/);
-  assert.match(flow, /Speicher gesamt/);
+  assert.match(flow, /M 500 76 C 500 91 500 104 500 116/);
+  assert.match(flow, /viewBox="0 0 1000 260"/);
+  assert.match(flow, /Speicher ·/);
+  assert.doesNotMatch(flow, /flow-zone/);
   assert.doesNotMatch(flow, /Venus A ·/);
   assert.doesNotMatch(flow, /animateMotion/);
+});
+
+test("charts render a combined hover tooltip and clickable sensor legends", () => {
+  const { panel } = createPanel();
+  const now = Date.now();
+  const chart = panel._chart([
+    { name: "Solar", color: "#ffcf4a", entityId: "sensor.pv", points: [{ t: now - 1000, v: 1.2 }] },
+    { name: "Haus", color: "#8bd8e9", entityId: "sensor.house", points: [{ t: now - 1000, v: 0.8 }] },
+  ], { unit: " kW", hours: 1 });
+
+  assert.match(chart, /chart-tooltip/);
+  assert.match(chart, /chart-hover-plane/);
+  assert.match(chart, /data-entity="sensor\.pv"/);
+  assert.equal(panel._chartModels.size, 1);
 });
 
 test("every chart keeps its own selected history range", () => {

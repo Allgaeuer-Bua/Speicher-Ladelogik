@@ -67,6 +67,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
       batteryE: 24,
     };
     this._historySeriesCache = new Map();
+    this._chartModels = new Map();
+    this._chartSerial = 0;
   }
 
   set hass(value) {
@@ -442,15 +444,57 @@ class SpeicherLadelogikPanel extends HTMLElement {
         : "";
       const hitPoints = dataset.points.map((point) => {
         const stamp = new Date(point.t).toLocaleString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-        const value = `${this._decimal(point.v, 2)}${unit}`;
+        const tooltipValue = dataset.tooltipValue ? dataset.tooltipValue(point.v) : point.v;
+        const value = `${this._decimal(tooltipValue, 2)}${dataset.tooltipUnit ?? unit}`;
         const entity = dataset.entityId ? ` data-entity="${esc(dataset.entityId)}"` : "";
         return `<circle class="chart-hit" cx="${x(point.t).toFixed(1)}" cy="${y(point.v).toFixed(1)}" r="7"${entity}><title>${esc(`${dataset.name} · ${stamp}: ${value}`)}</title></circle>`;
       }).join("");
       return `${area}<path d="${path}" fill="none" stroke="${dataset.color}" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>${hitPoints}`;
     }).join("");
     const startLabel = new Date(start).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
-    const legend = visible.map((dataset) => `<span><i style="background:${dataset.color}"></i>${esc(dataset.name)}</span>`).join("");
-    return `<div class="chart-legend">${legend}</div><svg class="history-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">${ticks}${lines}<text x="${left}" y="184" class="chart-axis">${startLabel}</text><text x="${right}" y="184" text-anchor="end" class="chart-axis">jetzt</text></svg>`;
+    const legend = visible.map((dataset) => `<span${dataset.entityId ? ` class="entity-card" data-entity="${esc(dataset.entityId)}"` : ""}><i style="background:${dataset.color}"></i>${esc(dataset.name)}</span>`).join("");
+    const chartId = `chart-${this._chartSerial++}`;
+    this._chartModels.set(chartId, { datasets: visible, start, end, unit, left, right, width });
+    return `<div class="chart-shell" data-chart-id="${chartId}"><div class="chart-legend">${legend}</div><svg class="history-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">${ticks}${lines}<rect class="chart-hover-plane" x="${left}" y="${top}" width="${right - left}" height="${bottom - top}"></rect><text x="${left}" y="184" class="chart-axis">${startLabel}</text><text x="${right}" y="184" text-anchor="end" class="chart-axis">jetzt</text></svg><div class="chart-tooltip" role="status"></div></div>`;
+  }
+
+  _nearestPoint(points, time) {
+    if (!points.length) return null;
+    let nearest = points[0];
+    for (const point of points) {
+      if (Math.abs(point.t - time) < Math.abs(nearest.t - time)) nearest = point;
+    }
+    return nearest;
+  }
+
+  _showChartTooltip(shell, event) {
+    const model = this._chartModels.get(shell.dataset.chartId);
+    const svg = shell.querySelector(".history-chart");
+    const tooltip = shell.querySelector(".chart-tooltip");
+    if (!model || !svg || !tooltip) return;
+    const rect = svg.getBoundingClientRect();
+    const shellRect = shell.getBoundingClientRect();
+    const svgX = (event.clientX - rect.left) / Math.max(1, rect.width) * model.width;
+    if (svgX < model.left || svgX > model.right) {
+      tooltip.classList.remove("visible");
+      return;
+    }
+    const ratio = (svgX - model.left) / (model.right - model.left);
+    const time = model.start + ratio * (model.end - model.start);
+    const rows = model.datasets.map((dataset) => {
+      const point = this._nearestPoint(dataset.points, time);
+      if (!point) return "";
+      const raw = dataset.tooltipValue ? dataset.tooltipValue(point.v) : point.v;
+      const value = `${this._decimal(raw, 2)}${dataset.tooltipUnit ?? model.unit}`;
+      return `<div><i style="background:${dataset.color}"></i><span>${esc(dataset.name)}</span><strong>${esc(value)}</strong></div>`;
+    }).join("");
+    const stamp = new Date(time).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    tooltip.innerHTML = `<b>${esc(stamp)}</b>${rows}`;
+    const localX = event.clientX - shellRect.left;
+    tooltip.style.left = `${Math.max(50, Math.min(shellRect.width - 50, localX))}px`;
+    tooltip.style.top = `${Math.max(24, rect.top - shellRect.top + 16)}px`;
+    tooltip.classList.toggle("flip", localX > shellRect.width * 0.67);
+    tooltip.classList.add("visible");
   }
 
   _historyButtons(key) {
@@ -505,7 +549,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const limit = letter === "A" ? 1.5 : 2.5;
     return `<div class="battery-history"><div class="battery-history-title">SoC und Leistungsverlauf</div><div class="battery-chart-wrap">${this._chart([
       { name: "Leistung", color: "#8ea8ff", entityId: this._sid(`power_${suffix}`), points: this._historySeries(`power_${suffix}`).map((point) => ({ ...point, v: point.v / 1000 })) },
-      { name: "SoC", color: "#48d88b", entityId: this._sid(`soc_${suffix}`), points: this._historySeries(`soc_${suffix}`).map((point) => ({ ...point, v: point.v / 100 * limit * 2 - limit })) },
+      { name: "SoC", color: "#48d88b", entityId: this._sid(`soc_${suffix}`), tooltipValue: (value) => (value + limit) / (limit * 2) * 100, tooltipUnit: " %", points: this._historySeries(`soc_${suffix}`).map((point) => ({ ...point, v: point.v / 100 * limit * 2 - limit })) },
     ], { min: -limit, max: limit, unit: " kW", hours: this._historyHours[historyKey] })}<div class="battery-soc-axis"><span>100 %</span><span>50 %</span><span>0 %</span></div></div>${this._historyButtons(historyKey)}</div>`;
   }
 
@@ -621,25 +665,24 @@ class SpeicherLadelogikPanel extends HTMLElement {
       );
     }, 0);
     const batteryMode = this._batteryMode(batteryPower);
+    const batteryIcon = batteryMode.tone === "charge" ? "mdi:battery-arrow-up-outline"
+      : batteryMode.tone === "discharge" ? "mdi:battery-arrow-down-outline" : "mdi:battery-outline";
     const gridPath = grid >= 0
-      ? "M 185 74 C 350 74 440 82 500 207"
-      : "M 500 207 C 440 82 350 74 185 74";
-    const pvPath = "M 815 74 C 650 74 560 82 500 207";
+      ? "M 220 146 C 315 146 380 146 455 146"
+      : "M 455 146 C 380 146 315 146 220 146";
+    const pvPath = "M 500 76 C 500 91 500 104 500 116";
     const batteryPath = batteryPower < -10
-      ? "M 500 228 C 500 272 500 310 500 350"
-      : "M 500 350 C 500 310 500 272 500 228";
+      ? "M 545 146 C 620 146 685 146 780 146"
+      : "M 780 146 C 685 146 620 146 545 146";
     return `
       <section class="card flow-card span-7">
         ${this._cardTitle("mdi:transmission-tower", "Energiefluss", this._badge("Live", "good"))}
         <div class="flow-canvas">
-          <div class="flow-zone flow-zone-top"><span>Erzeugung &amp; Netz</span></div>
-          <div class="flow-zone flow-zone-bottom"><span>Speicher</span></div>
-          <div class="flow-home-label">Haus &amp; Verbrauch</div>
           <div class="flow-node grid entity-card" data-entity="${esc(this._sid("grid"))}"><ha-icon icon="mdi:transmission-tower"></ha-icon><strong>${this._power(Math.abs(grid))}</strong><span>Netz · ${Math.abs(grid) <= 10 ? "neutral" : grid > 0 ? "Bezug" : "Einspeisung"}</span></div>
           <div class="flow-node pv entity-card" data-entity="${esc(this._sid("pv"))}"><ha-icon icon="mdi:solar-power-variant"></ha-icon><strong>${this._power(pv)}</strong><span>PV</span></div>
           <div class="flow-core entity-card" data-entity="${esc(this._sid("house"))}"><ha-icon icon="mdi:home-lightning-bolt-outline"></ha-icon><strong>${this._power(home)}</strong><span>Haus</span></div>
-          <div class="flow-node battery"><ha-icon icon="mdi:battery-charging-60"></ha-icon><strong>${this._power(Math.abs(batteryPower))}</strong><span>Speicher gesamt · ${batteryMode.label.toLowerCase()}</span></div>
-          <svg class="flow-lines" viewBox="0 0 1000 420" preserveAspectRatio="none" aria-hidden="true">
+          <div class="flow-node battery"><ha-icon icon="${batteryIcon}"></ha-icon><strong>${this._power(Math.abs(batteryPower))}</strong><span>Speicher · ${batteryMode.label.toLowerCase()}</span></div>
+          <svg class="flow-lines" viewBox="0 0 1000 260" preserveAspectRatio="none" aria-hidden="true">
             <defs>
               <marker id="flow-arrow-grid" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 Z" fill="#ff9a55"></path></marker>
               <marker id="flow-arrow-pv" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 Z" fill="#ffbd45"></path></marker>
@@ -701,7 +744,6 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const target = this._num(this._attr("planung", `soll_ladegrenze_venus_${suffix}_w`, 0));
     const valid = this._state(`daten_venus_${suffix}`)?.state === "bereit";
     const efficiency = this._state(`wirkungsgrad_venus_${suffix}`)?.state;
-    const loss = this._state(`verlustleistung_venus_${suffix}`)?.state;
     const mode = this._batteryMode(power);
     const energy = this._batteryEnergy(suffix);
     return `
@@ -718,12 +760,10 @@ class SpeicherLadelogikPanel extends HTMLElement {
           ${full ? this._batteryHistory(letter) : ""}
         </div>
         <div class="metric-pairs compact">
-          ${this._metric("Restbedarf", this._energy(this._attr("planung", `restbedarf_venus_${suffix}_kwh`)), "mdi:battery-arrow-up")}
-          ${this._metric("Wirkungsgrad", this._percent(efficiency, 1), "mdi:percent-outline")}
-          ${this._metric("Verlust", this._power(loss), "mdi:lightning-bolt-outline")}
-          ${this._metric("Register", this._power(this._attr("planung", `fahrplan_ladegrenze_stabil_venus_${suffix}_w`)), "mdi:knob")}
           ${full ? this._metric("Heute geladen", this._historyEnergy(energy.charged), "mdi:battery-plus-outline") : ""}
           ${full ? this._metric("Heute entladen", this._historyEnergy(energy.discharged), "mdi:battery-minus-outline") : ""}
+          ${this._metric("Wirkungsgrad", this._percent(efficiency, 1), "mdi:percent-outline")}
+          ${this._metric("Fahrplanlimit", this._power(this._attr("planung", `fahrplan_ladegrenze_stabil_venus_${suffix}_w`)), "mdi:gauge")}
         </div>
         ${full ? this._batteryDetails(letter) : ""}
       </section>`;
@@ -939,11 +979,9 @@ class SpeicherLadelogikPanel extends HTMLElement {
       @media(max-width:1350px){.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.summary-grid .energy-card{grid-row:span 2}.battery-upper{grid-template-columns:1fr}.battery-history .history-chart{height:190px}}
       @media(max-width:1050px){.summary-grid{grid-template-columns:1fr}.summary-grid .energy-card{grid-row:auto}.summary-card{min-height:0}.battery-upper{grid-template-columns:minmax(205px,.52fr) minmax(320px,1.48fr)}}
       @media(max-width:720px){.flow-canvas{min-height:320px}.window-label{align-items:flex-start;flex-direction:column;gap:3px}.ack-state{grid-template-columns:1fr}.number-input{width:94px}.summary-grid{gap:9px}.battery-upper{grid-template-columns:1fr}.history-chart{height:190px}.chart-empty{height:190px}.brand-copy strong{font-size:15px}.nav-item span{font-size:11px}.flow-node span{font-size:9px}}
-      .flow-canvas{display:block;min-height:360px;position:relative;overflow:hidden}
-      .flow-zone{position:absolute;left:8%;right:8%;height:105px;border:1px solid rgba(144,177,164,.16);border-radius:14px;background:rgba(7,15,18,.2);z-index:0}.flow-zone>span{position:absolute;top:7px;left:50%;transform:translateX(-50%);font-size:10px;font-weight:700;letter-spacing:.055em;text-transform:uppercase;color:var(--muted);white-space:nowrap}.flow-zone-top{top:4px}.flow-zone-bottom{top:248px}.flow-home-label{position:absolute;left:50%;top:118px;transform:translateX(-50%);z-index:2;color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.055em;text-transform:uppercase;white-space:nowrap}
-      .flow-node,.flow-core{position:absolute;transform:translateX(-50%);z-index:3}.flow-node.grid{left:18.5%;top:17px}.flow-node.pv{left:81.5%;top:17px}.flow-core{left:50%;top:137px}.flow-node.battery{left:50%;top:270px;color:var(--accent)}.flow-lines{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible}.flow-route{fill:none;stroke:rgba(132,169,156,.22);stroke-width:.8;stroke-dasharray:7 8;vector-effect:non-scaling-stroke}.flow-route.active{stroke:var(--flow-color);stroke-width:1.2;stroke-dasharray:none;stroke-linecap:round;filter:drop-shadow(0 0 2px var(--flow-color))}.flow-node ha-icon{box-shadow:none}.flow-core ha-icon{box-shadow:0 0 18px rgba(82,184,255,.16)}
-      .chart-hit{fill:transparent;stroke:transparent;pointer-events:all;cursor:pointer}.chart-hit:hover{fill:var(--accent2);opacity:.85}.drift-values{display:flex;gap:5px;flex-wrap:wrap}.drift-value{border:0;border-radius:10px;padding:3px 7px;cursor:pointer}.drift-value.good{color:#61e69a;background:rgba(56,213,130,.13)}.drift-value.warn{color:#ffd078;background:rgba(255,189,69,.14)}.drift-value.bad{color:#ff8a8a;background:rgba(255,107,107,.14)}.drift-value.neutral{color:var(--muted);background:rgba(130,150,145,.12)}.storage-slots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}.storage-slots>div{display:grid;grid-template-columns:auto auto;gap:3px 8px;padding:8px;border-radius:8px;background:rgba(110,135,125,.06)}.storage-slots span{justify-self:end;color:var(--accent)}.storage-slots small{grid-column:1/-1;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.entity-card{transition:border-color .15s,background .15s}.entity-card:hover{border-color:rgba(82,184,255,.3);background-color:rgba(82,184,255,.04)}
-      @media(max-width:720px){.flow-canvas{min-height:330px}.flow-zone{left:3%;right:3%;height:96px}.flow-zone-bottom{top:229px}.flow-home-label{top:107px}.flow-node.grid,.flow-node.pv{top:15px}.flow-node.grid{left:17%}.flow-node.pv{left:83%}.flow-core{top:123px}.flow-node.battery{top:245px;left:50%}.storage-slots{grid-template-columns:1fr}}
+      .flow-canvas{display:block;min-height:260px;position:relative;overflow:hidden}.flow-node,.flow-core{position:absolute;transform:translateX(-50%);z-index:3}.flow-node.grid{left:16%;top:96px}.flow-node.pv{left:50%;top:0}.flow-core{left:50%;top:86px}.flow-node.battery{left:84%;top:96px;color:var(--accent)}.flow-lines{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible}.flow-route{fill:none;stroke:rgba(132,169,156,.2);stroke-width:.75;stroke-dasharray:7 8;vector-effect:non-scaling-stroke}.flow-route.active{stroke:var(--flow-color);stroke-width:1.05;stroke-dasharray:none;stroke-linecap:round;filter:drop-shadow(0 0 2px var(--flow-color))}.flow-node ha-icon{box-shadow:none}.flow-core ha-icon{box-shadow:0 0 18px rgba(82,184,255,.16)}
+      .chart-shell{position:relative;min-width:0}.chart-hover-plane{fill:transparent;pointer-events:none}.chart-tooltip{position:absolute;z-index:6;min-width:155px;padding:9px 11px;border:1px solid rgba(144,177,164,.22);border-radius:9px;background:rgba(8,15,18,.96);box-shadow:0 8px 24px rgba(0,0,0,.38);opacity:0;visibility:hidden;pointer-events:none;transform:translateX(12px);transition:opacity .08s;color:var(--primary-text-color)}.chart-tooltip.visible{opacity:1;visibility:visible}.chart-tooltip.flip{transform:translateX(calc(-100% - 12px))}.chart-tooltip>b{display:block;margin-bottom:6px;font-size:11px;color:var(--muted)}.chart-tooltip>div{display:grid;grid-template-columns:9px 1fr auto;gap:7px;align-items:center;font-size:12px;padding:2px 0}.chart-tooltip i{width:8px;height:8px;border-radius:2px}.chart-tooltip strong{font-size:12px}.chart-legend .entity-card{cursor:pointer;padding:2px 4px;border-radius:5px}.chart-hit{fill:transparent;stroke:transparent;pointer-events:all;cursor:pointer}.chart-hit:hover{fill:var(--accent2);opacity:.85}.drift-values{display:flex;gap:5px;flex-wrap:wrap}.drift-value{border:0;border-radius:10px;padding:3px 7px;cursor:pointer}.drift-value.good{color:#61e69a;background:rgba(56,213,130,.13)}.drift-value.warn{color:#ffd078;background:rgba(255,189,69,.14)}.drift-value.bad{color:#ff8a8a;background:rgba(255,107,107,.14)}.drift-value.neutral{color:var(--muted);background:rgba(130,150,145,.12)}.storage-slots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}.storage-slots>div{display:grid;grid-template-columns:auto auto;gap:3px 8px;padding:8px;border-radius:8px;background:rgba(110,135,125,.06)}.storage-slots span{justify-self:end;color:var(--accent)}.storage-slots small{grid-column:1/-1;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.entity-card{transition:border-color .15s,background .15s}.entity-card:hover{border-color:rgba(82,184,255,.3);background-color:rgba(82,184,255,.04)}
+      @media(max-width:720px){.flow-canvas{min-height:250px}.flow-node.grid{left:14%;top:94px}.flow-node.pv{left:50%;top:0}.flow-core{left:50%;top:84px}.flow-node.battery{left:86%;top:94px}.storage-slots{grid-template-columns:1fr}.chart-tooltip{min-width:135px;padding:7px 9px}.chart-tooltip>div{font-size:11px}}
       .battery-pair{grid-template-columns:repeat(auto-fit,minmax(390px,1fr))}.comparison-grid{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}.control-columns.manual-columns{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}.action-groups{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}.storage-slots{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
       @media(max-width:720px){.battery-pair,.comparison-grid,.control-columns.manual-columns,.action-groups,.storage-slots{grid-template-columns:1fr}}
     `;
@@ -951,6 +989,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _render() {
     if (!this.isConnected || !this._hass || !this._panel) return;
+    this._chartModels = new Map();
+    this._chartSerial = 0;
     const content = this._tab === "overview" ? this._overview()
       : this._tab === "batteries" ? this._batteries()
         : this._tab === "control" ? this._control() : this._diagnostics();
@@ -980,6 +1020,11 @@ class SpeicherLadelogikPanel extends HTMLElement {
       if (key) this._historyHours[key] = Number(button.dataset.historyHours);
       this._render();
     }));
+    this.shadowRoot.querySelectorAll("[data-chart-id]").forEach((shell) => {
+      const svg = shell.querySelector(".history-chart");
+      svg?.addEventListener("pointermove", (event) => this._showChartTooltip(shell, event));
+      svg?.addEventListener("pointerleave", () => shell.querySelector(".chart-tooltip")?.classList.remove("visible"));
+    });
   }
 
   _moreInfo(entityId) {
