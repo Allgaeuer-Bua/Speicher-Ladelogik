@@ -69,3 +69,37 @@ def test_encoders_use_integration_formats() -> None:
     assert PERSISTENCE.encode_queue(
         {"E": {"n": 1789450200, "t": 1789440000, "d": "-"}}
     ).startswith("queue1|")
+
+
+def test_round_trips_three_storage_backup_and_queue() -> None:
+    backup = {
+        "A": 1100,
+        "D": 1300,
+        "E": 1400,
+        "DA": 1500,
+        "DD": 2500,
+        "DE": 2500,
+    }
+    encoded_backup = PERSISTENCE.encode_backup(backup)
+    assert encoded_backup.startswith("backup2|")
+    assert PERSISTENCE.read_backup(encoded_backup) == {
+        key: float(value) for key, value in backup.items()
+    }
+
+    queue = {
+        "A": {"n": 1, "t": 2, "d": "-"},
+        "D": {"n": 3, "t": 4, "d": "A"},
+        "E": {"n": 5, "t": 6, "d": "D"},
+    }
+    encoded_queue = PERSISTENCE.encode_queue(queue)
+    assert encoded_queue.startswith("queue2|")
+    assert PERSISTENCE.read_queue(encoded_queue) == queue
+
+
+def test_single_venus_d_backup_fills_unused_slots_safely() -> None:
+    encoded = PERSISTENCE.encode_backup({"D": 1300, "DD": 2500})
+    decoded = PERSISTENCE.read_backup(encoded)
+    assert decoded is not None
+    assert decoded["D"] == 1300
+    assert decoded["DD"] == 2500
+    assert decoded["A"] == decoded["E"] == -1

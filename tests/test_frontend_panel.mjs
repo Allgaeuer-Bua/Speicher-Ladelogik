@@ -24,7 +24,7 @@ await import(
   "../custom_components/speicher_ladelogik/frontend/speicher-ladelogik-panel.js"
 );
 
-const Panel = registry.get("speicher-ladelogik-panel-1-0-0-rc-8");
+const Panel = registry.get("speicher-ladelogik-panel-1-0-0-rc-9");
 
 function createPanel() {
   const calls = [];
@@ -117,6 +117,9 @@ test("panel formats single-value drift sensors and register results", () => {
   const [drift] = panel._sourceStates("drift_e");
 
   assert.equal(panel._drift(drift), "8 mV");
+  assert.equal(panel._driftTone(panel._driftValue(drift)), "good");
+  assert.equal(panel._driftTone(35), "warn");
+  assert.equal(panel._driftTone(50), "bad");
   assert.equal(
     panel._formatWriteResult({
       entity: "number.marstek_venus_e_entladeleistung",
@@ -166,6 +169,8 @@ test("energy flow uses stable curved direction paths without restarted motion", 
   assert.match(flow, /Erzeugung &amp; Netz/);
   assert.match(flow, /flow-route active/);
   assert.match(flow, /C 650 74 560 82 500 207/);
+  assert.match(flow, /Speicher gesamt/);
+  assert.doesNotMatch(flow, /Venus A ·/);
   assert.doesNotMatch(flow, /animateMotion/);
 });
 
@@ -181,4 +186,35 @@ test("every chart keeps its own selected history range", () => {
   assert.match(panel._historyButtons("overviewSoc"), /data-history-hours="6" class="active"/);
   assert.match(panel._historyButtons("batteryA"), /data-history-hours="12" class="active"/);
   assert.match(panel._historyButtons("batteryE"), /data-history-hours="24" class="active"/);
+});
+
+test("configured storage models drive cards, slots, controls, and diagnostics", () => {
+  const { panel } = createPanel();
+  panel._panel.config.models = ["D"];
+  panel._panel.config.sources.soc_d = "sensor.venus_d_soc";
+  panel._panel.config.sources.power_d = "sensor.venus_d_power";
+  panel._hass.states["sensor.venus_d_soc"] = { state: "70", attributes: {} };
+  panel._hass.states["sensor.venus_d_power"] = { state: "0", attributes: {} };
+
+  assert.deepEqual(panel._models(), ["D"]);
+  assert.match(panel._batteries(), /Venus D/);
+  assert.doesNotMatch(panel._batteries(), /Venus A/);
+  assert.doesNotMatch(panel._batteries(), /Venus E/);
+  assert.match(panel._planningCard(), /Venus D/);
+  assert.match(panel._control(), /Handbetrieb Venus D/);
+  assert.match(panel._diagnostics(), /Venus D/);
+});
+
+test("A and D show only their configured MPPT sensors", () => {
+  const { panel } = createPanel();
+  panel._panel.config.sources.mppt_d = ["sensor.venus_d_mppt_1"];
+  panel._hass.states["sensor.venus_d_mppt_1"] = {
+    state: "812.345",
+    attributes: { unit_of_measurement: "W" },
+    entity_id: "sensor.venus_d_mppt_1",
+  };
+
+  assert.match(panel._mpptDetails("d"), /MPPT 1/);
+  assert.match(panel._mpptDetails("d"), /812,35 W/);
+  assert.equal(panel._mpptDetails("a"), "");
 });

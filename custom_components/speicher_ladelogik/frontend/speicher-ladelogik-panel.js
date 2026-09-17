@@ -24,8 +24,6 @@ const PHASE_LABELS = {
 
 const NUMBER_GROUPS = {
   leistung: [
-    ["bevorzugte_ladeleistung_venus_a", "Venus A", "Bevorzugte Ladeleistung"],
-    ["bevorzugte_ladeleistung_venus_e", "Venus E", "Bevorzugte Ladeleistung"],
     ["min_effiziente_leistung", "Mindestleistung", "Effiziente Untergrenze"],
   ],
   planung: [
@@ -65,6 +63,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       overviewPower: 24,
       overviewSoc: 24,
       batteryA: 24,
+      batteryD: 24,
       batteryE: 24,
     };
     this._historySeriesCache = new Map();
@@ -97,6 +96,14 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _config() {
     return this._panel?.config || {};
+  }
+
+  _models() {
+    const configured = this._config().models;
+    const models = Array.isArray(configured)
+      ? configured.filter((model) => ["A", "D", "E"].includes(model))
+      : [];
+    return models.length ? models : ["A", "E"];
   }
 
   _eid(key) {
@@ -174,6 +181,21 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return `${this._decimal(millivolts)} mV`;
   }
 
+  _driftValue(entity) {
+    if (!this._available(entity)) return null;
+    const raw = this._num(entity.state, NaN);
+    if (!Number.isFinite(raw)) return null;
+    return String(entity.attributes?.unit_of_measurement || "mV").toLowerCase() === "v"
+      ? raw * 1000 : raw;
+  }
+
+  _driftTone(value) {
+    if (!Number.isFinite(value)) return "neutral";
+    if (value <= 20) return "good";
+    if (value < 50) return "warn";
+    return "bad";
+  }
+
   _sourceStates(key) {
     const source = this._config().sources?.[key];
     const entityIds = Array.isArray(source) ? source : source ? [source] : [];
@@ -182,7 +204,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _statusLabel(value) {
     const text = String(value ?? "—");
-    const match = text.match(/^Kalibrierung\s+([AE]):\s*([a-z_]+)$/i);
+    const match = text.match(/^Kalibrierung\s+([ADE]):\s*([a-z_]+)$/i);
     if (match) return `Kalibrierung ${match[1].toUpperCase()}: ${PHASE_LABELS[match[2].toLowerCase()] || match[2]}`;
     return PHASE_LABELS[text.toLowerCase()] || text;
   }
@@ -198,7 +220,13 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 
   _historySourceIds() {
-    return ["pv", "grid", "house", "power_a", "power_e", "soc_a", "soc_e"]
+    return [
+      "pv", "grid", "house",
+      ...this._models().flatMap((model) => [
+        `power_${model.toLowerCase()}`,
+        `soc_${model.toLowerCase()}`,
+      ]),
+    ]
       .map((key) => this._sid(key))
       .filter(Boolean);
   }
@@ -301,19 +329,24 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _combinedBatteryPower() {
     return this._mergeSeries(
-      [this._historySeries("power_a"), this._historySeries("power_e")],
+      this._models().map((model) => this._historySeries(`power_${model.toLowerCase()}`)),
       (values) => values.reduce((sum, value) => sum + value, 0),
     );
   }
 
   _combinedSoc() {
-    const capA = this._entityNum(this._state("nennkapazitaet_venus_a"), 4.16);
-    const capE = this._entityNum(this._state("nennkapazitaet_venus_e"), 5.12);
+    const defaults = { A: 4.16, D: 5.12, E: 5.12 };
+    const available = this._models().map((model) => {
+      const suffix = model.toLowerCase();
+      return {
+        cap: this._entityNum(this._state(`nennkapazitaet_venus_${suffix}`), defaults[model]),
+        series: this._historySeries(`soc_${suffix}`),
+      };
+    }).filter((item) => item.series.length);
+    const totalCapacity = available.reduce((sum, item) => sum + item.cap, 0);
     return this._mergeSeries(
-      [this._historySeries("soc_a"), this._historySeries("soc_e")],
-      (values) => values.length > 1
-        ? (values[0] * capA + values[1] * capE) / Math.max(0.1, capA + capE)
-        : values[0],
+      available.map((item) => item.series.map((point) => ({ ...point, v: point.v * item.cap }))),
+      (values) => values.reduce((sum, value) => sum + value, 0) / Math.max(0.1, totalCapacity),
     );
   }
 
@@ -407,11 +440,17 @@ class SpeicherLadelogikPanel extends HTMLElement {
       const area = fill && visible.length === 1
         ? `<path d="M${x(dataset.points[0].t).toFixed(1)},${bottom} ${path.replace(/^M/, "L")} L${x(dataset.points.at(-1).t).toFixed(1)},${bottom} Z" fill="${dataset.color}" opacity=".13"></path>`
         : "";
-      return `${area}<path d="${path}" fill="none" stroke="${dataset.color}" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>`;
+      const hitPoints = dataset.points.map((point) => {
+        const stamp = new Date(point.t).toLocaleString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        const value = `${this._decimal(point.v, 2)}${unit}`;
+        const entity = dataset.entityId ? ` data-entity="${esc(dataset.entityId)}"` : "";
+        return `<circle class="chart-hit" cx="${x(point.t).toFixed(1)}" cy="${y(point.v).toFixed(1)}" r="7"${entity}><title>${esc(`${dataset.name} · ${stamp}: ${value}`)}</title></circle>`;
+      }).join("");
+      return `${area}<path d="${path}" fill="none" stroke="${dataset.color}" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>${hitPoints}`;
     }).join("");
     const startLabel = new Date(start).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
     const legend = visible.map((dataset) => `<span><i style="background:${dataset.color}"></i>${esc(dataset.name)}</span>`).join("");
-    return `<div class="chart-legend">${legend}</div><svg class="history-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">${ticks}${lines}<text x="${left}" y="184" class="chart-axis">${startLabel}</text><text x="${right}" y="184" text-anchor="end" class="chart-axis">jetzt</text></svg>`;
+    return `<div class="chart-legend">${legend}</div><svg class="history-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">${ticks}${lines}<text x="${left}" y="184" class="chart-axis">${startLabel}</text><text x="${right}" y="184" text-anchor="end" class="chart-axis">jetzt</text></svg>`;
   }
 
   _historyButtons(key) {
@@ -425,11 +464,10 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 
   _energyTodayCard() {
-    const a = this._batteryEnergy("a");
-    const e = this._batteryEnergy("e");
+    const batteries = this._models().map((model) => this._batteryEnergy(model.toLowerCase()));
     const values = {
-      charged: this._sumEnergy([a.charged, e.charged]),
-      discharged: this._sumEnergy([a.discharged, e.discharged]),
+      charged: this._sumEnergy(batteries.map((battery) => battery.charged)),
+      discharged: this._sumEnergy(batteries.map((battery) => battery.discharged)),
       solar: this._positiveEnergy("pv"),
       house: this._positiveEnergy("house"),
       imported: this._positiveEnergy("grid"),
@@ -448,10 +486,10 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _overviewPowerCard() {
     return `<section class="card summary-card">${this._cardTitle("mdi:flash-outline", "Leistung")}${this._chart([
-      { name: "Solar", color: "#ffcf4a", points: this._historySeries("pv").map((point) => ({ ...point, v: point.v / 1000 })) },
-      { name: "Haus", color: "#8bd8e9", points: this._historySeries("house").map((point) => ({ ...point, v: point.v / 1000 })) },
+      { name: "Solar", color: "#ffcf4a", entityId: this._sid("pv"), points: this._historySeries("pv").map((point) => ({ ...point, v: point.v / 1000 })) },
+      { name: "Haus", color: "#8bd8e9", entityId: this._sid("house"), points: this._historySeries("house").map((point) => ({ ...point, v: point.v / 1000 })) },
       { name: "Batterie", color: "#52d990", points: this._combinedBatteryPower().map((point) => ({ ...point, v: point.v / 1000 })) },
-      { name: "Netz", color: "#8ea8ff", points: this._historySeries("grid").map((point) => ({ ...point, v: point.v / 1000 })) },
+      { name: "Netz", color: "#8ea8ff", entityId: this._sid("grid"), points: this._historySeries("grid").map((point) => ({ ...point, v: point.v / 1000 })) },
     ], { unit: " kW", hours: this._historyHours.overviewPower })}${this._historyButtons("overviewPower")}</section>`;
   }
 
@@ -464,10 +502,11 @@ class SpeicherLadelogikPanel extends HTMLElement {
   _batteryHistory(letter) {
     const suffix = letter.toLowerCase();
     const historyKey = `battery${letter}`;
+    const limit = letter === "A" ? 1.5 : 2.5;
     return `<div class="battery-history"><div class="battery-history-title">SoC und Leistungsverlauf</div><div class="battery-chart-wrap">${this._chart([
-      { name: "Leistung", color: "#8ea8ff", points: this._historySeries(`power_${suffix}`).map((point) => ({ ...point, v: point.v / 1000 })) },
-      { name: "SoC", color: "#48d88b", points: this._historySeries(`soc_${suffix}`).map((point) => ({ ...point, v: point.v / 100 * 6 - 3 })) },
-    ], { min: -3, max: 3, unit: " kW", hours: this._historyHours[historyKey] })}<div class="battery-soc-axis"><span>100 %</span><span>50 %</span><span>0 %</span></div></div>${this._historyButtons(historyKey)}</div>`;
+      { name: "Leistung", color: "#8ea8ff", entityId: this._sid(`power_${suffix}`), points: this._historySeries(`power_${suffix}`).map((point) => ({ ...point, v: point.v / 1000 })) },
+      { name: "SoC", color: "#48d88b", entityId: this._sid(`soc_${suffix}`), points: this._historySeries(`soc_${suffix}`).map((point) => ({ ...point, v: point.v / 100 * limit * 2 - limit })) },
+    ], { min: -limit, max: limit, unit: " kW", hours: this._historyHours[historyKey] })}<div class="battery-soc-axis"><span>100 %</span><span>50 %</span><span>0 %</span></div></div>${this._historyButtons(historyKey)}</div>`;
   }
 
   _time(timestamp) {
@@ -530,13 +569,23 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const mode = this._attr("status", "betriebsart", this._state("betriebsart")?.state || "—");
     const valid = status?.state === "Bereit";
     const writes = Boolean(this._attr("status", "schreibzugriffe_aktiv", false));
-    const socA = this._entityNum(this._source("soc_a"), this._num(this._attr("status", "soc_venus_a", 0)));
-    const socE = this._entityNum(this._source("soc_e"), this._num(this._attr("status", "soc_venus_e", 0)));
-    const capA = this._entityNum(this._state("nennkapazitaet_venus_a"), 4.16);
-    const capE = this._entityNum(this._state("nennkapazitaet_venus_e"), 5.12);
-    const combined = Math.max(0, Math.min(100, (socA * capA + socE * capE) / Math.max(0.1, capA + capE)));
+    const defaults = { A: 4.16, D: 5.12, E: 5.12 };
+    const batteries = this._models().map((model) => {
+      const suffix = model.toLowerCase();
+      return {
+        soc: this._entityNum(this._source(`soc_${suffix}`), this._num(this._attr("status", `soc_venus_${suffix}`, 0))),
+        cap: this._entityNum(this._state(`nennkapazitaet_venus_${suffix}`), defaults[model]),
+      };
+    });
+    const totalCapacity = batteries.reduce((sum, battery) => sum + battery.cap, 0);
+    const combined = Math.max(0, Math.min(100,
+      batteries.reduce((sum, battery) => sum + battery.soc * battery.cap, 0)
+      / Math.max(0.1, totalCapacity)));
     const planStatus = this._statusLabel(this._state("planung")?.state || "—");
-    const calibration = this._state("kalibrierung")?.state || "—";
+    const calibrationState = this._state("kalibrierung")?.state || "—";
+    const calibrationBattery = this._attr("kalibrierung", "batterie", null);
+    const calibration = calibrationBattery && !["Bereit", "—"].includes(calibrationState)
+      ? `Venus ${calibrationBattery}: ${calibrationState}` : calibrationState;
     const peak = this._isOn("mittagsspitzen");
     return `
       <section class="card system-card span-full">
@@ -564,20 +613,21 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const pv = this._entityNum(this._source("pv"), this._num(this._attr("status", "pv_ac_w", 0)));
     const grid = this._entityNum(this._source("grid"), NaN);
     const home = this._entityNum(this._source("house"), NaN);
-    const powerA = this._entityNum(this._source("power_a"), this._num(this._attr("status", "ac_leistung_venus_a_w", 0)));
-    const powerE = this._entityNum(this._source("power_e"), this._num(this._attr("status", "ac_leistung_venus_e_w", 0)));
-    const modeA = this._batteryMode(powerA);
-    const modeE = this._batteryMode(powerE);
+    const batteryPower = this._models().reduce((sum, model) => {
+      const suffix = model.toLowerCase();
+      return sum + this._entityNum(
+        this._source(`power_${suffix}`),
+        this._num(this._attr("status", `ac_leistung_venus_${suffix}_w`, 0)),
+      );
+    }, 0);
+    const batteryMode = this._batteryMode(batteryPower);
     const gridPath = grid >= 0
       ? "M 185 74 C 350 74 440 82 500 207"
       : "M 500 207 C 440 82 350 74 185 74";
     const pvPath = "M 815 74 C 650 74 560 82 500 207";
-    const aPath = powerA < -10
-      ? "M 482 228 C 405 286 330 350 185 350"
-      : "M 185 350 C 330 350 405 286 482 228";
-    const ePath = powerE < -10
-      ? "M 518 228 C 595 286 670 350 815 350"
-      : "M 815 350 C 670 350 595 286 518 228";
+    const batteryPath = batteryPower < -10
+      ? "M 500 228 C 500 272 500 310 500 350"
+      : "M 500 350 C 500 310 500 272 500 228";
     return `
       <section class="card flow-card span-7">
         ${this._cardTitle("mdi:transmission-tower", "Energiefluss", this._badge("Live", "good"))}
@@ -585,11 +635,10 @@ class SpeicherLadelogikPanel extends HTMLElement {
           <div class="flow-zone flow-zone-top"><span>Erzeugung &amp; Netz</span></div>
           <div class="flow-zone flow-zone-bottom"><span>Speicher</span></div>
           <div class="flow-home-label">Haus &amp; Verbrauch</div>
-          <div class="flow-node grid"><ha-icon icon="mdi:transmission-tower"></ha-icon><strong>${this._power(Math.abs(grid))}</strong><span>Netz · ${Math.abs(grid) <= 10 ? "neutral" : grid > 0 ? "Bezug" : "Einspeisung"}</span></div>
-          <div class="flow-node pv"><ha-icon icon="mdi:solar-power-variant"></ha-icon><strong>${this._power(pv)}</strong><span>PV</span></div>
-          <div class="flow-core"><ha-icon icon="mdi:home-lightning-bolt-outline"></ha-icon><strong>${this._power(home)}</strong><span>Haus</span></div>
-          <div class="flow-node batt-a"><ha-icon icon="mdi:battery-charging-60"></ha-icon><strong>${this._power(Math.abs(powerA))}</strong><span>Venus A · ${modeA.label.toLowerCase()}</span></div>
-          <div class="flow-node batt-e"><ha-icon icon="mdi:battery-charging-60"></ha-icon><strong>${this._power(Math.abs(powerE))}</strong><span>Venus E · ${modeE.label.toLowerCase()}</span></div>
+          <div class="flow-node grid entity-card" data-entity="${esc(this._sid("grid"))}"><ha-icon icon="mdi:transmission-tower"></ha-icon><strong>${this._power(Math.abs(grid))}</strong><span>Netz · ${Math.abs(grid) <= 10 ? "neutral" : grid > 0 ? "Bezug" : "Einspeisung"}</span></div>
+          <div class="flow-node pv entity-card" data-entity="${esc(this._sid("pv"))}"><ha-icon icon="mdi:solar-power-variant"></ha-icon><strong>${this._power(pv)}</strong><span>PV</span></div>
+          <div class="flow-core entity-card" data-entity="${esc(this._sid("house"))}"><ha-icon icon="mdi:home-lightning-bolt-outline"></ha-icon><strong>${this._power(home)}</strong><span>Haus</span></div>
+          <div class="flow-node battery"><ha-icon icon="mdi:battery-charging-60"></ha-icon><strong>${this._power(Math.abs(batteryPower))}</strong><span>Speicher gesamt · ${batteryMode.label.toLowerCase()}</span></div>
           <svg class="flow-lines" viewBox="0 0 1000 420" preserveAspectRatio="none" aria-hidden="true">
             <defs>
               <marker id="flow-arrow-grid" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 Z" fill="#ff9a55"></path></marker>
@@ -599,8 +648,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
             </defs>
             ${this._flowPath(Math.abs(grid) > 10, gridPath, "#ff9a55", "flow-arrow-grid")}
             ${this._flowPath(pv > 10, pvPath, "#ffbd45", "flow-arrow-pv")}
-            ${this._flowPath(Math.abs(powerA) > 10, aPath, modeA.tone === "charge" ? "#38d582" : "#b493ff", modeA.tone === "charge" ? "flow-arrow-charge" : "flow-arrow-discharge")}
-            ${this._flowPath(Math.abs(powerE) > 10, ePath, modeE.tone === "charge" ? "#38d582" : "#b493ff", modeE.tone === "charge" ? "flow-arrow-charge" : "flow-arrow-discharge")}
+            ${this._flowPath(Math.abs(batteryPower) > 10, batteryPath, batteryMode.tone === "charge" ? "#38d582" : "#b493ff", batteryMode.tone === "charge" ? "flow-arrow-charge" : "flow-arrow-discharge")}
           </svg>
         </div>
       </section>`;
@@ -624,6 +672,9 @@ class SpeicherLadelogikPanel extends HTMLElement {
         </div>
         <div class="window-label"><span>Ladefenster</span><small>Zeitraum für die geplante PV-Ladung</small></div>
         <div class="window-row"><span>${this._time(this._attr("planung", "ladefenster_start_ts"))}</span><div class="progress"><i style="width:${progress}%"></i></div><span>${this._time(this._attr("planung", "ladefenster_ende_ts"))}</span></div>
+        <div class="storage-slots">
+          ${this._models().map((model) => this._storageSlot(model, model.toLowerCase())).join("")}
+        </div>
         <div class="slot-note"><ha-icon icon="mdi:lock-clock"></ha-icon> Entscheidung fixiert bis ${this._time(lockedUntil)}</div>
         ${this._peakDetails()}
       </section>`;
@@ -631,6 +682,14 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _metric(label, value, icon) {
     return `<div class="metric"><ha-icon icon="${icon}"></ha-icon><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`;
+  }
+
+  _storageSlot(letter, suffix) {
+    const active = Boolean(this._attr("planung", `fahrplan_slot_aktiv_venus_${suffix}`, false));
+    const start = this._time(this._attr("planung", "fahrplan_slot_start_ts"));
+    const end = this._time(this._attr("planung", "fahrplan_slot_ende_ts"));
+    const reason = this._attr("planung", `fahrplan_slot_grund_venus_${suffix}`, "—");
+    return `<div><strong>Venus ${letter}</strong><span>${active ? `${start}–${end} geplant` : "aktuell pausiert"}</span><small>${esc(reason)}</small></div>`;
   }
 
   _batteryCard(letter, full = false) {
@@ -651,8 +710,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
         <div class="${full ? "battery-upper" : ""}">
           <div class="battery-current">
             <div class="battery-main">
-              <div class="battery-gauge"><div style="height:${Math.max(4, Math.min(100, soc))}%"></div><span>${Math.round(soc)}%</span></div>
-              <div class="battery-now"><span class="mode-dot ${mode.tone}"></span><strong>${mode.label}</strong><b>${this._power(Math.abs(power))}</b><small>Sollgrenze ${this._power(target)}</small></div>
+              <div class="battery-gauge entity-card" data-entity="${esc(this._sid(`soc_${suffix}`))}"><div style="height:${Math.max(4, Math.min(100, soc))}%"></div><span>${Math.round(soc)}%</span></div>
+              <div class="battery-now entity-card" data-entity="${esc(this._sid(`power_${suffix}`))}"><span class="mode-dot ${mode.tone}"></span><strong>${mode.label}</strong><b>${this._power(Math.abs(power))}</b><small>Sollgrenze ${this._power(target)}</small></div>
             </div>
             <div class="soc-scale"><span>Min ${this._percent(minSoc)}</span><i><b style="left:${Math.max(0, Math.min(100, soc))}%"></b></i><span>Max ${this._percent(maxSoc)}</span></div>
           </div>
@@ -676,7 +735,11 @@ class SpeicherLadelogikPanel extends HTMLElement {
     if (!packStates.length && s === "e" && this._source("soc_e")) packStates.push(this._source("soc_e"));
     const driftStates = this._sourceStates(`drift_${s}`);
     const packs = packStates.map((entity) => this._measurement(entity, "%"));
-    const drifts = driftStates.map((entity) => this._drift(entity));
+    const drifts = driftStates.map((entity) => ({
+      label: this._drift(entity),
+      value: this._driftValue(entity),
+      entityId: entity?.entity_id,
+    }));
     const voltage = this._measurement(this._source(`cell_voltage_${s}`), "V");
     const maxTemp = this._measurement(this._source(`cell_temp_max_${s}`), "°C");
     const minTemp = this._measurement(this._source(`cell_temp_min_${s}`), "°C");
@@ -686,10 +749,23 @@ class SpeicherLadelogikPanel extends HTMLElement {
         ${this._detail("Pack-SoC", packs.length ? packs.join(" / ") : "—")}
         ${this._detail("Zellspannung max.", voltage)}
         ${this._detail("Zelltemperatur", maxTemp !== "—" ? `${minTemp}–${maxTemp}` : "—")}
-        ${this._detail("Zelldrift", drifts.length ? drifts.join(" / ") : "—")}
+        ${this._driftDetail(drifts)}
         ${this._detail("Zielstatus", latch ? "Geräteziel erreicht" : "Ladebedarf vorhanden")}
         ${this._detail("Messwert", this._attr("planung", `ac_leistung_venus_${s}_status`, "—"))}
+        ${["a", "d"].includes(s) ? this._mpptDetails(s) : ""}
       </div>`;
+  }
+
+  _driftDetail(drifts) {
+    if (!drifts.length) return this._detail("Zelldrift", "—");
+    const values = drifts.map((drift) => `<button class="drift-value ${this._driftTone(drift.value)}"${drift.entityId ? ` data-entity="${esc(drift.entityId)}"` : ""}>${esc(drift.label)}</button>`).join("");
+    return `<div class="detail"><span>Zelldrift</span><div class="drift-values">${values}</div></div>`;
+  }
+
+  _mpptDetails(suffix) {
+    const mppts = this._sourceStates(`mppt_${suffix}`);
+    if (!mppts.length) return "";
+    return mppts.slice(0, 4).map((entity, index) => `<div class="detail entity-card" data-entity="${esc(entity.entity_id)}"><span>MPPT ${index + 1}</span><strong>${esc(this._measurement(entity, "W"))}</strong></div>`).join("");
   }
 
   _detail(label, value) {
@@ -718,11 +794,11 @@ class SpeicherLadelogikPanel extends HTMLElement {
   _batteries() {
     return `
       <main class="grid batteries-view">
-        <div class="battery-pair span-full">${this._batteryCard("A", true)}${this._batteryCard("E", true)}</div>
+        <div class="battery-pair span-full">${this._models().map((model) => this._batteryCard(model, true)).join("")}</div>
         <section class="card span-full">
           ${this._cardTitle("mdi:compare-horizontal", "Unabhängige Fahrplanfreigabe")}
           <div class="comparison-grid">
-            ${this._comparison("A", "a")}${this._comparison("E", "e")}
+            ${this._models().map((model) => this._comparison(model, model.toLowerCase())).join("")}
           </div>
         </section>
       </main>`;
@@ -758,7 +834,17 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 
   _numberCard(title, icon, group) {
-    return `<section class="card control-card">${this._cardTitle(icon, title)}<div class="control-list">${NUMBER_GROUPS[group].map((item) => this._numberRow(item)).join("")}</div></section>`;
+    const items = group === "leistung"
+      ? [
+        ...this._models().map((model) => [
+          `bevorzugte_ladeleistung_venus_${model.toLowerCase()}`,
+          `Venus ${model}`,
+          "Bevorzugte Ladeleistung",
+        ]),
+        ...NUMBER_GROUPS.leistung,
+      ]
+      : NUMBER_GROUPS[group];
+    return `<section class="card control-card">${this._cardTitle(icon, title)}<div class="control-list">${items.map((item) => this._numberRow(item)).join("")}</div></section>`;
   }
 
   _manualCard(letter) {
@@ -773,21 +859,24 @@ class SpeicherLadelogikPanel extends HTMLElement {
   _calibrationCard() {
     const cal = this._state("kalibrierung");
     const battery = this._attr("kalibrierung", "batterie", "—");
+    const batteryName = ["A", "D", "E"].includes(String(battery)) ? `Venus ${battery}` : battery;
     const reason = this._attr("kalibrierung", "grund", "Kein Auftrag aktiv");
     return `
       <section class="card span-full calibration-card">
         ${this._cardTitle("mdi:battery-sync-outline", "Kalibrierung", this._badge(cal?.state || "—", cal?.state === "Bereit" ? "good" : "warn"))}
-        <div class="cal-state"><div><span>Speicher</span><strong>${esc(battery)}</strong></div><div><span>Status</span><strong>${esc(reason)}</strong></div><div><span>Energie</span><strong>${this._energy(this._attr("kalibrierung", "energie_ac_kwh"))}</strong></div></div>
+        <div class="cal-state"><div><span>Speicher</span><strong>${esc(batteryName)}</strong></div><div><span>Status</span><strong>${esc(reason)}</strong></div><div><span>Energie</span><strong>${this._energy(this._attr("kalibrierung", "energie_ac_kwh"))}</strong></div></div>
         <div class="action-groups">
-          <div><strong>Venus A</strong>${this._actionButton("kalibrierung_venus_a_anfordern", "mdi:play", "Heute")}${this._actionButton("kalibrierung_venus_a_morgen", "mdi:calendar-arrow-right", "Morgen")}${this._actionButton("kalibrierung_venus_a_entfernen", "mdi:playlist-remove", "Vormerkung löschen", "subtle")}</div>
-          <div><strong>Venus E</strong>${this._actionButton("kalibrierung_venus_e_anfordern", "mdi:play", "Heute")}${this._actionButton("kalibrierung_venus_e_morgen", "mdi:calendar-arrow-right", "Morgen")}${this._actionButton("kalibrierung_venus_e_entfernen", "mdi:playlist-remove", "Vormerkung löschen", "subtle")}</div>
+          ${this._models().map((model) => {
+            const suffix = model.toLowerCase();
+            return `<div><strong>Venus ${model}</strong>${this._actionButton(`kalibrierung_venus_${suffix}_anfordern`, "mdi:play", "Heute")}${this._actionButton(`kalibrierung_venus_${suffix}_morgen`, "mdi:calendar-arrow-right", "Morgen")}${this._actionButton(`kalibrierung_venus_${suffix}_entfernen`, "mdi:playlist-remove", "Vormerkung löschen", "subtle")}</div>`;
+          }).join("")}
         </div>
         <div class="danger-actions">${this._actionButton("kalibrierung_abbrechen", "mdi:cancel", "Laufende Kalibrierung abbrechen", "danger")}</div>
       </section>`;
   }
 
   _control() {
-    return `<main class="grid control-view">${this._modeControl()}<section class="card span-full">${this._cardTitle("mdi:chart-bell-curve", "Fahrplanfunktionen")}${this._toggleRow("mittagsspitzen", "Mittagsspitzen reduzieren", "Speicherkapazität für die PV-Spitze freihalten", "mdi:chart-bell-curve")}</section><div class="control-columns span-full">${this._numberCard("Ladeleistungen", "mdi:battery-charging", "leistung")}${this._numberCard("Planungsreserven", "mdi:shield-sun-outline", "planung")}${this._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen")}</div><div class="control-columns two span-full">${this._manualCard("A")}${this._manualCard("E")}</div>${this._calibrationCard()}</main>`;
+    return `<main class="grid control-view">${this._modeControl()}<section class="card span-full">${this._cardTitle("mdi:chart-bell-curve", "Fahrplanfunktionen")}${this._toggleRow("mittagsspitzen", "Mittagsspitzen reduzieren", "Speicherkapazität für die PV-Spitze freihalten", "mdi:chart-bell-curve")}</section><div class="control-columns span-full">${this._numberCard("Ladeleistungen", "mdi:battery-charging", "leistung")}${this._numberCard("Planungsreserven", "mdi:shield-sun-outline", "planung")}${this._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen")}</div><div class="control-columns manual-columns span-full">${this._models().map((model) => this._manualCard(model)).join("")}</div>${this._calibrationCard()}</main>`;
   }
 
   _formatWriteResult(item) {
@@ -810,15 +899,14 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const missing = this._attr("status", "fehlende_entitaeten", []) || [];
     const results = (this._attr("status", "letzte_schreibergebnisse", []) || []).map((item) => this._formatWriteResult(item));
     const dataErrors = this._attr("planung", "datenfehler_aktuell", []) || [];
-    const comparison = this._state("planvergleich");
     return `
       <main class="grid diagnostics-view">
-        <section class="card span-6">${this._cardTitle("mdi:database-check-outline", "Datenquellen")}${this._diagLine("Gemeinsame Daten", this._state("daten_gemeinsam")?.state)}${this._diagLine("Venus A", this._state("daten_venus_a")?.state)}${this._diagLine("Venus E", this._state("daten_venus_e")?.state)}${this._diagLine("Verfügbare Quellen", `${this._attr("status", "quellen_verfuegbar", 0)} / ${this._attr("status", "quellen_gesamt", 0)}`)}</section>
-        <section class="card span-6">${this._cardTitle("mdi:file-compare-outline", "Planvergleich", this._badge(comparison?.state || "—", comparison?.state === "Übereinstimmend" ? "good" : "warn"))}${this._diagLine("Schattenplanung", this._attr("status", "schattenplanung_aktiv", false) ? "Aktiv" : "Aus")}${this._diagLine("Letzter Schreibzugriff", this._dateTime(this._attr("status", "letzter_schreibzugriff_ts")))}${this._diagLine("Letzter Schreibfehler", this._attr("status", "letzter_schreibfehler", "Keiner"))}</section>
+        <section class="card span-6">${this._cardTitle("mdi:database-check-outline", "Datenquellen")}${this._diagLine("Gemeinsame Daten", this._state("daten_gemeinsam")?.state)}${this._models().map((model) => this._diagLine(`Venus ${model}`, this._state(`daten_venus_${model.toLowerCase()}`)?.state)).join("")}${this._diagLine("Verfügbare Quellen", `${this._attr("status", "quellen_verfuegbar", 0)} / ${this._attr("status", "quellen_gesamt", 0)}`)}</section>
+        <section class="card span-6">${this._cardTitle("mdi:timeline-check-outline", "Planung", this._badge(this._attr("status", "planung_aktiv", false) ? "Bereit" : "Fehler", this._attr("status", "planung_aktiv", false) ? "good" : "bad"))}${this._diagLine("Planungsstatus", this._attr("status", "planung_aktiv", false) ? "Aktiv" : "Aus")}${this._diagLine("Planungsfehler", this._attr("status", "planungsfehler", "Keiner") || "Keiner")}${this._diagLine("Letzter Schreibzugriff", this._dateTime(this._attr("status", "letzter_schreibzugriff_ts")))}${this._diagLine("Letzter Schreibfehler", this._attr("status", "letzter_schreibfehler", "Keiner") || "Keiner")}</section>
         ${this._listCard("Aktuelle Hinweise", "mdi:alert-circle-outline", [...warnings, ...dataErrors], "Keine aktuellen Warnungen", "span-6")}
         ${this._listCard("Fehlende Entitäten", "mdi:database-remove-outline", missing, "Keine Entität fehlt", "span-6")}
         ${this._listCard("Letzte Schreibergebnisse", "mdi:pencil-outline", results, "Noch keine Schreibzugriffe", "span-full")}
-        <section class="card span-full ack-card">${this._cardTitle("mdi:shield-lock-open-outline", "Schreibsperren und Quittierung")}<p>Die Quittierung setzt die internen Schreibfehlerzähler von Venus A und Venus E zurück. Fehlende oder ungültige Sensorwerte werden dadurch nicht verändert.</p><div class="ack-state">${this._diagLine("Schreibzugriffe", this._attr("status", "schreibzugriffe_aktiv", false) ? "Aktiv" : "Gesperrt")}${this._diagLine("Letzter Schreibfehler", this._attr("status", "letzter_schreibfehler", "Keiner"))}</div><div class="ack-row">${this._actionButton("fehler_quittieren", "mdi:check-decagram-outline", "Schreibfehler quittieren")}</div></section>
+        <section class="card span-full ack-card">${this._cardTitle("mdi:shield-lock-open-outline", "Schreibsperren und Quittierung")}<p>Die Quittierung setzt die internen Schreibfehlerzähler der konfigurierten Speicher zurück. Fehlende oder ungültige Sensorwerte werden dadurch nicht verändert.</p><div class="ack-state">${this._diagLine("Schreibzugriffe", this._attr("status", "schreibzugriffe_aktiv", false) ? "Aktiv" : "Gesperrt")}${this._diagLine("Letzter Schreibfehler", this._attr("status", "letzter_schreibfehler", "Keiner"))}</div><div class="ack-row">${this._actionButton("fehler_quittieren", "mdi:check-decagram-outline", "Schreibfehler quittieren")}</div></section>
       </main>`;
   }
 
@@ -847,14 +935,17 @@ class SpeicherLadelogikPanel extends HTMLElement {
       .summary-grid{display:grid;grid-template-columns:minmax(280px,.8fr) repeat(2,minmax(360px,1.15fr));gap:14px}.summary-card{min-height:360px}.energy-list{display:flex;flex-direction:column;gap:14px}.energy-row>div{display:flex;justify-content:space-between;gap:10px;margin-bottom:5px}.energy-row span{color:var(--muted)}.energy-row strong{font-size:14px}.energy-row>i{display:block;height:6px;border-radius:8px;background:rgba(120,150,140,.12);overflow:hidden}.energy-row>i b{display:block;height:100%;border-radius:8px}.chart-legend{display:flex;justify-content:center;gap:13px;flex-wrap:wrap;color:var(--muted);font-size:11px;margin:-4px 0 5px}.chart-legend span{display:inline-flex;align-items:center;gap:5px}.chart-legend i{width:9px;height:9px;border-radius:2px}.history-chart{display:block;width:100%;height:220px;overflow:visible}.chart-grid-line{stroke:rgba(144,177,164,.12);stroke-width:1;vector-effect:non-scaling-stroke}.chart-axis{fill:var(--muted);font-size:10px}.chart-empty{height:220px;display:grid;place-items:center;color:var(--muted)}.chart-ranges{display:flex;justify-content:flex-end;gap:6px;margin-top:3px}.chart-ranges button{border:1px solid var(--line);border-radius:8px;background:rgba(110,135,125,.07);color:var(--muted);padding:5px 9px;cursor:pointer}.chart-ranges button.active{color:var(--accent);border-color:rgba(56,213,130,.3);background:rgba(56,213,130,.1)}
       .peak-inline{margin-top:14px;padding-top:13px;border-top:1px solid var(--line)}.peak-inline-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.peak-inline-title>span{display:flex;align-items:center;gap:7px}.peak-inline-title ha-icon{--mdc-icon-size:16px}.peak-inline .metric{padding:8px}.peak-inline .metric strong{font-size:12px}
       .battery-upper{display:grid;grid-template-columns:minmax(205px,.52fr) minmax(320px,1.48fr);gap:18px;align-items:center}.battery-history{min-width:0}.battery-history-title{color:var(--muted);font-size:12px;font-weight:700;margin:0 0 6px}.battery-history .history-chart{height:175px}.battery-history .chart-empty{height:175px}.battery-chart-wrap{position:relative}.battery-soc-axis{position:absolute;right:0;top:24px;bottom:27px;display:flex;flex-direction:column;justify-content:space-between;color:var(--muted);font-size:10px;pointer-events:none}
-      :host{font-size:14px}.brand-copy strong{font-size:17px}.brand-copy span,.live-pill{font-size:12px}.card-title,.badge{font-size:11px}.soc-ring span{font-size:11px}.status-line{font-size:13px}.flow-node strong{font-size:18px}.flow-node span,.flow-core span{font-size:11px}.decision strong{font-size:16px}.decision p{font-size:12px}.metric span{font-size:10px}.metric strong{font-size:13px}.window-label,.window-row,.slot-note{font-size:11px}.battery-now strong{font-size:14px}.battery-now b{font-size:26px}.soc-scale{font-size:10px}.detail span{font-size:10px}.detail strong,.control-row strong,.number-row strong,.cal-state strong{font-size:13px}.comparison p,.diag-line{font-size:13px}.control-row span,.number-row span,.cal-state span{font-size:10px}.action-btn,.message-list>div,.empty,.ack-card>p{font-size:12px}
+      :host{font-size:15px}.brand-copy strong{font-size:18px}.brand-copy span,.live-pill{font-size:13px}.card-title,.badge{font-size:12px}.soc-ring span{font-size:12px}.status-line{font-size:14px}.flow-node strong{font-size:19px}.flow-node span,.flow-core span{font-size:12px}.decision strong{font-size:17px}.decision p{font-size:13px}.metric span{font-size:11px}.metric strong{font-size:14px}.window-label,.window-row,.slot-note{font-size:12px}.battery-now strong{font-size:15px}.battery-now b{font-size:27px}.soc-scale{font-size:11px}.detail span{font-size:11px}.detail strong,.control-row strong,.number-row strong,.cal-state strong{font-size:14px}.comparison p,.diag-line{font-size:14px}.control-row span,.number-row span,.cal-state span{font-size:11px}.action-btn,.message-list>div,.empty,.ack-card>p{font-size:13px}
       @media(max-width:1350px){.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.summary-grid .energy-card{grid-row:span 2}.battery-upper{grid-template-columns:1fr}.battery-history .history-chart{height:190px}}
       @media(max-width:1050px){.summary-grid{grid-template-columns:1fr}.summary-grid .energy-card{grid-row:auto}.summary-card{min-height:0}.battery-upper{grid-template-columns:minmax(205px,.52fr) minmax(320px,1.48fr)}}
       @media(max-width:720px){.flow-canvas{min-height:320px}.window-label{align-items:flex-start;flex-direction:column;gap:3px}.ack-state{grid-template-columns:1fr}.number-input{width:94px}.summary-grid{gap:9px}.battery-upper{grid-template-columns:1fr}.history-chart{height:190px}.chart-empty{height:190px}.brand-copy strong{font-size:15px}.nav-item span{font-size:11px}.flow-node span{font-size:9px}}
       .flow-canvas{display:block;min-height:360px;position:relative;overflow:hidden}
       .flow-zone{position:absolute;left:8%;right:8%;height:105px;border:1px solid rgba(144,177,164,.16);border-radius:14px;background:rgba(7,15,18,.2);z-index:0}.flow-zone>span{position:absolute;top:7px;left:50%;transform:translateX(-50%);font-size:10px;font-weight:700;letter-spacing:.055em;text-transform:uppercase;color:var(--muted);white-space:nowrap}.flow-zone-top{top:4px}.flow-zone-bottom{top:248px}.flow-home-label{position:absolute;left:50%;top:118px;transform:translateX(-50%);z-index:2;color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.055em;text-transform:uppercase;white-space:nowrap}
-      .flow-node,.flow-core{position:absolute;transform:translateX(-50%);z-index:3}.flow-node.grid{left:18.5%;top:17px}.flow-node.pv{left:81.5%;top:17px}.flow-core{left:50%;top:137px}.flow-node.batt-a{left:18.5%;top:270px}.flow-node.batt-e{left:81.5%;top:270px}.flow-lines{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible}.flow-route{fill:none;stroke:rgba(132,169,156,.22);stroke-width:1;stroke-dasharray:7 8;vector-effect:non-scaling-stroke}.flow-route.active{stroke:var(--flow-color);stroke-width:1.6;stroke-dasharray:none;stroke-linecap:round;filter:drop-shadow(0 0 3px var(--flow-color))}.flow-node ha-icon{box-shadow:none}.flow-core ha-icon{box-shadow:0 0 18px rgba(82,184,255,.16)}
-      @media(max-width:720px){.flow-canvas{min-height:330px}.flow-zone{left:3%;right:3%;height:96px}.flow-zone-bottom{top:229px}.flow-home-label{top:107px}.flow-node.grid,.flow-node.pv{top:15px}.flow-node.grid{left:17%}.flow-node.pv{left:83%}.flow-core{top:123px}.flow-node.batt-a,.flow-node.batt-e{top:245px}.flow-node.batt-a{left:17%}.flow-node.batt-e{left:83%}}
+      .flow-node,.flow-core{position:absolute;transform:translateX(-50%);z-index:3}.flow-node.grid{left:18.5%;top:17px}.flow-node.pv{left:81.5%;top:17px}.flow-core{left:50%;top:137px}.flow-node.battery{left:50%;top:270px;color:var(--accent)}.flow-lines{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible}.flow-route{fill:none;stroke:rgba(132,169,156,.22);stroke-width:.8;stroke-dasharray:7 8;vector-effect:non-scaling-stroke}.flow-route.active{stroke:var(--flow-color);stroke-width:1.2;stroke-dasharray:none;stroke-linecap:round;filter:drop-shadow(0 0 2px var(--flow-color))}.flow-node ha-icon{box-shadow:none}.flow-core ha-icon{box-shadow:0 0 18px rgba(82,184,255,.16)}
+      .chart-hit{fill:transparent;stroke:transparent;pointer-events:all;cursor:pointer}.chart-hit:hover{fill:var(--accent2);opacity:.85}.drift-values{display:flex;gap:5px;flex-wrap:wrap}.drift-value{border:0;border-radius:10px;padding:3px 7px;cursor:pointer}.drift-value.good{color:#61e69a;background:rgba(56,213,130,.13)}.drift-value.warn{color:#ffd078;background:rgba(255,189,69,.14)}.drift-value.bad{color:#ff8a8a;background:rgba(255,107,107,.14)}.drift-value.neutral{color:var(--muted);background:rgba(130,150,145,.12)}.storage-slots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}.storage-slots>div{display:grid;grid-template-columns:auto auto;gap:3px 8px;padding:8px;border-radius:8px;background:rgba(110,135,125,.06)}.storage-slots span{justify-self:end;color:var(--accent)}.storage-slots small{grid-column:1/-1;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.entity-card{transition:border-color .15s,background .15s}.entity-card:hover{border-color:rgba(82,184,255,.3);background-color:rgba(82,184,255,.04)}
+      @media(max-width:720px){.flow-canvas{min-height:330px}.flow-zone{left:3%;right:3%;height:96px}.flow-zone-bottom{top:229px}.flow-home-label{top:107px}.flow-node.grid,.flow-node.pv{top:15px}.flow-node.grid{left:17%}.flow-node.pv{left:83%}.flow-core{top:123px}.flow-node.battery{top:245px;left:50%}.storage-slots{grid-template-columns:1fr}}
+      .battery-pair{grid-template-columns:repeat(auto-fit,minmax(390px,1fr))}.comparison-grid{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}.control-columns.manual-columns{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}.action-groups{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}.storage-slots{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+      @media(max-width:720px){.battery-pair,.comparison-grid,.control-columns.manual-columns,.action-groups,.storage-slots{grid-template-columns:1fr}}
     `;
   }
 
@@ -920,21 +1011,25 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const entityId = this._eid(key);
     if (!entityId) return;
     const labels = {
-      kalibrierung_venus_a_anfordern: "Kalibrierung Venus A heute anfordern?",
-      kalibrierung_venus_e_anfordern: "Kalibrierung Venus E heute anfordern?",
-      kalibrierung_venus_a_morgen: "Kalibrierung Venus A für morgen vormerken?",
-      kalibrierung_venus_e_morgen: "Kalibrierung Venus E für morgen vormerken?",
-      kalibrierung_venus_a_entfernen: "Vormerkung für Venus A entfernen?",
-      kalibrierung_venus_e_entfernen: "Vormerkung für Venus E entfernen?",
       kalibrierung_abbrechen: "Die laufende Kalibrierung wirklich abbrechen?",
       fehler_quittieren: "Schreibfehler und Sperren quittieren?",
     };
+    const calibrationMatch = key.match(/^kalibrierung_venus_([ade])_(anfordern|morgen|entfernen)$/);
+    if (calibrationMatch) {
+      const model = calibrationMatch[1].toUpperCase();
+      const action = {
+        anfordern: "heute anfordern",
+        morgen: "für morgen vormerken",
+        entfernen: "aus der Vormerkung entfernen",
+      }[calibrationMatch[2]];
+      labels[key] = `Kalibrierung Venus ${model} ${action}?`;
+    }
     if (labels[key] && !window.confirm(labels[key])) return;
     await this._hass.callService("button", "press", { entity_id: entityId });
   }
 }
 
-const PANEL_ELEMENT = "speicher-ladelogik-panel-1-0-0-rc-8";
+const PANEL_ELEMENT = "speicher-ladelogik-panel-1-0-0-rc-9";
 
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);

@@ -1,4 +1,4 @@
-"""Adapter between configured Home Assistant entities and the shadow planner."""
+"""Adapter between configured Home Assistant entities and the planner."""
 
 from __future__ import annotations
 
@@ -8,39 +8,27 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from .compat import first_existing_state, get_state_with_legacy_fallback
+from .compat import get_state_with_legacy_fallback
 from .const import (
     CONF_A_CHARGE_OVERRIDE,
+    CONF_A_PACK_DRIFT,
+    CONF_A_PACK_SOC,
+    CONF_D_CHARGE_OVERRIDE,
+    CONF_D_PACK_DRIFT,
+    CONF_D_PACK_SOC,
     CONF_E_CHARGE_OVERRIDE,
+    CONF_E_CELL_DRIFT,
+    CONF_ENABLED_MODELS,
     DEFAULTS,
 )
-from .helpers import is_usable_state
-from .planner import calculate_shadow_plan
+from .planner import calculate_plan
 from .runtime import PlannerState, planner_states
 
 LEGACY_OVERRIDE_ENTITIES = {
     CONF_A_CHARGE_OVERRIDE: "input_boolean.venus_a_nicht_laden",
+    CONF_D_CHARGE_OVERRIDE: "input_boolean.venus_d_nicht_laden",
     CONF_E_CHARGE_OVERRIDE: "input_boolean.venus_e_nicht_laden",
 }
-
-COMPARISON_FIELDS = {
-    "status": None,
-    "daten_gueltig": None,
-    "daten_gueltig_gemeinsam": None,
-    "daten_gueltig_venus_a": None,
-    "daten_gueltig_venus_e": None,
-    "pv_planungswert_w": 25,
-    "netto_ueberschuss_w": 25,
-    "prognose_heute_erwartet_kwh": 0.05,
-    "sicher_speicherbar_rest_kwh": 0.05,
-    "restbedarf_venus_a_kwh": 0.02,
-    "restbedarf_venus_e_kwh": 0.02,
-    "soll_ladegrenze_venus_a_w": 25,
-    "soll_ladegrenze_venus_e_w": 25,
-    "normaler_fahrplan_status": None,
-    "entscheidungsgrund": None,
-}
-
 
 class _MappedStates:
     """Map legacy planner entity IDs to the UI-selected entities."""
@@ -86,10 +74,18 @@ def _entity_mapping(config: dict[str, Any]) -> dict[str, str]:
                     {
                         old: new
                         for old, new in zip(legacy, configured, strict=False)
-                        if isinstance(new, str)
+                        if isinstance(old, str)
+                        and "." in old
+                        and isinstance(new, str)
+                        and "." in new
                     }
                 )
-        elif isinstance(legacy, str) and isinstance(configured, str):
+        elif (
+            isinstance(legacy, str)
+            and "." in legacy
+            and isinstance(configured, str)
+            and "." in configured
+        ):
             mapping[legacy] = configured
 
     for key, legacy in LEGACY_OVERRIDE_ENTITIES.items():
@@ -120,7 +116,7 @@ def calculate(
         mapping,
         planner_states(control) if control is not None else None,
     )
-    result = calculate_shadow_plan(
+    result = calculate_plan(
         proxy,
         {
             "request": request,
@@ -132,6 +128,18 @@ def calculate(
             "eleven": _local_timestamp(today, 11),
             "deadline": _local_timestamp(today, 15),
             "prior_plan": prior_plan,
+            "battery_keys": config.get(CONF_ENABLED_MODELS, ["A", "E"]),
+            "pack_entities": {
+                "A": config.get(CONF_A_PACK_SOC, []),
+                "D": config.get(CONF_D_PACK_SOC, []),
+            },
+            "drift_entities": {
+                "A": config.get(CONF_A_PACK_DRIFT, []),
+                "D": config.get(CONF_D_PACK_DRIFT, []),
+                "E": [config.get(CONF_E_CELL_DRIFT)]
+                if config.get(CONF_E_CELL_DRIFT)
+                else [],
+            },
         },
     )
     for command_key in ("commands", "proposed_commands"):
@@ -145,114 +153,3 @@ def calculate(
             plan.get("regelung_aktiv")
         )
     return result
-
-
-def _equal(left: Any, right: Any, tolerance: float | None) -> bool:
-    if tolerance is None:
-        return left == right
-    try:
-        return abs(float(left) - float(right)) <= tolerance
-    except (TypeError, ValueError):
-        return left == right
-
-
-def _usable_reference(state: Any) -> bool:
-    """Return whether a legacy comparison entity still provides real data."""
-    return bool(
-        state is not None
-        and is_usable_state(state.state)
-        and not state.attributes.get("restored", False)
-    )
-
-
-def compare_with_legacy(
-    hass: HomeAssistant,
-    shadow_plan: dict[str, Any],
-    shadow_calibration: dict[str, Any],
-) -> dict[str, Any]:
-    """Compare selected shadow values with the still-running legacy sensors."""
-    legacy_plan, legacy_plan_entity_id = first_existing_state(
-        hass.states,
-        ("sensor.pv_ladelogik_planung",),
-    )
-    legacy_calibration, legacy_calibration_entity_id = first_existing_state(
-        hass.states,
-        ("sensor.pv_kalibrierung_planung",),
-    )
-    if not _usable_reference(legacy_plan):
-        return {
-            "available": False,
-            "matches": None,
-            "funktional_passend": None,
-            "fields_compared": 0,
-            "differences": [],
-            "beabsichtigte_abweichungen": 0,
-            "sonstige_abweichungen": 0,
-            "referenz_plan_entitaet": legacy_plan_entity_id,
-            "referenz_kalibrierung_entitaet": legacy_calibration_entity_id,
-        }
-
-    if not _usable_reference(legacy_calibration):
-        legacy_calibration = None
-
-    differences: list[dict[str, Any]] = []
-    compared = 0
-    for field, tolerance in COMPARISON_FIELDS.items():
-        old_value = (
-            legacy_plan.state
-            if field == "status"
-            else legacy_plan.attributes.get(field)
-        )
-        new_value = shadow_plan.get(field)
-        compared += 1
-        if not _equal(old_value, new_value, tolerance):
-            differences.append({"feld": field, "alt": old_value, "schatten": new_value})
-
-    if legacy_calibration is not None:
-        compared += 1
-        old_phase = legacy_calibration.attributes.get("phase_intern")
-        new_phase = shadow_calibration.get("phase")
-        if old_phase != new_phase:
-            differences.append(
-                {"feld": "kalibrierphase", "alt": old_phase, "schatten": new_phase}
-            )
-
-    held = {
-        key: bool(shadow_plan.get("sollwert_venus_" + key + "_gehalten"))
-        for key in ("a", "e")
-    }
-    latched = {
-        key: bool(shadow_plan.get("ziel_venus_" + key + "_latch_aktiv"))
-        for key in ("a", "e")
-    }
-    stability_active = any((*held.values(), *latched.values()))
-    aggregate_fields = {
-        "status",
-        "sicher_speicherbar_rest_kwh",
-        "normaler_fahrplan_status",
-        "entscheidungsgrund",
-    }
-    for difference in differences:
-        field = difference["feld"]
-        difference["beabsichtigt"] = bool(
-            (stability_active and field in aggregate_fields)
-            or (field == "restbedarf_venus_a_kwh" and latched["a"])
-            or (field == "restbedarf_venus_e_kwh" and latched["e"])
-            or (field == "soll_ladegrenze_venus_a_w" and held["a"])
-            or (field == "soll_ladegrenze_venus_e_w" and held["e"])
-        )
-    unintentional = [
-        difference for difference in differences if not difference["beabsichtigt"]
-    ]
-
-    return {
-        "available": True,
-        "matches": not differences,
-        "funktional_passend": not unintentional,
-        "fields_compared": compared,
-        "differences": differences,
-        "beabsichtigte_abweichungen": len(differences) - len(unintentional),
-        "sonstige_abweichungen": len(unintentional),
-        "referenz_plan_entitaet": legacy_plan_entity_id,
-        "referenz_kalibrierung_entitaet": legacy_calibration_entity_id,
-    }

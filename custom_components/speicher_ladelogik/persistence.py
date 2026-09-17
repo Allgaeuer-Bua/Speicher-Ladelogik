@@ -102,7 +102,7 @@ def read_session(value: Any) -> dict[str, Any]:
 
     if session["p"] not in VALID_PHASES:
         return _corrupt_session()
-    if session["p"] not in {"idle", "error"} and session["b"] not in {"A", "E"}:
+    if session["p"] not in {"idle", "error"} and session["b"] not in {"A", "D", "E"}:
         return _corrupt_session()
     if session["u"] not in VALID_RESUME_PHASES:
         return _corrupt_session()
@@ -121,30 +121,42 @@ def encode_session(session: dict[str, Any]) -> str:
 def read_backup(value: Any) -> dict[str, float] | None:
     """Read V2.2.1 (`v2`) and integration (`backup1`) limit backups."""
     fields = str(value).split("|")
-    if len(fields) != 5 or fields[0] not in {"v2", "backup1"}:
+    legacy = len(fields) == 5 and fields[0] in {"v2", "backup1"}
+    current = len(fields) == 7 and fields[0] == "backup2"
+    if not (legacy or current):
         return None
 
     values = [_number(item) for item in fields[1:]]
     # Storage slots may be mapped to another Venus model. The actual number
     # entity range is validated immediately before every write.
-    maxima = (10000, 10000, 10000, 10000)
+    maxima = (10000,) * len(values)
     if not all(
         value is not None
         and (value == -1 or (0 <= value <= maxima[index] and value % 50 == 0))
         for index, value in enumerate(values)
     ):
         return None
+    if legacy:
+        return {
+            "A": values[0], "E": values[1],
+            "DA": values[2], "DE": values[3],
+        }
     return {
-        "A": values[0],
-        "E": values[1],
-        "DA": values[2],
-        "DE": values[3],
+        "A": values[0], "D": values[1], "E": values[2],
+        "DA": values[3], "DD": values[4], "DE": values[5],
     }
 
 
 def encode_backup(values: dict[str, Any]) -> str:
     """Encode the integration-owned limit-backup format."""
-    return "backup1|" + "|".join(str(values[key]) for key in ("A", "E", "DA", "DE"))
+    if "D" in values or "DD" in values:
+        return "backup2|" + "|".join(
+            str(values.get(key, -1))
+            for key in ("A", "D", "E", "DA", "DD", "DE")
+        )
+    return "backup1|" + "|".join(
+        str(values.get(key, -1)) for key in ("A", "E", "DA", "DE")
+    )
 
 
 def read_queue(value: Any) -> dict[str, dict[str, Any]] | None:
@@ -153,13 +165,13 @@ def read_queue(value: Any) -> dict[str, dict[str, Any]] | None:
         return {}
 
     fields = str(value).split("|")
-    if not fields or fields[0] not in {"q5", "queue1"} or len(fields) > 3:
+    if not fields or fields[0] not in {"q5", "queue1", "queue2"} or len(fields) > 4:
         return None
 
     queue: dict[str, dict[str, Any]] = {}
     for field in fields[1:]:
         parts = field.split(",")
-        if len(parts) != 4 or parts[0] not in {"A", "E"} or parts[0] in queue:
+        if len(parts) != 4 or parts[0] not in {"A", "D", "E"} or parts[0] in queue:
             return None
         day = _number(parts[1])
         stamp = _number(parts[2])
@@ -169,7 +181,7 @@ def read_queue(value: Any) -> dict[str, dict[str, Any]] | None:
             or day < 0
             or stamp is None
             or stamp < 0
-            or dependency not in {"-", "A", "E"}
+            or dependency not in {"-", "A", "D", "E"}
             or dependency == parts[0]
         ):
             return None
@@ -183,8 +195,8 @@ def read_queue(value: Any) -> dict[str, dict[str, Any]] | None:
 
 def encode_queue(queue: dict[str, dict[str, Any]]) -> str:
     """Encode the integration-owned calibration-queue format."""
-    result = ["queue1"]
-    for key in ("A", "E"):
+    result = ["queue2" if "D" in queue else "queue1"]
+    for key in ("A", "D", "E"):
         if key in queue:
             item = queue[key]
             result.append(f"{key},{int(item['n'])},{int(item['t'])},{item['d']}")

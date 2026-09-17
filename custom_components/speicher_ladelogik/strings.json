@@ -7,18 +7,20 @@
         "description": "Datenquellen auswählen. Nach dem ersten RC-Start beginnt die Integration sicher in Beobachten.",
         "data": {
           "name": "Name",
+          "enabled_models": "Vorhandene Speicher (1–3 Modelle auswählen)",
           "pv_ac": "Aktuelle PV-AC-Leistung",
           "mppt_sensors": "MPPT-Leistungssensoren",
           "grid_power": "Leistung am Netzanschlusspunkt",
           "house_power": "Aktuelle Hausleistung",
           "house_power_average": "Gemittelte Hausleistung",
           "pv_daily_energy": "Heutige PV-Produktion",
-          "forecast_sensors": "15-Minuten-Prognosesensoren heute und morgen"
+          "forecast_sensors": "15-Minuten-Prognosesensoren heute und morgen",
+          "mobile_notify_service": "Optionaler Handy-Benachrichtigungsdienst (z. B. notify.mobile_app_timon)"
         }
       },
       "venus_a": {
         "title": "Venus A",
-        "description": "Datenquellen und Stellglieder für den ersten Speicher auswählen. Die Bezeichnung Venus A ist nur der frei belegbare Steckplatzname.",
+        "description": "Datenquellen, Packs, optionale MPPTs und Stellglieder für Venus A auswählen.",
         "data": {
           "a_soc": "SoC",
           "a_ac_power": "AC-Leistung",
@@ -35,11 +37,34 @@
           "a_max_cell_temp": "Maximale Zelltemperatur",
           "a_min_cell_temp": "Minimale Zelltemperatur",
           "a_pack_drift": "Pack-Driftsensoren"
+          ,"a_mppt_sensors": "Optionale MPPT-Leistungssensoren (maximal 4)"
+        }
+      },
+      "venus_d": {
+        "title": "Venus D",
+        "description": "Datenquellen, Packs, optionale MPPTs und Stellglieder für Venus D auswählen.",
+        "data": {
+          "d_soc": "SoC",
+          "d_ac_power": "AC-Leistung",
+          "d_dc_power": "DC-Batterieleistung",
+          "d_charge_limit": "Maximale Ladeleistung",
+          "d_discharge_limit": "Maximale Entladeleistung",
+          "d_auto_target": "AstraMeter Auto Target",
+          "d_active": "AstraMeter Active",
+          "d_charge_override": "Optionaler Nicht-laden-Helfer",
+          "d_max_soc": "Obere SoC-Gerätegrenze",
+          "d_min_soc": "Untere SoC-Gerätegrenze (falls verfügbar)",
+          "d_pack_soc": "Pack-SoC-Sensoren",
+          "d_max_cell_voltage": "Maximale Zellspannung",
+          "d_max_cell_temp": "Maximale Zelltemperatur",
+          "d_min_cell_temp": "Minimale Zelltemperatur",
+          "d_pack_drift": "Pack-Driftsensoren",
+          "d_mppt_sensors": "Optionale MPPT-Leistungssensoren (maximal 4)"
         }
       },
       "venus_e": {
         "title": "Venus E",
-        "description": "Datenquellen und Stellglieder für den zweiten Speicher auswählen. Die Bezeichnung Venus E ist nur der frei belegbare Steckplatzname.",
+        "description": "Datenquellen und Stellglieder für Venus E auswählen.",
         "data": {
           "e_soc": "SoC",
           "e_ac_power": "AC-Leistung",
@@ -60,6 +85,17 @@
     },
     "abort": {
       "already_configured": "Speicher-Ladelogik ist bereits eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Benachrichtigungen",
+        "description": "Optional zusätzlich zur dauerhaften Home-Assistant-Mitteilung eine Nachricht an die Companion App senden.",
+        "data": {
+          "mobile_notify_service": "Handy-Benachrichtigungsdienst (z. B. notify.mobile_app_timon)"
+        }
+      }
     }
   }
 }

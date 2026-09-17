@@ -15,10 +15,19 @@ STABILITY = module_from_spec(SPEC)
 SPEC.loader.exec_module(STABILITY)
 
 stable_charge_limit = STABILITY.stable_charge_limit
+calibration_available_surplus = STABILITY.calibration_available_surplus
 target_latch = STABILITY.target_latch
 peer_discharge_release = STABILITY.peer_discharge_release
 peer_grid_support = STABILITY.peer_grid_support
 quarter_hour_window = STABILITY.quarter_hour_window
+
+
+def test_calibration_surplus_restores_its_own_draw() -> None:
+    assert calibration_available_surplus(120, 480, running=True) == 600
+
+
+def test_calibration_surplus_does_not_help_before_start() -> None:
+    assert calibration_available_surplus(120, 480, running=False) == 120
 
 
 def test_target_is_latched_at_device_goal() -> None:

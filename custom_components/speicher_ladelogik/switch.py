@@ -21,13 +21,19 @@ class SpeicherSwitchDescription(SwitchEntityDescription):
 SWITCHES = (
     SpeicherSwitchDescription(key="mittagsspitzen", name="Mittagsspitzen reduzieren", icon="mdi:chart-bell-curve", control_key="mittagsspitzen"),
     SpeicherSwitchDescription(key="handbetrieb_venus_a", name="Handbetrieb Venus A", icon="mdi:hand-back-right-outline", control_key="manuell_a_aktiv"),
+    SpeicherSwitchDescription(key="handbetrieb_venus_d", name="Handbetrieb Venus D", icon="mdi:hand-back-right-outline", control_key="manuell_d_aktiv"),
     SpeicherSwitchDescription(key="handbetrieb_venus_e", name="Handbetrieb Venus E", icon="mdi:hand-back-right-outline", control_key="manuell_e_aktiv"),
 )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback) -> None:
     coordinator: SpeicherLadelogikCoordinator = entry.runtime_data
-    async_add_entities(SpeicherControlSwitch(coordinator, description) for description in SWITCHES)
+    async_add_entities(
+        SpeicherControlSwitch(coordinator, description)
+        for description in SWITCHES
+        if not description.key.startswith("handbetrieb_venus_")
+        or description.key.rsplit("_", 1)[-1].upper() in coordinator.enabled_models
+    )
 
 
 class SpeicherControlSwitch(SpeicherLadelogikEntity, SwitchEntity):
