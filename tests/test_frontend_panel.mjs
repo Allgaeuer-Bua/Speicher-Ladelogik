@@ -24,7 +24,7 @@ await import(
   "../custom_components/speicher_ladelogik/frontend/speicher-ladelogik-panel.js"
 );
 
-const Panel = registry.get("speicher-ladelogik-panel-1-0-0-rc-9");
+const Panel = registry.get("speicher-ladelogik-panel-1-0-0-rc-10");
 
 function createPanel() {
   const calls = [];
@@ -161,20 +161,23 @@ test("daily battery energy separates charging and discharging signs", () => {
   const card = panel._batteryCard("A", true);
   assert.match(card, /Heute geladen/);
   assert.match(card, /Heute entladen/);
-  assert.match(card, /Fahrplanlimit/);
-  assert.doesNotMatch(card, /Restbedarf/);
-  assert.doesNotMatch(card, />Verlust</);
+  assert.match(card, /Restbedarf/);
+  assert.match(card, />Verlust</);
+  assert.match(card, /Register/);
+  assert.doesNotMatch(card, /Fahrplanlimit/);
+  assert.ok(card.indexOf("Verlust") < card.indexOf("Restbedarf"));
 });
 
-test("energy flow uses a compact aggregate layout with stable direction paths", () => {
+test("energy flow uses a four-node aggregate power-flow layout", () => {
   const { panel } = createPanel();
   const flow = panel._flowCard();
 
   assert.match(flow, /flow-route active/);
-  assert.match(flow, /M 500 76 C 500 91 500 104 500 116/);
-  assert.match(flow, /viewBox="0 0 1000 260"/);
+  assert.match(flow, /M 500 145 C 525 190 660 214 805 231/);
+  assert.match(flow, /viewBox="0 0 1000 500"/);
+  assert.match(flow, /flow-node home/);
+  assert.match(flow, /battery-soc/);
   assert.match(flow, /Speicher ·/);
-  assert.doesNotMatch(flow, /flow-zone/);
   assert.doesNotMatch(flow, /Venus A ·/);
   assert.doesNotMatch(flow, /animateMotion/);
 });
@@ -190,7 +193,29 @@ test("charts render a combined hover tooltip and clickable sensor legends", () =
   assert.match(chart, /chart-tooltip/);
   assert.match(chart, /chart-hover-plane/);
   assert.match(chart, /data-entity="sensor\.pv"/);
+  assert.doesNotMatch(chart, /chart-hit/);
   assert.equal(panel._chartModels.size, 1);
+});
+
+test("source-only updates avoid a full dashboard render", () => {
+  const { panel } = createPanel();
+  panel._rendered = true;
+  panel._syncStateRefs();
+  let renders = 0;
+  let liveUpdates = 0;
+  panel._render = () => { renders += 1; };
+  panel._scheduleLiveRefresh = () => { liveUpdates += 1; };
+
+  panel.hass = {
+    ...panel._hass,
+    states: {
+      ...panel._hass.states,
+      "sensor.pv_power": { state: "4300", attributes: {} },
+    },
+  };
+
+  assert.equal(renders, 0);
+  assert.equal(liveUpdates, 1);
 });
 
 test("every chart keeps its own selected history range", () => {

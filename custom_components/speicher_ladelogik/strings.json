@@ -15,7 +15,7 @@
           "house_power_average": "Gemittelte Hausleistung",
           "pv_daily_energy": "Heutige PV-Produktion",
           "forecast_sensors": "15-Minuten-Prognosesensoren heute und morgen",
-          "mobile_notify_service": "Optionaler Handy-Benachrichtigungsdienst (z. B. notify.mobile_app_timon)"
+          "mobile_notify_service": "Optionaler Handy-Benachrichtigungsdienst (z. B. notify.mobile_app_mein_geraet)"
         }
       },
       "venus_a": {
@@ -93,7 +93,7 @@
         "title": "Benachrichtigungen",
         "description": "Optional zusätzlich zur dauerhaften Home-Assistant-Mitteilung eine Nachricht an die Companion App senden.",
         "data": {
-          "mobile_notify_service": "Handy-Benachrichtigungsdienst (z. B. notify.mobile_app_timon)"
+          "mobile_notify_service": "Handy-Benachrichtigungsdienst (z. B. notify.mobile_app_mein_geraet)"
         }
       }
     }

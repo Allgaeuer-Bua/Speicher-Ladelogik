@@ -69,11 +69,18 @@ class SpeicherLadelogikPanel extends HTMLElement {
     this._historySeriesCache = new Map();
     this._chartModels = new Map();
     this._chartSerial = 0;
+    this._stateRefs = new Map();
+    this._liveFrame = null;
+    this._rendered = false;
   }
 
   set hass(value) {
+    const firstRender = !this._hass || !this._rendered;
     this._hass = value;
-    this._render();
+    const integrationChanged = this._trackStateChanges("entity", Object.values(this._config().entities || {}));
+    const sourceChanged = this._trackStateChanges("source", this._sourceEntityIds());
+    if (firstRender || integrationChanged) this._render();
+    else if (sourceChanged) this._scheduleLiveRefresh();
     this._ensureHistory();
   }
 
@@ -83,6 +90,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   set panel(value) {
     this._panel = value;
+    this._stateRefs.clear();
+    this._rendered = false;
     this._render();
     this._ensureHistory(true);
   }
@@ -204,6 +213,37 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return entityIds.map((entityId) => this._hass?.states?.[entityId]).filter(Boolean);
   }
 
+  _sourceEntityIds() {
+    return Object.values(this._config().sources || {})
+      .flatMap((value) => Array.isArray(value) ? value : [value])
+      .filter((value) => typeof value === "string" && value);
+  }
+
+  _trackStateChanges(group, entityIds) {
+    let changed = false;
+    [...new Set(entityIds.filter(Boolean))].forEach((entityId) => {
+      const key = `${group}:${entityId}`;
+      const next = this._hass?.states?.[entityId] || null;
+      if (this._stateRefs.get(key) !== next) changed = true;
+      this._stateRefs.set(key, next);
+    });
+    return changed;
+  }
+
+  _syncStateRefs() {
+    this._trackStateChanges("entity", Object.values(this._config().entities || {}));
+    this._trackStateChanges("source", this._sourceEntityIds());
+  }
+
+  _scheduleLiveRefresh() {
+    if (this._liveFrame !== null) return;
+    const schedule = globalThis.requestAnimationFrame || ((callback) => globalThis.setTimeout(callback, 16));
+    this._liveFrame = schedule(() => {
+      this._liveFrame = null;
+      this._refreshLive();
+    });
+  }
+
   _statusLabel(value) {
     const text = String(value ?? "—");
     const match = text.match(/^Kalibrierung\s+([ADE]):\s*([a-z_]+)$/i);
@@ -217,18 +257,16 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return { label: "Bereit", tone: "idle" };
   }
 
-  _flowPath(active, path, color, marker) {
-    return `<path d="${path}" class="flow-route ${active ? "active" : "idle"}" ${active ? `style="--flow-color:${color}" marker-end="url(#${marker})"` : ""}></path>`;
+  _flowPath(active, path, color, marker, route) {
+    return `<path data-flow-route="${route}" d="${path}" class="flow-route ${active ? "active" : "idle"}" ${active ? `style="--flow-color:${color}" marker-end="url(#${marker})"` : ""}></path>`;
   }
 
   _historySourceIds() {
-    return [
-      "pv", "grid", "house",
-      ...this._models().flatMap((model) => [
-        `power_${model.toLowerCase()}`,
-        `soc_${model.toLowerCase()}`,
-      ]),
-    ]
+    if (!["overview", "batteries"].includes(this._tab)) return [];
+    const keys = this._tab === "overview"
+      ? ["pv", "grid", "house", ...this._models().flatMap((model) => [`power_${model.toLowerCase()}`, `soc_${model.toLowerCase()}`])]
+      : this._models().flatMap((model) => [`power_${model.toLowerCase()}`, `soc_${model.toLowerCase()}`]);
+    return keys
       .map((key) => this._sid(key))
       .filter(Boolean);
   }
@@ -299,7 +337,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return points;
   }
 
-  _downsample(points, maximum = 360) {
+  _downsample(points, maximum = 240) {
     if (points.length <= maximum) return points;
     const bucketSize = Math.ceil(points.length / Math.max(1, Math.floor(maximum / 2)));
     const sampled = [];
@@ -442,14 +480,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       const area = fill && visible.length === 1
         ? `<path d="M${x(dataset.points[0].t).toFixed(1)},${bottom} ${path.replace(/^M/, "L")} L${x(dataset.points.at(-1).t).toFixed(1)},${bottom} Z" fill="${dataset.color}" opacity=".13"></path>`
         : "";
-      const hitPoints = dataset.points.map((point) => {
-        const stamp = new Date(point.t).toLocaleString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-        const tooltipValue = dataset.tooltipValue ? dataset.tooltipValue(point.v) : point.v;
-        const value = `${this._decimal(tooltipValue, 2)}${dataset.tooltipUnit ?? unit}`;
-        const entity = dataset.entityId ? ` data-entity="${esc(dataset.entityId)}"` : "";
-        return `<circle class="chart-hit" cx="${x(point.t).toFixed(1)}" cy="${y(point.v).toFixed(1)}" r="7"${entity}><title>${esc(`${dataset.name} · ${stamp}: ${value}`)}</title></circle>`;
-      }).join("");
-      return `${area}<path d="${path}" fill="none" stroke="${dataset.color}" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>${hitPoints}`;
+      return `${area}<path d="${path}" fill="none" stroke="${dataset.color}" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>`;
     }).join("");
     const startLabel = new Date(start).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
     const legend = visible.map((dataset) => `<span${dataset.entityId ? ` class="entity-card" data-entity="${esc(dataset.entityId)}"` : ""}><i style="background:${dataset.color}"></i>${esc(dataset.name)}</span>`).join("");
@@ -460,11 +491,16 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _nearestPoint(points, time) {
     if (!points.length) return null;
-    let nearest = points[0];
-    for (const point of points) {
-      if (Math.abs(point.t - time) < Math.abs(nearest.t - time)) nearest = point;
+    let low = 0;
+    let high = points.length - 1;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (points[middle].t < time) low = middle + 1;
+      else high = middle;
     }
-    return nearest;
+    const right = points[low];
+    const left = points[Math.max(0, low - 1)];
+    return Math.abs(left.t - time) <= Math.abs(right.t - time) ? left : right;
   }
 
   _showChartTooltip(shell, event) {
@@ -635,8 +671,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
       <section class="card system-card span-full">
         ${this._cardTitle("mdi:shield-check-outline", "Systemstatus", this._badge(valid ? "Daten bereit" : "Daten prüfen", valid ? "good" : "bad"))}
         <div class="system-grid">
-          <div class="soc-ring" style="--soc:${combined.toFixed(1)}">
-            <div><strong>${Math.round(combined)}<small>%</small></strong><span>Gesamt</span></div>
+          <div class="soc-ring" data-live-combined-ring style="--soc:${combined.toFixed(1)}">
+            <div><strong><b data-live-combined>${Math.round(combined)}</b><small>%</small></strong><span>Gesamt</span></div>
           </div>
           <div class="status-table">
             ${this._statusLine("Betriebsart", mode, mode === "Automatik" ? "good" : "warn")}
@@ -653,7 +689,22 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return `<div class="status-line"><span>${esc(label)}</span>${this._badge(value, tone)}</div>`;
   }
 
-  _flowCard() {
+  _combinedCurrentSoc() {
+    const defaults = { A: 4.16, D: 5.12, E: 5.12 };
+    const batteries = this._models().map((model) => {
+      const suffix = model.toLowerCase();
+      return {
+        soc: this._entityNum(this._source(`soc_${suffix}`), this._num(this._attr("status", `soc_venus_${suffix}`, 0))),
+        cap: this._entityNum(this._state(`nennkapazitaet_venus_${suffix}`), defaults[model]),
+      };
+    });
+    const totalCapacity = batteries.reduce((sum, battery) => sum + battery.cap, 0);
+    return Math.max(0, Math.min(100,
+      batteries.reduce((sum, battery) => sum + battery.soc * battery.cap, 0)
+      / Math.max(0.1, totalCapacity)));
+  }
+
+  _flowData() {
     const pv = this._entityNum(this._source("pv"), this._num(this._attr("status", "pv_ac_w", 0)));
     const grid = this._entityNum(this._source("grid"), NaN);
     const home = this._entityNum(this._source("house"), NaN);
@@ -668,30 +719,38 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const batteryIcon = batteryMode.tone === "charge" ? "mdi:battery-arrow-up-outline"
       : batteryMode.tone === "discharge" ? "mdi:battery-arrow-down-outline" : "mdi:battery-outline";
     const gridPath = grid >= 0
-      ? "M 220 146 C 315 146 380 146 455 146"
-      : "M 455 146 C 380 146 315 146 220 146";
-    const pvPath = "M 500 76 C 500 91 500 104 500 116";
+      ? "M 205 250 C 400 250 610 250 795 250"
+      : "M 795 250 C 610 250 400 250 205 250";
+    const pvPath = "M 500 145 C 525 190 660 214 805 231";
     const batteryPath = batteryPower < -10
-      ? "M 545 146 C 620 146 685 146 780 146"
-      : "M 780 146 C 685 146 620 146 545 146";
+      ? "M 805 269 C 660 287 525 310 500 355"
+      : "M 500 355 C 525 310 660 287 805 269";
+    return {
+      pv, grid, home, batteryPower, batteryMode, batteryIcon, gridPath, pvPath, batteryPath,
+      combinedSoc: this._combinedCurrentSoc(),
+    };
+  }
+
+  _flowCard() {
+    const flow = this._flowData();
     return `
       <section class="card flow-card span-7">
         ${this._cardTitle("mdi:transmission-tower", "Energiefluss", this._badge("Live", "good"))}
         <div class="flow-canvas">
-          <div class="flow-node grid entity-card" data-entity="${esc(this._sid("grid"))}"><ha-icon icon="mdi:transmission-tower"></ha-icon><strong>${this._power(Math.abs(grid))}</strong><span>Netz · ${Math.abs(grid) <= 10 ? "neutral" : grid > 0 ? "Bezug" : "Einspeisung"}</span></div>
-          <div class="flow-node pv entity-card" data-entity="${esc(this._sid("pv"))}"><ha-icon icon="mdi:solar-power-variant"></ha-icon><strong>${this._power(pv)}</strong><span>PV</span></div>
-          <div class="flow-core entity-card" data-entity="${esc(this._sid("house"))}"><ha-icon icon="mdi:home-lightning-bolt-outline"></ha-icon><strong>${this._power(home)}</strong><span>Haus</span></div>
-          <div class="flow-node battery"><ha-icon icon="${batteryIcon}"></ha-icon><strong>${this._power(Math.abs(batteryPower))}</strong><span>Speicher · ${batteryMode.label.toLowerCase()}</span></div>
-          <svg class="flow-lines" viewBox="0 0 1000 260" preserveAspectRatio="none" aria-hidden="true">
+          <div class="flow-node grid entity-card" data-entity="${esc(this._sid("grid"))}"><div class="flow-ring"><ha-icon icon="mdi:transmission-tower"></ha-icon><strong data-live-flow="grid-value">${this._power(Math.abs(flow.grid))}</strong></div><span data-live-flow="grid-label">Netz · ${Math.abs(flow.grid) <= 10 ? "neutral" : flow.grid > 0 ? "Bezug" : "Einspeisung"}</span></div>
+          <div class="flow-node pv entity-card" data-entity="${esc(this._sid("pv"))}"><div class="flow-ring"><ha-icon icon="mdi:solar-power-variant"></ha-icon><strong data-live-flow="pv-value">${this._power(flow.pv)}</strong></div><span>Solar</span></div>
+          <div class="flow-node home entity-card" data-entity="${esc(this._sid("house"))}"><div class="flow-ring"><ha-icon icon="mdi:home-lightning-bolt-outline"></ha-icon><strong data-live-flow="home-value">${this._power(flow.home)}</strong></div><span>Haus</span></div>
+          <div class="flow-node battery"><div class="flow-ring"><strong data-live-flow="battery-soc">${Math.round(flow.combinedSoc)} %</strong><ha-icon data-live-flow="battery-icon" icon="${flow.batteryIcon}"></ha-icon><b data-live-flow="battery-value">${this._power(Math.abs(flow.batteryPower))}</b></div><span data-live-flow="battery-label">Speicher · ${flow.batteryMode.label.toLowerCase()}</span></div>
+          <svg class="flow-lines" viewBox="0 0 1000 500" preserveAspectRatio="none" aria-hidden="true">
             <defs>
-              <marker id="flow-arrow-grid" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 Z" fill="#ff9a55"></path></marker>
+              <marker id="flow-arrow-grid" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 Z" fill="#8f6bff"></path></marker>
               <marker id="flow-arrow-pv" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 Z" fill="#ffbd45"></path></marker>
               <marker id="flow-arrow-charge" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 Z" fill="#38d582"></path></marker>
-              <marker id="flow-arrow-discharge" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 Z" fill="#b493ff"></path></marker>
+              <marker id="flow-arrow-discharge" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 Z" fill="#38d582"></path></marker>
             </defs>
-            ${this._flowPath(Math.abs(grid) > 10, gridPath, "#ff9a55", "flow-arrow-grid")}
-            ${this._flowPath(pv > 10, pvPath, "#ffbd45", "flow-arrow-pv")}
-            ${this._flowPath(Math.abs(batteryPower) > 10, batteryPath, batteryMode.tone === "charge" ? "#38d582" : "#b493ff", batteryMode.tone === "charge" ? "flow-arrow-charge" : "flow-arrow-discharge")}
+            ${this._flowPath(Math.abs(flow.grid) > 10, flow.gridPath, "#8f6bff", "flow-arrow-grid", "grid")}
+            ${this._flowPath(flow.pv > 10, flow.pvPath, "#ffbd45", "flow-arrow-pv", "pv")}
+            ${this._flowPath(Math.abs(flow.batteryPower) > 10, flow.batteryPath, "#38d582", flow.batteryMode.tone === "charge" ? "flow-arrow-charge" : "flow-arrow-discharge", "battery")}
           </svg>
         </div>
       </section>`;
@@ -744,6 +803,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const target = this._num(this._attr("planung", `soll_ladegrenze_venus_${suffix}_w`, 0));
     const valid = this._state(`daten_venus_${suffix}`)?.state === "bereit";
     const efficiency = this._state(`wirkungsgrad_venus_${suffix}`)?.state;
+    const loss = this._state(`verlustleistung_venus_${suffix}`)?.state;
+    const remaining = this._attr("planung", `restbedarf_venus_${suffix}_kwh`);
     const mode = this._batteryMode(power);
     const energy = this._batteryEnergy(suffix);
     return `
@@ -752,18 +813,20 @@ class SpeicherLadelogikPanel extends HTMLElement {
         <div class="${full ? "battery-upper" : ""}">
           <div class="battery-current">
             <div class="battery-main">
-              <div class="battery-gauge entity-card" data-entity="${esc(this._sid(`soc_${suffix}`))}"><div style="height:${Math.max(4, Math.min(100, soc))}%"></div><span>${Math.round(soc)}%</span></div>
-              <div class="battery-now entity-card" data-entity="${esc(this._sid(`power_${suffix}`))}"><span class="mode-dot ${mode.tone}"></span><strong>${mode.label}</strong><b>${this._power(Math.abs(power))}</b><small>Sollgrenze ${this._power(target)}</small></div>
+              <div class="battery-gauge entity-card" data-entity="${esc(this._sid(`soc_${suffix}`))}"><div data-live-battery="${suffix}-fill" style="height:${Math.max(4, Math.min(100, soc))}%"></div><span data-live-battery="${suffix}-soc">${Math.round(soc)}%</span></div>
+              <div class="battery-now entity-card" data-entity="${esc(this._sid(`power_${suffix}`))}"><span data-live-battery="${suffix}-dot" class="mode-dot ${mode.tone}"></span><strong data-live-battery="${suffix}-mode">${mode.label}</strong><b data-live-battery="${suffix}-power">${this._power(Math.abs(power))}</b><small>Sollgrenze ${this._power(target)}</small></div>
             </div>
-            <div class="soc-scale"><span>Min ${this._percent(minSoc)}</span><i><b style="left:${Math.max(0, Math.min(100, soc))}%"></b></i><span>Max ${this._percent(maxSoc)}</span></div>
+            <div class="soc-scale"><span>Min ${this._percent(minSoc)}</span><i><b data-live-battery="${suffix}-scale" style="left:${Math.max(0, Math.min(100, soc))}%"></b></i><span>Max ${this._percent(maxSoc)}</span></div>
           </div>
           ${full ? this._batteryHistory(letter) : ""}
         </div>
         <div class="metric-pairs compact">
+          ${this._metric("Verlust", this._power(loss), "mdi:lightning-bolt-outline")}
+          ${this._metric("Wirkungsgrad", this._percent(efficiency, 1), "mdi:percent-outline")}
+          ${this._metric("Restbedarf", this._energy(remaining), "mdi:battery-arrow-up-outline")}
+          ${this._metric("Register", this._power(target), "mdi:gauge")}
           ${full ? this._metric("Heute geladen", this._historyEnergy(energy.charged), "mdi:battery-plus-outline") : ""}
           ${full ? this._metric("Heute entladen", this._historyEnergy(energy.discharged), "mdi:battery-minus-outline") : ""}
-          ${this._metric("Wirkungsgrad", this._percent(efficiency, 1), "mdi:percent-outline")}
-          ${this._metric("Fahrplanlimit", this._power(this._attr("planung", `fahrplan_ladegrenze_stabil_venus_${suffix}_w`)), "mdi:gauge")}
         </div>
         ${full ? this._batteryDetails(letter) : ""}
       </section>`;
@@ -980,11 +1043,70 @@ class SpeicherLadelogikPanel extends HTMLElement {
       @media(max-width:1050px){.summary-grid{grid-template-columns:1fr}.summary-grid .energy-card{grid-row:auto}.summary-card{min-height:0}.battery-upper{grid-template-columns:minmax(205px,.52fr) minmax(320px,1.48fr)}}
       @media(max-width:720px){.flow-canvas{min-height:320px}.window-label{align-items:flex-start;flex-direction:column;gap:3px}.ack-state{grid-template-columns:1fr}.number-input{width:94px}.summary-grid{gap:9px}.battery-upper{grid-template-columns:1fr}.history-chart{height:190px}.chart-empty{height:190px}.brand-copy strong{font-size:15px}.nav-item span{font-size:11px}.flow-node span{font-size:9px}}
       .flow-canvas{display:block;min-height:260px;position:relative;overflow:hidden}.flow-node,.flow-core{position:absolute;transform:translateX(-50%);z-index:3}.flow-node.grid{left:16%;top:96px}.flow-node.pv{left:50%;top:0}.flow-core{left:50%;top:86px}.flow-node.battery{left:84%;top:96px;color:var(--accent)}.flow-lines{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible}.flow-route{fill:none;stroke:rgba(132,169,156,.2);stroke-width:.75;stroke-dasharray:7 8;vector-effect:non-scaling-stroke}.flow-route.active{stroke:var(--flow-color);stroke-width:1.05;stroke-dasharray:none;stroke-linecap:round;filter:drop-shadow(0 0 2px var(--flow-color))}.flow-node ha-icon{box-shadow:none}.flow-core ha-icon{box-shadow:0 0 18px rgba(82,184,255,.16)}
-      .chart-shell{position:relative;min-width:0}.chart-hover-plane{fill:transparent;pointer-events:none}.chart-tooltip{position:absolute;z-index:6;min-width:155px;padding:9px 11px;border:1px solid rgba(144,177,164,.22);border-radius:9px;background:rgba(8,15,18,.96);box-shadow:0 8px 24px rgba(0,0,0,.38);opacity:0;visibility:hidden;pointer-events:none;transform:translateX(12px);transition:opacity .08s;color:var(--primary-text-color)}.chart-tooltip.visible{opacity:1;visibility:visible}.chart-tooltip.flip{transform:translateX(calc(-100% - 12px))}.chart-tooltip>b{display:block;margin-bottom:6px;font-size:11px;color:var(--muted)}.chart-tooltip>div{display:grid;grid-template-columns:9px 1fr auto;gap:7px;align-items:center;font-size:12px;padding:2px 0}.chart-tooltip i{width:8px;height:8px;border-radius:2px}.chart-tooltip strong{font-size:12px}.chart-legend .entity-card{cursor:pointer;padding:2px 4px;border-radius:5px}.chart-hit{fill:transparent;stroke:transparent;pointer-events:all;cursor:pointer}.chart-hit:hover{fill:var(--accent2);opacity:.85}.drift-values{display:flex;gap:5px;flex-wrap:wrap}.drift-value{border:0;border-radius:10px;padding:3px 7px;cursor:pointer}.drift-value.good{color:#61e69a;background:rgba(56,213,130,.13)}.drift-value.warn{color:#ffd078;background:rgba(255,189,69,.14)}.drift-value.bad{color:#ff8a8a;background:rgba(255,107,107,.14)}.drift-value.neutral{color:var(--muted);background:rgba(130,150,145,.12)}.storage-slots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}.storage-slots>div{display:grid;grid-template-columns:auto auto;gap:3px 8px;padding:8px;border-radius:8px;background:rgba(110,135,125,.06)}.storage-slots span{justify-self:end;color:var(--accent)}.storage-slots small{grid-column:1/-1;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.entity-card{transition:border-color .15s,background .15s}.entity-card:hover{border-color:rgba(82,184,255,.3);background-color:rgba(82,184,255,.04)}
+      .chart-shell{position:relative;min-width:0}.chart-hover-plane{fill:transparent;pointer-events:none}.chart-tooltip{position:absolute;z-index:6;min-width:155px;padding:9px 11px;border:1px solid rgba(144,177,164,.22);border-radius:9px;background:rgba(8,15,18,.96);box-shadow:0 8px 24px rgba(0,0,0,.38);opacity:0;visibility:hidden;pointer-events:none;transform:translateX(12px);transition:opacity .08s;color:var(--primary-text-color)}.chart-tooltip.visible{opacity:1;visibility:visible}.chart-tooltip.flip{transform:translateX(calc(-100% - 12px))}.chart-tooltip>b{display:block;margin-bottom:6px;font-size:11px;color:var(--muted)}.chart-tooltip>div{display:grid;grid-template-columns:9px 1fr auto;gap:7px;align-items:center;font-size:12px;padding:2px 0}.chart-tooltip i{width:8px;height:8px;border-radius:2px}.chart-tooltip strong{font-size:12px}.chart-legend .entity-card{cursor:pointer;padding:2px 4px;border-radius:5px}.drift-values{display:flex;gap:5px;flex-wrap:wrap}.drift-value{border:0;border-radius:10px;padding:3px 7px;cursor:pointer}.drift-value.good{color:#61e69a;background:rgba(56,213,130,.13)}.drift-value.warn{color:#ffd078;background:rgba(255,189,69,.14)}.drift-value.bad{color:#ff8a8a;background:rgba(255,107,107,.14)}.drift-value.neutral{color:var(--muted);background:rgba(130,150,145,.12)}.storage-slots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}.storage-slots>div{display:grid;grid-template-columns:auto auto;gap:3px 8px;padding:8px;border-radius:8px;background:rgba(110,135,125,.06)}.storage-slots span{justify-self:end;color:var(--accent)}.storage-slots small{grid-column:1/-1;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.entity-card{transition:border-color .15s,background .15s}.entity-card:hover{border-color:rgba(82,184,255,.3);background-color:rgba(82,184,255,.04)}
       @media(max-width:720px){.flow-canvas{min-height:250px}.flow-node.grid{left:14%;top:94px}.flow-node.pv{left:50%;top:0}.flow-core{left:50%;top:84px}.flow-node.battery{left:86%;top:94px}.storage-slots{grid-template-columns:1fr}.chart-tooltip{min-width:135px;padding:7px 9px}.chart-tooltip>div{font-size:11px}}
+      .flow-card .flow-canvas{min-height:430px}.flow-card .flow-node{position:absolute;transform:translate(-50%,-50%);gap:7px;z-index:3}.flow-card .flow-node.grid{left:12%;top:50%;color:#a98dff}.flow-card .flow-node.pv{left:50%;top:15%;color:#ffbd45}.flow-card .flow-node.home{left:88%;top:50%;color:#ff9a55}.flow-card .flow-node.battery{left:50%;top:85%;color:#38d582}.flow-card .flow-ring{width:116px;height:116px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;background:rgba(9,16,19,.92);border:3px solid currentColor;box-shadow:0 0 20px color-mix(in srgb,currentColor 24%,transparent)}.flow-card .flow-ring ha-icon{width:auto;height:auto;border:0;border-radius:0;background:transparent;color:currentColor;--mdc-icon-size:31px}.flow-card .flow-ring strong{font-size:18px;line-height:1}.flow-card .flow-ring b{font-size:13px;line-height:1}.flow-card .flow-node>span{font-size:12px;color:var(--muted);white-space:nowrap}.flow-card .flow-route{stroke-width:1.1}.flow-card .flow-route.active{stroke-width:1.35;filter:drop-shadow(0 0 3px var(--flow-color))}
+      @media(max-width:720px){.flow-card .flow-canvas{min-height:340px}.flow-card .flow-ring{width:82px;height:82px;border-width:2px}.flow-card .flow-ring ha-icon{--mdc-icon-size:23px}.flow-card .flow-ring strong{font-size:14px}.flow-card .flow-ring b{font-size:10px}.flow-card .flow-node>span{font-size:9px}.flow-card .flow-node.grid{left:14%}.flow-card .flow-node.home{left:86%}}
       .battery-pair{grid-template-columns:repeat(auto-fit,minmax(390px,1fr))}.comparison-grid{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}.control-columns.manual-columns{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}.action-groups{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}.storage-slots{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
       @media(max-width:720px){.battery-pair,.comparison-grid,.control-columns.manual-columns,.action-groups,.storage-slots{grid-template-columns:1fr}}
     `;
+  }
+
+  _setLiveText(selector, value) {
+    const element = this.shadowRoot?.querySelector?.(selector);
+    if (element && element.textContent !== value) element.textContent = value;
+  }
+
+  _refreshFlowRoute(route, active, path, color, marker) {
+    const element = this.shadowRoot?.querySelector?.(`[data-flow-route="${route}"]`);
+    if (!element) return;
+    element.setAttribute("d", path);
+    element.setAttribute("class", `flow-route ${active ? "active" : "idle"}`);
+    if (active) {
+      element.style.setProperty("--flow-color", color);
+      element.setAttribute("marker-end", `url(#${marker})`);
+    } else {
+      element.style.removeProperty("--flow-color");
+      element.removeAttribute("marker-end");
+    }
+  }
+
+  _refreshLive() {
+    if (!this._rendered || !this.shadowRoot?.querySelector) return;
+    const combinedSoc = this._combinedCurrentSoc();
+    this._setLiveText("[data-live-combined]", String(Math.round(combinedSoc)));
+    const combinedRing = this.shadowRoot.querySelector("[data-live-combined-ring]");
+    combinedRing?.style.setProperty("--soc", combinedSoc.toFixed(1));
+
+    const flow = this._flowData();
+    this._setLiveText('[data-live-flow="pv-value"]', this._power(flow.pv));
+    this._setLiveText('[data-live-flow="grid-value"]', this._power(Math.abs(flow.grid)));
+    this._setLiveText('[data-live-flow="grid-label"]', `Netz · ${Math.abs(flow.grid) <= 10 ? "neutral" : flow.grid > 0 ? "Bezug" : "Einspeisung"}`);
+    this._setLiveText('[data-live-flow="home-value"]', this._power(flow.home));
+    this._setLiveText('[data-live-flow="battery-soc"]', `${Math.round(flow.combinedSoc)} %`);
+    this._setLiveText('[data-live-flow="battery-value"]', this._power(Math.abs(flow.batteryPower)));
+    this._setLiveText('[data-live-flow="battery-label"]', `Speicher · ${flow.batteryMode.label.toLowerCase()}`);
+    const batteryIcon = this.shadowRoot.querySelector('[data-live-flow="battery-icon"]');
+    batteryIcon?.setAttribute("icon", flow.batteryIcon);
+    this._refreshFlowRoute("grid", Math.abs(flow.grid) > 10, flow.gridPath, "#8f6bff", "flow-arrow-grid");
+    this._refreshFlowRoute("pv", flow.pv > 10, flow.pvPath, "#ffbd45", "flow-arrow-pv");
+    this._refreshFlowRoute("battery", Math.abs(flow.batteryPower) > 10, flow.batteryPath, "#38d582", flow.batteryMode.tone === "charge" ? "flow-arrow-charge" : "flow-arrow-discharge");
+
+    this._models().forEach((model) => {
+      const suffix = model.toLowerCase();
+      const soc = this._entityNum(this._source(`soc_${suffix}`), this._num(this._attr("status", `soc_venus_${suffix}`, 0)));
+      const power = this._entityNum(this._source(`power_${suffix}`), this._num(this._attr("status", `ac_leistung_venus_${suffix}_w`, 0)));
+      const mode = this._batteryMode(power);
+      this._setLiveText(`[data-live-battery="${suffix}-soc"]`, `${Math.round(soc)}%`);
+      this._setLiveText(`[data-live-battery="${suffix}-mode"]`, mode.label);
+      this._setLiveText(`[data-live-battery="${suffix}-power"]`, this._power(Math.abs(power)));
+      const fill = this.shadowRoot.querySelector(`[data-live-battery="${suffix}-fill"]`);
+      fill?.style.setProperty("height", `${Math.max(4, Math.min(100, soc))}%`);
+      const scale = this.shadowRoot.querySelector(`[data-live-battery="${suffix}-scale"]`);
+      scale?.style.setProperty("left", `${Math.max(0, Math.min(100, soc))}%`);
+      const dot = this.shadowRoot.querySelector(`[data-live-battery="${suffix}-dot"]`);
+      if (dot) dot.className = `mode-dot ${mode.tone}`;
+    });
   }
 
   _render() {
@@ -995,6 +1117,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
       : this._tab === "batteries" ? this._batteries()
         : this._tab === "control" ? this._control() : this._diagnostics();
     this.shadowRoot.innerHTML = `<style>${this._styles()}</style>${this._header()}${content}`;
+    this._rendered = true;
+    this._syncStateRefs();
     this._bind();
   }
 
@@ -1002,6 +1126,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     this.shadowRoot.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", () => {
       this._tab = button.dataset.tab;
       this._render();
+      this._ensureHistory();
     }));
     this.shadowRoot.querySelectorAll("[data-entity]").forEach((element) => element.addEventListener("click", (event) => {
       if (event.target.closest("button,input,select")) return;
@@ -1074,7 +1199,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 }
 
-const PANEL_ELEMENT = "speicher-ladelogik-panel-1-0-0-rc-9";
+const PANEL_ELEMENT = "speicher-ladelogik-panel-1-0-0-rc-10";
 
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);

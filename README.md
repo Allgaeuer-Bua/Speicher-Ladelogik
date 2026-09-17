@@ -3,7 +3,7 @@
 Intelligente Speicher-Ladesteuerung für Home Assistant mit unabhängig
 regelbaren Speichern und AstraMeter.
 
-## V1.0 RC 9
+## V1.0 RC 10
 
 Der Release Candidate ersetzt die bisherigen YAML-Helfer und
 Steuerautomationen durch native Entitäten der Integration.
@@ -40,6 +40,14 @@ und ungültige Daten nach fünf Minuten; über die Integrationsoptionen kann
 zusätzlich ein `notify.mobile_app_*`-Dienst gewählt werden. Die
 Kalibrier-Überschussprüfung berücksichtigt nun den eigenen 500-W-Ladestrom und
 verhindert damit den beobachteten 0/500-W-Regelkreis.
+
+RC10 ordnet den Energiefluss als ruhige Power-Flow-Ansicht mit Solar, Netz,
+Haus und einem zusammengefassten Speicher an. Quellsensoren aktualisieren nur
+noch die sichtbaren Live-Werte statt das komplette Panel neu aufzubauen;
+Verlaufsgrafiken bleiben dadurch stabil und die Bedienung reagiert spürbar
+flüssiger. Die Speicherdetails zeigen Verlust und Restbedarf wieder in der
+gewünschten Reihenfolge, und das Beispiel für den optionalen Handy-Dienst ist
+vollständig neutral gehalten.
 
 ### Funktionen
 
@@ -88,7 +96,7 @@ gewichtet.
 ### Wechsel von Beta 7
 
 1. Vor dem Update die alten Automationen deaktiviert lassen.
-2. RC9 über HACS installieren und Home Assistant neu starten.
+2. RC10 über HACS installieren und Home Assistant neu starten.
 3. Der erste RC-Start erfolgt absichtlich in **Beobachten**. Entitäten und Plan
    prüfen.
 4. Danach `select.speicher_ladelogik_betriebsart` auf **Automatik** stellen.
