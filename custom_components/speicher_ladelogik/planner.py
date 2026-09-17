@@ -10,6 +10,7 @@ from homeassistant.util import dt as dt_util
 
 from . import persistence
 from .stability import (
+    calibration_available_surplus,
     peer_discharge_release,
     peer_grid_support,
     quarter_hour_window,
@@ -18,7 +19,7 @@ from .stability import (
 )
 
 
-def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
+def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     """Calculate a plan without performing Home Assistant service calls."""
     # Speicher-Ladelogik V1.0 Beta 1 - 2026-09-14
     # HA built-in python_script: NO imports, NO service calls, NO register writes.
@@ -27,7 +28,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
 
     output = {}
 
-    VERSION = "1.0.0-rc.5"
+    VERSION = "1.0.0-rc.10"
     NOW = float(data.get("now", time.time()))
     DAY0 = float(data.get("day0", 0))
     DAY1 = float(data.get("day1", 0))
@@ -36,16 +37,23 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     ELEVEN = float(data.get("eleven", 0))
     DEADLINE = float(data.get("deadline", 0))
     REQUEST = str(data.get("request", "tick"))
+    BATTERY_KEYS = [
+        key for key in data.get("battery_keys", ["A", "E"])
+        if key in {"A", "D", "E"}
+    ] or ["A", "E"]
     MANUAL_ENABLED = {
         "A": "input_boolean.speicher_ladelogik_manuell_a_aktiv",
+        "D": "input_boolean.speicher_ladelogik_manuell_d_aktiv",
         "E": "input_boolean.speicher_ladelogik_manuell_e_aktiv",
     }
     MANUAL_CHARGE = {
         "A": "input_number.speicher_ladelogik_manuell_laden_a_w",
+        "D": "input_number.speicher_ladelogik_manuell_laden_d_w",
         "E": "input_number.speicher_ladelogik_manuell_laden_e_w",
     }
     MANUAL_DISCHARGE = {
         "A": "input_number.speicher_ladelogik_manuell_entladen_a_w",
+        "D": "input_number.speicher_ladelogik_manuell_entladen_d_w",
         "E": "input_number.speicher_ladelogik_manuell_entladen_e_w",
     }
 
@@ -90,12 +98,48 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
             "usable_default": 4.5568, "floor": 11, "maximum": 2500,
             "tail": 1100, "measured_ac": 5.35, "preferred": 1300,
         },
+        "D": {
+            "soc": "sensor.marstek_venus_d_soc",
+            "power": "sensor.marstek_venus_d_ac_leistung",
+            "charge": "number.marstek_venus_d_maximale_ladeleistung",
+            "discharge": "number.marstek_venus_d_maximale_entladeleistung",
+            "auto": "switch.astrameter_venus_d_auto_target",
+            "active": "switch.astrameter_venus_d_active",
+            "override": "input_boolean.venus_d_nicht_laden",
+            "top": "number.marstek_venus_d_maximaler_soc",
+            "bottom": "number.marstek_venus_d_minimaler_soc",
+            "vmax": "sensor.marstek_venus_d_maximale_zellenspannung",
+            "tmax": "sensor.marstek_venus_d_maximale_zellentemperatur",
+            "tmin": "sensor.marstek_venus_d_minimale_zellentemperatur",
+            "usable": "input_number.venus_d_verfugbare_kapazitat",
+            "charge_sign": -1,
+            "usable_default": 4.4, "floor": 12, "maximum": 2500,
+            "tail": 1100, "measured_ac": 5.0, "preferred": 1300,
+        },
     }
 
-    PACKS = [
-        "sensor.marstek_venus_a_soc_batteriepack_1",
-        "sensor.marstek_venus_a_soc_batteriepack_2",
-    ]
+    PACKS = {
+        "A": [
+            "sensor.marstek_venus_a_soc_batteriepack_1",
+            "sensor.marstek_venus_a_soc_batteriepack_2",
+        ],
+        "D": [
+            "sensor.marstek_venus_d_soc_batteriepack_1",
+            "sensor.marstek_venus_d_soc_batteriepack_2",
+        ],
+        "E": [],
+    }
+    DRIFTS = {
+        "A": ["sensor.venus_a_pack_1_zelldrift", "sensor.venus_a_pack_2_zelldrift"],
+        "D": ["sensor.venus_d_pack_1_zelldrift", "sensor.venus_d_pack_2_zelldrift"],
+        "E": ["sensor.marstek_venus_e_zellspannungs_differenz"],
+    }
+    for key, entities in data.get("pack_entities", {}).items():
+        if key in PACKS and isinstance(entities, list) and entities:
+            PACKS[key] = [entity for entity in entities if isinstance(entity, str)]
+    for key, entities in data.get("drift_entities", {}).items():
+        if key in DRIFTS and isinstance(entities, list) and entities:
+            DRIFTS[key] = [entity for entity in entities if isinstance(entity, str)]
     GRID = "sensor.stromzahler_leistung"  # positive import; negative export
     PV = "sensor.aktuelle_pv_leistung"
     MPPTS = ["sensor.sg10rt_mppt1_leistung", "sensor.sg10rt_mppt2_leistung",
@@ -268,9 +312,9 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
 
     def split_power(total, needs, caps, previous):
         total = int(max(0, total) // 50 * 50)
-        caps = {key: int(max(0, caps[key]) // 50 * 50) for key in ["A", "E"]}
-        limits = {"A": 0, "E": 0}
-        eligible = [key for key in ["A", "E"] if needs[key] > 0 and caps[key] >= 50]
+        caps = {key: int(max(0, caps[key]) // 50 * 50) for key in BATTERY_KEYS}
+        limits = {key: 0 for key in BATTERY_KEYS}
+        eligible = [key for key in BATTERY_KEYS if needs[key] > 0 and caps[key] >= 50]
         if not eligible or total < 50:
             return limits
         first = eligible[0]
@@ -297,7 +341,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
 
 
     def simulate(rows, start, end, battery_data, caps, load, factor, eta, charge_after=None, export_target=0):
-        remaining = {key: battery_data[key]["need"] for key in ["A", "E"]}
+        remaining = {key: battery_data[key]["need"] for key in BATTERY_KEYS}
         finish = None
         for row in rows:
             begin = max(start, row["t"])
@@ -311,7 +355,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
                 seconds = min(60, stop - tick)
                 if surplus >= 0 and (charge_after is None or tick >= charge_after):
                     instantaneous = {}
-                    for key in ["A", "E"]:
+                    for key in BATTERY_KEYS:
                         bat = battery_data[key]
                         tail_kwh = bat["nominal"] * max(0, bat["goal"] - 90) / 100
                         rate = caps[key]
@@ -319,10 +363,10 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
                             rate = min(rate, BATTERIES[key]["tail"])
                         instantaneous[key] = rate if remaining[key] > 0.00001 else 0
                     allocated = split_power(min(available, sum(instantaneous.values())), remaining, instantaneous, {})
-                    for key in ["A", "E"]:
+                    for key in BATTERY_KEYS:
                         remaining[key] = max(0, remaining[key] - allocated[key] * seconds / 3600000 * eta)
                 elif surplus < 0:
-                    active = [key for key in ["A", "E"] if caps[key] > 0]
+                    active = [key for key in BATTERY_KEYS if caps[key] > 0]
                     for key in active:
                         remaining[key] = min(battery_data[key]["target"], remaining[key] + (-surplus) * seconds / 3600000 / max(1, len(active)))
                 tick = tick + seconds
@@ -369,8 +413,10 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
 
 
     def cap_snapshot():
-        return {"A": number(raw(BATTERIES["A"]["charge"])), "E": number(raw(BATTERIES["E"]["charge"])),
-                "DA": number(raw(BATTERIES["A"]["discharge"])), "DE": number(raw(BATTERIES["E"]["discharge"]))}
+        return {
+            **{key: number(raw(BATTERIES[key]["charge"])) for key in BATTERY_KEYS},
+            **{"D" + key: number(raw(BATTERIES[key]["discharge"])) for key in BATTERY_KEYS},
+        }
 
 
     def backup_restored(saved, current):
@@ -402,13 +448,31 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         if p not in ACTIVE_PHASES:
             return result
         key = s["b"]
-        other = "E" if key == "A" else "A"
+        peers = [candidate for candidate in BATTERY_KEYS if candidate != key]
         request = context["request"]
-        if key not in ["A", "E"]:
+        # A running 500-W calibration lowers the measured live surplus by its
+        # own draw.  Judging the calibration from that already reduced value
+        # caused the observed 500/0-W feedback loop.  Reconstruct the surplus
+        # before the calibration load from its actual charging power.  The
+        # waiting phase deliberately keeps using the unmodified value so a
+        # calibration cannot start on energy supplied by the peer storage.
+        running_charge = key in BATTERY_KEYS and (
+            p == "charge" or (p == "paused" and s.get("u") == "charge")
+        )
+        actual_draw = (
+            context["batteries"][key].get("charge_power")
+            if key in BATTERY_KEYS else None
+        )
+        calibration_surplus = calibration_available_surplus(
+            context["live_surplus"],
+            actual_draw,
+            running=running_charge,
+        )
+        if key not in BATTERY_KEYS:
             transition(s, "error", "state_corrupt")
         elif p != "restore" and (request == "cancel" or not context["automatic"] or not context["armed"][key]):
             transition(s, "restore", "cancelled")
-        elif p != "restore" and key == "A" and s["z"] != context["pack_count"]:
+        elif p != "restore" and key in {"A", "D"} and s["z"] != context["pack_count"]:
             transition(s, "restore", "pack_changed")
         elif p not in ["requested", "restore"] and request == "start":
             transition(s, "restore", "restart")
@@ -426,7 +490,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
             resume = s["u"] or "requested"
             if resume in ["charge", "rest"] and NOW >= s["x"] + 1800:
                 transition(s, "restore", "retry_window")
-            elif resume not in ["charge", "rest"] or context["live_surplus"] >= 600:
+            elif resume not in ["charge", "rest"] or calibration_surplus >= 600:
                 transition(s, resume, "resumed")
                 s["u"] = ""
                 s["q"] = int(NOW)
@@ -516,7 +580,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
                 else:
                     s["f"] = 0
                 if s["p"] == "charge":
-                    if context["live_surplus"] < 400:
+                    if calibration_surplus < 400:
                         pause_session(s, "pv_pause")
                     elif s["h"] and power is not None and power < 400 and not bat["all_full"]:
                         s["l"] = s["l"] or int(NOW)
@@ -572,14 +636,15 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
             result["charge"][key] = 0
             if context["backup"] is not None and context["backup"]["D" + key] >= 0:
                 result["discharge"][key] = context["backup"]["D" + key]
-            if context["batteries"][other]["owns"] and context.get("peer_drain_ok", {}).get(other, False):
-                result["discharge"][other] = (
-                    context.get("peer_discharge_max", {}).get(
-                        other, BATTERIES[other]["maximum"]
+            for other in peers:
+                if context["batteries"][other]["owns"] and context.get("peer_drain_ok", {}).get(other, False):
+                    result["discharge"][other] = (
+                        context.get("peer_discharge_max", {}).get(
+                            other, BATTERIES[other]["maximum"]
+                        )
+                        if s["h"] or temporary_release
+                        else 0
                     )
-                    if s["h"] or temporary_release
-                    else 0
-                )
         elif s["p"] == "wait":
             result["charge"][key] = 0
             # Nach Erreichen von 13 % bleibt die zuvor gesicherte Entladegrenze
@@ -620,21 +685,21 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     def read_learning():
         state = hass.states.get(LEARNING_ID)
         saved = state.attributes if state is not None else {}
-        result = {"active": {}, "history": [], "models": {"A": {}, "E": {}}}
+        result = {"active": {}, "history": [], "models": {key: {} for key in BATTERY_KEYS}}
         try:
             active = saved.get("active", {})
-            if active.get("battery") in ["A", "E"] and 0 < number(active.get("start"), 0) <= NOW:
+            if active.get("battery") in BATTERY_KEYS and 0 < number(active.get("start"), 0) <= NOW:
                 result["active"] = active.copy()
             for record in saved.get("history", [])[-20:]:
-                if record.get("battery") in ["A", "E"] and number(record.get("end")) is not None:
+                if record.get("battery") in BATTERY_KEYS and number(record.get("end")) is not None:
                     result["history"].append(record.copy())
-            for key in ["A", "E"]:
+            for key in BATTERY_KEYS:
                 model = saved.get("models", {}).get(key, {})
                 if (0 < number(model.get("count"), 0) <= 10000 and 0 < number(model.get("ac_kwh"), 0) <= 30
                         and 0 < number(model.get("usable_reference"), 0) < 20):
                     result["models"][key] = model.copy()
         except (AttributeError, TypeError):
-            return {"active": {}, "history": [], "models": {"A": {}, "E": {}}}
+            return {"active": {}, "history": [], "models": {key: {} for key in BATTERY_KEYS}}
         return result
 
 
@@ -646,7 +711,10 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     weak = setting("schwacher_tag", 25, 5, 50)
     middle = max(weak + 1, setting("mittlerer_tag", 50, 20, 100))
     strong = max(middle + 1, setting("starker_tag", 85, 50, 200))
-    pack_count = int(setting("venus_a_packs", 2, 1, 2))
+    pack_counts = {
+        key: int(setting("venus_" + key.lower() + "_packs", 2, 1, 8))
+        for key in BATTERY_KEYS if key in {"A", "D"}
+    }
     mode = raw("input_select.speicher_ladelogik_betriebsart")
     automatic = mode == "Automatik" and raw("input_boolean.speicher_ladelogik_aktiv") == "on"
 
@@ -659,12 +727,12 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     else:
         prior_attributes = {}
 
-    # Manuelle A/E-Grenzwerte bleiben aktiv, bis der Benutzer den Schalter ausschaltet.
+    # Manuelle Grenzen bleiben je Speicher aktiv, bis der Benutzer sie ausschaltet.
     # Es wird keine Leistung erzwungen; AstraMeter entscheidet weiterhin die Richtung.
-    manual_requested = {key: raw(MANUAL_ENABLED[key]) == "on" for key in ["A", "E"]}
-    manual_active_by_key = {key: manual_requested[key] and automatic for key in ["A", "E"]}
+    manual_requested = {key: raw(MANUAL_ENABLED[key]) == "on" for key in BATTERY_KEYS}
+    manual_active_by_key = {key: manual_requested[key] and automatic for key in BATTERY_KEYS}
     manual_active = any(manual_active_by_key.values())
-    for key in ["A", "E"]:
+    for key in BATTERY_KEYS:
         cfg = BATTERIES[key]
         cfg["maximum"] = advertised_maximum(cfg["charge"], cfg["maximum"])
         cfg["discharge_maximum"] = advertised_maximum(
@@ -680,11 +748,11 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
             cfg["maximum"],
         )
     manual_charge = {key: rounded_limit(number(raw(MANUAL_CHARGE[key]), 0),
-                                        BATTERIES[key]["maximum"]) for key in ["A", "E"]}
+                                        BATTERIES[key]["maximum"]) for key in BATTERY_KEYS}
     manual_discharge = {key: rounded_limit(number(raw(MANUAL_DISCHARGE[key]), 0),
-                                           BATTERIES[key]["discharge_maximum"]) for key in ["A", "E"]}
+                                           BATTERIES[key]["discharge_maximum"]) for key in BATTERY_KEYS}
     failure_counts = {}
-    for key in ["A", "E"]:
+    for key in BATTERY_KEYS:
         failure_counts[key] = number(raw("input_number.speicher_ladelogik_schreibfehler_" + key.lower()),
                                      number(raw("input_number.speicher_ladelogik_schreibfehler"), 0))
         if REQUEST == "ack":
@@ -707,7 +775,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     errors = []
     warnings = []
     bats = {}
-    for key in ["A", "E"]:
+    for key in BATTERY_KEYS:
         cfg = BATTERIES[key]
         soc = measurement(cfg["soc"], "soc")
         power_fresh = measurement(cfg["power"], "power", 90)
@@ -750,12 +818,10 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
             errors.append(key + ": Kapazität ungültig")
             nominal = cfg["usable_default"] / (1 - cfg["floor"] / 100)
             usable = nominal * (1 - floor / 100)
-        if key == "A" and abs(nominal - pack_count * 2.08) > 0.1:
-            capacity_ok = False
-            errors.append("A: Packzahl und hinterlegte Nennkapazität passen nicht zusammen")
+        pack_count = pack_counts.get(key, 1)
         packs = []
-        if key == "A":
-            for entity in PACKS[:pack_count]:
+        if key in {"A", "D"}:
+            for entity in PACKS[key][:pack_count]:
                 value = measurement(entity, "soc")
                 if value is None:
                     warnings.append(entity + ": erwarteter Pack-Sensor fehlt")
@@ -819,19 +885,19 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     mppt_fresh = all([value is not None and 0 <= value <= 20000 for value in mppt_values])
     mppt_sum = sum(mppt_values) if mppt_fresh else None
     balance_surplus = None
-    if grid is not None and all([bats[key]["power_live"] is not None for key in ["A", "E"]]):
-        balance_surplus = max(0, sum([bats[key]["grid_effect"] for key in ["A", "E"]]) - grid)
+    if grid is not None and all([bats[key]["power_live"] is not None for key in BATTERY_KEYS]):
+        balance_surplus = max(0, sum([bats[key]["grid_effect"] for key in BATTERY_KEYS]) - grid)
 
     balance_lower = None
     if grid is not None:
         balance_lower = max(0, -grid + sum([bats[key]["grid_effect"] if bats[key]["power_live"] is not None
-                            else -(BATTERIES[key]["maximum"] * 1.1 + 100) for key in ["A", "E"]]))
+                            else -(BATTERIES[key]["maximum"] * 1.1 + 100) for key in BATTERY_KEYS]))
     pv_status = "frisch" if pv_fresh is not None else ("Nacht-Ersatzwert" if pv_night_fallback else
                  ("0 W ohne Neumeldung" if pv_held_zero else "AC-Summe nicht frisch"))
     pv_estimate = pv if pv_fresh is not None or pv_night_fallback else None
     pv_estimate_source = "AC-Messung" if pv_fresh is not None else ("Nacht-Ersatzwert" if pv_night_fallback else "keine")
     if pv_estimate is None and balance_surplus is not None and live_load is not None:
-        pv_estimate = max(0, live_load + sum([bats[key]["grid_effect"] for key in ["A", "E"]]) - grid)
+        pv_estimate = max(0, live_load + sum([bats[key]["grid_effect"] for key in BATTERY_KEYS]) - grid)
         pv_estimate_source = "Rekonstruktion aus Hauslast, Netz und Batterien"
     elif pv_estimate is None and mppt_fresh:
         pv_estimate = mppt_sum * 0.85
@@ -911,7 +977,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     data_errors.extend(errors)
     pv_chance = live_valid and live_surplus >= 200
     reaction_blocked_prior = {}
-    for key in ["A", "E"]:
+    for key in BATTERY_KEYS:
         # Eine ausbleibende AC-Reaktion ist nur ein Hinweis.
         # Eine aus einer frueheren Installation uebernommene Sperre darf nicht weiterwirken.
         reaction_blocked_prior[key] = False
@@ -927,7 +993,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     cal_critical = {}
     cal_armed = {}
     cal_errors = {}
-    for key in ["A", "E"]:
+    for key in BATTERY_KEYS:
         cfg = BATTERIES[key]
         model = learning["models"][key]
         learned_ac = 0
@@ -973,6 +1039,19 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
 
     backup = read_backup(raw(BACKUP_ID))
     cal_backup = read_backup(raw(CAL_BACKUP_ID))
+    allowed_backup_fields = {
+        field
+        for key in BATTERY_KEYS
+        for field in (key, "D" + key)
+    }
+    for saved in (backup, cal_backup):
+        if saved is not None:
+            for field in tuple(saved):
+                if field not in allowed_backup_fields:
+                    saved.pop(field)
+            for key in BATTERY_KEYS:
+                saved.setdefault(key, -1)
+                saved.setdefault("D" + key, -1)
     session = read_session(raw(SESSION_ID))
     queue_value = raw(QUEUE_ID)
 
@@ -985,6 +1064,11 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
                   and (cal_backup is not None or raw(CAL_BACKUP_ID) == "") and queue is not None)
     if queue is None:
         queue = {}
+    else:
+        queue = {key: value for key, value in queue.items() if key in BATTERY_KEYS}
+        for item in queue.values():
+            if item.get("d") not in {"-", *BATTERY_KEYS}:
+                item["d"] = "-"
     original_phase = session["p"]
     original_battery = session["b"]
     save_backup = ""
@@ -993,7 +1077,11 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     clear_backup = False
     queue_notify = ""
     effective_request = REQUEST
-    request_map = {"cal_a": "A", "cal_e": "E", "cal_a_tomorrow": "A", "cal_e_tomorrow": "E"}
+    request_map = {
+        request: key
+        for key in BATTERY_KEYS
+        for request in ("cal_" + key.lower(), "cal_" + key.lower() + "_tomorrow")
+    }
     if REQUEST in request_map and records_ok:
         key = request_map[REQUEST]
         not_before = int(DAY1 if REQUEST.endswith("tomorrow") else DAY0)
@@ -1013,20 +1101,21 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
             queue_notify = "Venus " + key + (" für morgen vorgemerkt." if REQUEST.endswith("tomorrow") else " für das nächste geeignete Fenster vorgemerkt.")
     if REQUEST == "cancel":
         queue = {}
-    elif REQUEST in ["cancel_a", "cancel_e"]:
-        key = "A" if REQUEST == "cancel_a" else "E"
+    elif REQUEST.startswith("cancel_") and REQUEST[-1:].upper() in BATTERY_KEYS:
+        key = REQUEST[-1:].upper()
         queue.pop(key, None)
         if session["b"] == key and session["p"] in ACTIVE_PHASES:
             effective_request = "cancel"
             for item in queue.values():
                 if item["d"] == key:
                     queue_notify = "Folgeauftrag bleibt vorgemerkt und wartet auf erneute Anforderung."
-    for key in ["A", "E"]:
+    for key in BATTERY_KEYS:
         if key in queue and not cal_armed[key]:
             queue.pop(key)
 
-    if session["p"] not in ACTIVE_PHASES and records_ok and automatic and REQUEST not in ["start", "cancel", "cancel_a", "cancel_e"]:
-        candidates = [key for key in ["A", "E"] if key in queue and queue[key]["d"] == "-"
+    cancel_requests = ["cancel_" + key.lower() for key in BATTERY_KEYS]
+    if session["p"] not in ACTIVE_PHASES and records_ok and automatic and REQUEST not in ["start", "cancel", *cancel_requests]:
+        candidates = [key for key in BATTERY_KEYS if key in queue and queue[key]["d"] == "-"
                       and cal_armed[key] and failure_counts[key] < 3]
         chosen = None
         for key in candidates:
@@ -1036,12 +1125,12 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
             q = queue.pop(chosen)
             session = read_session("")
             session["b"] = chosen
-            session["z"] = pack_count if chosen == "A" else 1
+            session["z"] = pack_counts.get(chosen, 1)
             session["n"] = q["n"]
             transition(session, "requested", "requested")
 
     cal_restored = cal_backup is None and session["s"] == 0
-    if cal_backup is not None and session["b"] in ["A", "E"]:
+    if cal_backup is not None and session["b"] in BATTERY_KEYS:
         key = session["b"]
         own_saved = {key: cal_backup[key], "D" + key: cal_backup["D" + key]}
         cal_restored = backup_restored(own_saved, current_caps)
@@ -1049,8 +1138,9 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         "armed": cal_armed, "safe": cal_safe, "critical": cal_critical,
         "batteries": bats, "today": previews_today, "tomorrow": previews_tomorrow,
         "backup": cal_backup, "restored": cal_restored,
-        "grid_power": grid, "live_surplus": live_surplus, "pack_count": pack_count,
-        "peer_drain_ok": {key: failure_counts[key] < 3 and writable(BATTERIES[key]["discharge"], 0) for key in ["A", "E"]},
+        "grid_power": grid, "live_surplus": live_surplus,
+        "pack_count": pack_counts.get(session.get("b"), 1),
+        "peer_drain_ok": {key: failure_counts[key] < 3 and writable(BATTERIES[key]["discharge"], 0) for key in BATTERY_KEYS},
         "peer_discharge_max": {
             key: number(
                 hass.states.get(BATTERIES[key]["discharge"]).attributes.get("max")
@@ -1058,7 +1148,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
                 else None,
                 BATTERIES[key]["maximum"],
             )
-            for key in ["A", "E"]
+            for key in BATTERY_KEYS
         }})
     session = cal["session"]
     if not records_ok:
@@ -1074,9 +1164,12 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
 
     if automatic and records_ok:
         if backup is None:
-            backup = {"A": -1, "E": -1, "DA": -1, "DE": -1}
+            backup = {
+                **{key: -1 for key in BATTERY_KEYS},
+                **{"D" + key: -1 for key in BATTERY_KEYS},
+            }
         changed = False
-        for key in ["A", "E"]:
+        for key in BATTERY_KEYS:
             fields = [key, "D" + key] if manual_active_by_key[key] else [key]
             for field in fields:
                 entity = BATTERIES[key]["discharge" if field.startswith("D") else "charge"]
@@ -1089,7 +1182,10 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
 
     if session["p"] in ["drain", "wait", "charge", "rest", "paused"] and records_ok:
         if cal_backup is None:
-            cal_backup = {"A": -1, "E": -1, "DA": -1, "DE": -1}
+            cal_backup = {
+                **{key: -1 for key in BATTERY_KEYS},
+                **{"D" + key: -1 for key in BATTERY_KEYS},
+            }
         previous_backup = encode_backup(cal_backup)
         key = session["b"]
         for field in [key, "D" + key]:
@@ -1102,18 +1198,18 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
             save_cal_backup = encode_backup(cal_backup)
 
     held = {}
-    for key in ["A", "E"]:
+    for key in BATTERY_KEYS:
         pending = key in queue or (session["p"] in ACTIVE_PHASES and session["b"] == key)
         held[key] = pending and raw("input_boolean.speicher_ladelogik_kalibrierung_" + key.lower() + "_laden_sperren") == "on"
     cal_active = session["b"] if session["p"] in ["drain", "wait", "charge", "rest", "paused", "restore"] else ""
     caps = {key: bats[key]["cap"] if bats[key]["owns"] and bats[key]["usable_data"] and failure_counts[key] < 3
             and not reaction_blocked_prior[key] and not bats[key]["target_met"]
-            and key != cal_active and not held[key] else 0 for key in ["A", "E"]}
-    needs = {key: bats[key]["need"] if caps[key] > 0 else 0 for key in ["A", "E"]}
-    stored = sum([bats[key]["stored"] for key in ["A", "E"]])
-    target_energy = sum([bats[key]["target"] for key in ["A", "E"]])
-    normal_stored = sum([bats[key]["stored"] for key in ["A", "E"] if caps[key] > 0])
-    normal_target = sum([bats[key]["target"] for key in ["A", "E"] if caps[key] > 0])
+            and key != cal_active and not held[key] else 0 for key in BATTERY_KEYS}
+    needs = {key: bats[key]["need"] if caps[key] > 0 else 0 for key in BATTERY_KEYS}
+    stored = sum([bats[key]["stored"] for key in BATTERY_KEYS])
+    target_energy = sum([bats[key]["target"] for key in BATTERY_KEYS])
+    normal_stored = sum([bats[key]["stored"] for key in BATTERY_KEYS if caps[key] > 0])
+    normal_target = sum([bats[key]["target"] for key in BATTERY_KEYS if caps[key] > 0])
     normal_reserve = reserve * normal_target / max(0.001, target_energy)
     need = sum(needs.values())
     max_total = sum(caps.values())
@@ -1133,7 +1229,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         end = solar_end if solar_end is not None else DAY1
     preferred = max(preferred, solar_start if solar_start is not None else preferred)
     simulation_bats = {}
-    for key in ["A", "E"]:
+    for key in BATTERY_KEYS:
         simulation_bats[key] = bats[key].copy()
         simulation_bats[key]["need"] = needs[key]
     preferred_sim = simulate(normal_rows, NOW, max(NOW, end - 1800), simulation_bats, caps, load, 1, eta, preferred)
@@ -1142,7 +1238,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     if early:
         start = min(NOW, preferred)
     hard_caps = caps.copy()
-    efficient_caps = {key: min(caps[key], BATTERIES[key]["preferred"]) for key in ["A", "E"]}
+    efficient_caps = {key: min(caps[key], BATTERIES[key]["preferred"]) for key in BATTERY_KEYS}
     efficiency_mode = "Bevorzugte Leistung"
     efficiency_sim = simulate(normal_rows, NOW, max(NOW, end - 1800), simulation_bats,
                               efficient_caps, load, 1, eta, preferred)
@@ -1202,7 +1298,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         reason = "Keine verlässliche Live-Überschusserkennung"
         status = "Datenfehler"
     elif need <= 0:
-        status = "Ziel erreicht" if all([bats[key]["target_met"] for key in ["A", "E"]]) else "Speicher einzeln gesperrt / vorgemerkt"
+        status = "Ziel erreicht" if all([bats[key]["target_met"] for key in BATTERY_KEYS]) else "Speicher einzeln gesperrt / vorgemerkt"
         reason = "Kein Restbedarf in den aktuell für den Fahrplan freigegebenen Speichern"
     elif pv_chance:
         if not today["ok"]:
@@ -1265,9 +1361,9 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
             limits = split_power(min(max_total, total), needs, dispatch_caps, {})
         else:
             limits = {key: dispatch_caps[key] if needs[key] > 0 else 0
-                      for key in ["A", "E"]}
+                      for key in BATTERY_KEYS}
     else:
-        limits = {"A": 0, "E": 0}
+        limits = {key: 0 for key in BATTERY_KEYS}
     automatic_limits_raw = limits.copy()
     automatic_limits = {}
     automatic_limit_held = {}
@@ -1289,7 +1385,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         and peak_setting_unchanged
     )
     within_charge_window = start <= NOW < end
-    for key in ["A", "E"]:
+    for key in BATTERY_KEYS:
         name = key.lower()
         previous_limit = number(
             prior_attributes.get(
@@ -1329,17 +1425,17 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     limits = automatic_limits.copy()
     automatic_slot_active = {
         key: automatic_limits[key] > 0
-        for key in ["A", "E"]
+        for key in BATTERY_KEYS
     }
 
     manual_allowed = {}
-    for key in ["A", "E"]:
+    for key in BATTERY_KEYS:
         manual_allowed[key] = (manual_active_by_key[key] and key != cal_active
                                and bats[key]["owns"] and failure_counts[key] < 3)
         if manual_allowed[key]:
             limits[key] = manual_charge[key]
 
-    manual_keys = [key for key in ["A", "E"] if manual_active_by_key[key]]
+    manual_keys = [key for key in BATTERY_KEYS if manual_active_by_key[key]]
     if manual_keys:
         status = "Manuelle Grenze " + "/".join(manual_keys)
         efficiency_mode = "Manuelle Grenze nur für " + "/".join(manual_keys)
@@ -1357,7 +1453,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
 
     reaction = {}
     reaction_newly_blocked = []
-    for key in ["A", "E"]:
+    for key in BATTERY_KEYS:
         name = key.lower()
         prior_limit = number(prior_attributes.get("soll_ladegrenze_venus_" + name + "_w"), 0)
         prior_since = number(prior_attributes.get("ladeanforderung_venus_" + name + "_seit_ts"))
@@ -1397,7 +1493,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
             if message not in warnings:
                 warnings.append(message)
 
-    reaction_blocked_keys = [key for key in ["A", "E"] if reaction[key]["blocked"]]
+    reaction_blocked_keys = [key for key in BATTERY_KEYS if reaction[key]["blocked"]]
 
     if data_errors:
         last_data_errors = data_errors
@@ -1414,7 +1510,10 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     release = normal_release or cal_release
     cal_changed = False
     normal_changed = False
-    order = ["E", "A"] if session["p"] in ACTIVE_PHASES and session["b"] == "E" else ["A", "E"]
+    order = list(BATTERY_KEYS)
+    if session["p"] in ACTIVE_PHASES and session["b"] in order:
+        order.remove(session["b"])
+        order.insert(0, session["b"])
     for key in order:
         permitted = records_ok and bats[key]["owns"] and failure_counts[key] < 3 and backup is not None and backup[key] >= 0
         active_own = session["p"] in ["drain", "wait", "charge", "rest", "paused"] and session["b"] == key
@@ -1533,11 +1632,14 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     if session["p"] in ["drain", "wait", "charge", "rest", "paused", "restore"]:
         status = "Kalibrierung " + session["b"] + ": " + session["p"]
         reason = cal_reason
-    if all([failure_counts[key] >= 3 for key in ["A", "E"]]):
+    if all([failure_counts[key] >= 3 for key in BATTERY_KEYS]):
         status = "Schreibfehler - gesperrt"
-        reason = "Beide Speicher nach drei eigenen Schreibfehlern gesperrt"
+        reason = "Alle konfigurierten Speicher nach drei eigenen Schreibfehlern gesperrt"
     elif failure_count >= 3:
-        warnings.append("Schreibsperre betrifft nur " + ("A" if failure_counts["A"] >= 3 else "E"))
+        warnings.append(
+            "Schreibsperre betrifft nur "
+            + "/".join(key for key in BATTERY_KEYS if failure_counts[key] >= 3)
+        )
     if not records_ok or session["p"] == "error":
         status = "Sitzungsfehler - gesperrt"
         reason = "Sitzung/Ausgangswerte/Vormerkungen ungültig: vor manueller Bereinigung prüfen"
@@ -1545,7 +1647,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         warnings.extend(errors)
     if not release_ready:
         warnings.append("Rückgabe eines Speichers wartet auf dessen Steuerbarkeit; anderer Speicher arbeitet weiter")
-    reported_need = sum([bats[key]["need"] for key in ["A", "E"]])
+    reported_need = sum([bats[key]["need"] for key in BATTERY_KEYS])
 
     plan = {
         "version": VERSION, "status": status, "berechnet_ts": NOW,
@@ -1571,6 +1673,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         "effizienzmodus": efficiency_mode,
         "sollwertstrategie": "Zustandsbasierte Grenzwerte; schreiben nur bei wirklicher Änderung",
         "bevorzugte_ladeleistung_a_w": BATTERIES["A"]["preferred"],
+        "bevorzugte_ladeleistung_d_w": BATTERIES["D"]["preferred"],
         "bevorzugte_ladeleistung_e_w": BATTERIES["E"]["preferred"],
         "prognose_tagesfaktor": round(day_factor, 3),
         "prognose_kurzfristfaktor": round(short_factor, 3), "prognose_qualitaetsfaktor": round(day_factor, 3),
@@ -1586,7 +1689,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         "ladefenster_dauer_h": round(max(0, end - start) / 3600, 2),
         "fenster_fortschritt_prozent": round(max(0, min(100, (NOW - start) / max(1, end - start) * 100)), 1),
         "fahrplan_basisleistung_w": sum(limits.values()),
-        "max_ladeleistung_gesamt_w": sum(BATTERIES[key]["maximum"] for key in ["A", "E"]),
+        "max_ladeleistung_gesamt_w": sum(BATTERIES[key]["maximum"] for key in BATTERY_KEYS),
         "sicher_speicherbar_rest_kwh": round(safe_rest, 3),
         "sicher_speicherbar_fenster_rest_kwh": round(window_wh / 1000 * eta, 3),
         "deckungsfaktor": round(safe_rest / reported_need, 2) if reported_need > 0.001 else 99,
@@ -1596,22 +1699,35 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         "mindestenergie_jetzt_kwh": round(stored - normal_stored + min(normal_target, max(normal_reserve, normal_target - window_wh / 1000 * eta)), 3),
         "energieluecke_kwh": round(normal_target - window_wh / 1000 * eta - normal_stored, 3),
         "soll_laden": sum(limits.values()) > 0, "soll_ladeleistung_gesamt_w": sum(limits.values()),
-        "soll_ladegrenze_venus_a_w": limits["A"], "soll_ladegrenze_venus_e_w": limits["E"],
-        "verteilungsmodus": "geteilt" if min(limits.values()) > 0 else ("nur A" if limits["A"] > 0 else ("nur E" if limits["E"] > 0 else "aus")),
+        "soll_ladegrenze_venus_a_w": limits.get("A", 0),
+        "soll_ladegrenze_venus_d_w": limits.get("D", 0),
+        "soll_ladegrenze_venus_e_w": limits.get("E", 0),
+        "verteilungsmodus": (
+            "geteilt" if sum(value > 0 for value in limits.values()) > 1
+            else next(("nur " + key for key, value in limits.items() if value > 0), "aus")
+        ),
         "manuell_aktiv": manual_active,
-        "manuell_a_aktiv": manual_active_by_key["A"],
-        "manuell_e_aktiv": manual_active_by_key["E"],
-        "manuell_laden_a_w": manual_charge["A"],
-        "manuell_entladen_a_w": manual_discharge["A"],
-        "manuell_laden_e_w": manual_charge["E"],
-        "manuell_entladen_e_w": manual_discharge["E"],
+        "manuell_a_aktiv": manual_active_by_key.get("A", False),
+        "manuell_d_aktiv": manual_active_by_key.get("D", False),
+        "manuell_e_aktiv": manual_active_by_key.get("E", False),
+        "manuell_laden_a_w": manual_charge.get("A", 0),
+        "manuell_entladen_a_w": manual_discharge.get("A", 0),
+        "manuell_laden_d_w": manual_charge.get("D", 0),
+        "manuell_entladen_d_w": manual_discharge.get("D", 0),
+        "manuell_laden_e_w": manual_charge.get("E", 0),
+        "manuell_entladen_e_w": manual_discharge.get("E", 0),
         "entscheidungsgrund": reason, "pv_vormittag_kwh": round(morning, 2), "pv_nachmittag_kwh": round(afternoon, 2),
         "prognose_morgen_kwh": round(sum([row["wh"] for row in tomorrow["rows"]]) / 1000, 2) if tomorrow["ok"] else None,
         "vorziehen_noetig": early, "fruehestens_voll_ts": normal_sim["finish"],
         "ziel_fehlmenge_simulation_kwh": round(normal_sim["missing"], 3),
         "warnungen": warnings, "prognose_fehler": today["errors"], "prognose_morgen_fehler": tomorrow["errors"],
-        "packs_a_erwartet": pack_count, "packs_a_gueltig": len(bats["A"]["packs"]),
-        "packs_a_soc": bats["A"]["packs"], "netto_ueberschuss_w": round(live_surplus),
+        "packs_a_erwartet": pack_counts.get("A", 0),
+        "packs_a_gueltig": len(bats.get("A", {}).get("packs", [])),
+        "packs_a_soc": bats.get("A", {}).get("packs", []),
+        "packs_d_erwartet": pack_counts.get("D", 0),
+        "packs_d_gueltig": len(bats.get("D", {}).get("packs", [])),
+        "packs_d_soc": bats.get("D", {}).get("packs", []),
+        "netto_ueberschuss_w": round(live_surplus),
     }
     plan["fahrplan_slot_start_ts"] = slot_start_ts
     plan["fahrplan_slot_ende_ts"] = slot_end_ts
@@ -1625,11 +1741,11 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         if not automatic
         else ("Laden" if any(automatic_slot_active.values()) else "Pause")
     )
-    for key in ["A", "E"]:
+    for key in BATTERY_KEYS:
         name = key.lower()
         plan["fahrplan_slot_aktiv_venus_" + name] = automatic_slot_active[key]
         plan["fahrplan_slot_grund_venus_" + name] = automatic_limit_reason[key]
-    for key in ["A", "E"]:
+    for key in BATTERY_KEYS:
         name = key.lower()
         plan["soc_venus_" + name] = bats[key]["soc"]
         plan["restbedarf_venus_" + name + "_kwh"] = round(bats[key]["need"], 4)
@@ -1691,13 +1807,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     calibration = {"phase": session["p"], "batterie": session["b"],
         "grund": cal_reason, "grund_code": session["r"],
         "energie_ac_kwh": round(session["w"] / 1000, 3), "start_ts": session["s"] or None,
-        "ende_ts": session["x"] or None, "kalibrieren_a_sicher": cal_safe["A"], "kalibrieren_e_sicher": cal_safe["E"],
-        "a_pruefhinweise": cal_errors["A"], "e_pruefhinweise": cal_errors["E"],
-        "heute_a": previews_today["A"], "heute_e": previews_today["E"],
-        "morgen_a": previews_tomorrow["A"], "morgen_e": previews_tomorrow["E"],
-        "drift_a_p1_mv": measurement("sensor.venus_a_pack_1_zelldrift", "delta", 600),
-        "drift_a_p2_mv": measurement("sensor.venus_a_pack_2_zelldrift", "delta", 600),
-        "drift_e_mv": measurement("sensor.marstek_venus_e_zellspannungs_differenz", "delta", 600),
+        "ende_ts": session["x"] or None,
         "peer_entladesperre_freigegeben": bool(
             session["p"] == "drain" and (session["h"] or session["v"])
         ),
@@ -1720,9 +1830,21 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
         ),
         "netzleistung_w": round(grid) if grid is not None else None,
         "peer_freigabe_schwelle_prozent": 14,
-        "hinweis": "Prognose ist keine Garantie; 500 W sind ein Limit. Pack 2 bekannt auffällig: kein Drift-Autostart.",
-        "dashboard_a": bat_summary("A", bats, limits, session, cal_active, held, reaction, manual_active_by_key),
-        "dashboard_e": bat_summary("E", bats, limits, session, cal_active, held, reaction, manual_active_by_key)}
+        "hinweis": "Prognose ist keine Garantie; 500 W sind ein Limit."}
+    for key in BATTERY_KEYS:
+        name = key.lower()
+        calibration["kalibrieren_" + name + "_sicher"] = cal_safe[key]
+        calibration[name + "_pruefhinweise"] = cal_errors[key]
+        calibration["heute_" + name] = previews_today[key]
+        calibration["morgen_" + name] = previews_tomorrow[key]
+        calibration["dashboard_" + name] = bat_summary(
+            key, bats, limits, session, cal_active, held, reaction,
+            manual_active_by_key,
+        )
+        for index, entity_id in enumerate(DRIFTS[key], start=1):
+            calibration[
+                "drift_" + name + ("_p" + str(index) if len(DRIFTS[key]) > 1 else "") + "_mv"
+            ] = measurement(entity_id, "delta", 600)
 
     output["plan"] = plan
     output["calibration"] = calibration
@@ -1737,7 +1859,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     output["finish"] = cal["finish"]
 
     reset_after_calibration = []
-    if cal["finish"] and session["b"] in ["A", "E"]:
+    if cal["finish"] and session["b"] in BATTERY_KEYS:
         key_cal = session["b"]
         reset_after_calibration = [
             "input_boolean.speicher_ladelogik_kalibrierung_" + key_cal.lower() + "_freigegeben",
@@ -1759,7 +1881,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     plan["spitzenplan_voll_ts"] = peak["finish"]
     plan["kalibrier_reserviert_w"] = cal_draw
     plan["normaler_restbedarf_kwh"] = round(need, 4)
-    for key in ["A", "E"]:
+    for key in BATTERY_KEYS:
         name = key.lower()
         plan["daten_gueltig_venus_" + name] = bats[key]["usable_data"] and not reaction[key]["blocked"]
         plan["schreibfehler_venus_" + name] = failure_counts[key]
@@ -1788,7 +1910,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     pending_items = []
     next_key = session["b"] if session["p"] == "requested" else ""
     next_day = session["n"] if next_key else None
-    for key in ["A", "E"]:
+    for key in BATTERY_KEYS:
         if key in queue:
             item = queue[key]
             pending_items.append({"batterie": key, "fruehestens_ts": item["n"],
@@ -1819,8 +1941,17 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     output["failure_counts"] = failure_counts
     output["reaction_newly_blocked"] = reaction_newly_blocked
 
-    drifts = {"A": [calibration["drift_a_p1_mv"], calibration["drift_a_p2_mv"]],
-              "E": [calibration["drift_e_mv"]]}
+    drifts = {}
+    for key in BATTERY_KEYS:
+        name = key.lower()
+        drifts[key] = [
+            calibration.get(
+                "drift_" + name
+                + ("_p" + str(index) if len(DRIFTS[key]) > 1 else "")
+                + "_mv"
+            )
+            for index in range(1, len(DRIFTS[key]) + 1)
+        ]
     active = learning["active"]
     if session["p"] == "charge" and original_phase in ["wait", "requested"]:
         key = session["b"]
@@ -1830,7 +1961,7 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     journal_event = ((session["p"] == "paused" and original_phase != "paused") or
                      (session["p"] in ["done", "incomplete", "cancelled", "error"]
                       and original_phase in ACTIVE_PHASES))
-    if journal_event and session["b"] in ["A", "E"]:
+    if journal_event and session["b"] in BATTERY_KEYS:
         key = session["b"]
         has_start = active.get("battery") == key and number(active.get("start")) is not None
         start_stamp = active["start"] if has_start else None
@@ -1866,5 +1997,9 @@ def calculate_shadow_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str
     output["proposed_commands"] = list(output.get("commands", []))
     output["commands"] = []
     output["execute"] = False
-    output["shadow_mode"] = True
     return output
+
+
+# Kept for compatibility with RC8 imports.  The integration itself uses the
+# neutral function name above; this alias can be removed after the stable v1.
+calculate_shadow_plan = calculate_plan

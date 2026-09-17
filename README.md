@@ -1,9 +1,9 @@
 # Speicher-Ladelogik
 
-Intelligente Speicher-Ladesteuerung für Home Assistant mit zwei unabhängig
+Intelligente Speicher-Ladesteuerung für Home Assistant mit unabhängig
 regelbaren Speichern und AstraMeter.
 
-## V1.0 RC 5
+## V1.0 RC 10
 
 Der Release Candidate ersetzt die bisherigen YAML-Helfer und
 Steuerautomationen durch native Entitäten der Integration.
@@ -13,13 +13,50 @@ Integration automatisch mitinstalliert und erscheint nach dem Neustart als
 **Speicher-Ladelogik** in der Home-Assistant-Seitenleiste. Zusätzliche Karten,
 Themes oder eine manuelle YAML-Konfiguration sind dafür nicht erforderlich.
 
+RC6 überarbeitet dieses Panel mit einem dauerhaft dunklen Design, einem
+richtungsgenauen Energiefluss, deutschen Kalibrierphasen, gerundeten Messwerten
+und einer verständlichen Diagnose der Schreibzugriffe.
+
+RC7 ergänzt Tagesenergie und Verlaufsdiagramme aus der Home-Assistant-Historie,
+verschiebt die Speicher-Detailkarten vollständig in den Reiter **Speicher** und
+verhindert, dass die Energieflussanimation bei Zustandsupdates neu beginnt.
+
+RC8 ersetzt die ruckelnden Energieflusspunkte durch ruhige Richtungspfade,
+verwendet feinere Diagrammlinien und getrennte Zeitraumwahlen je Diagramm. Ein
+versionsgebundener Web-Component-Name und ein Inhalts-Hash der Frontend-Datei
+verhindern, dass Home Assistant nach einem Update ein altes Dashboard weiter
+anzeigt.
+
+RC9 fasst die Speicher in der Übersicht zu einem gemeinsamen Energiefluss
+zusammen, ergänzt anklickbare Verlaufswerte, modellspezifische Leistungsachsen,
+farbige Zelldrift-Warnstufen und konfigurierte MPPT-Werte im Speicherreiter.
+Bei der Einrichtung lassen sich ein bis drei Speicher der Modelle Venus A, D
+und E auswählen. A und D unterstützen dabei die konfigurierte Packanzahl und
+bis zu vier optionale MPPT-Sensoren; nicht eingerichtete Modelle erscheinen
+weder in der Planung noch im Dashboard.
+Der nicht mehr benötigte Vergleich mit den alten YAML-Planungssensoren wurde
+vollständig entfernt. Eine dauerhafte HA-Mitteilung meldet Planungsfehler sofort
+und ungültige Daten nach fünf Minuten; über die Integrationsoptionen kann
+zusätzlich ein `notify.mobile_app_*`-Dienst gewählt werden. Die
+Kalibrier-Überschussprüfung berücksichtigt nun den eigenen 500-W-Ladestrom und
+verhindert damit den beobachteten 0/500-W-Regelkreis.
+
+RC10 ordnet den Energiefluss als ruhige Power-Flow-Ansicht mit Solar, Netz,
+Haus und einem zusammengefassten Speicher an. Quellsensoren aktualisieren nur
+noch die sichtbaren Live-Werte statt das komplette Panel neu aufzubauen;
+Verlaufsgrafiken bleiben dadurch stabil und die Bedienung reagiert spürbar
+flüssiger. Die Speicherdetails zeigen Verlust und Restbedarf wieder in der
+gewünschten Reihenfolge, und das Beispiel für den optionalen Handy-Dienst ist
+vollständig neutral gehalten.
+
 ### Funktionen
 
 - Betriebsarten **Aus**, **Beobachten** und **Automatik**
 - Fahrplan aus PV-Prognose, realem Ertrag, Hauslast und Netzbilanz
 - PV-AC-Messung mit MPPT- und Bilanz-Fallback
-- unabhängig belegbare Speicherplätze **Venus A** und **Venus E**; bei der
-  Einrichtung können auch Entitäten anderer Venus-Modelle gewählt werden
+- ein bis drei unabhängig geregelte Speicher der Modelle **Venus A**, **Venus
+  D** und **Venus E**
+- Packanzahl für A und D sowie bis zu vier optionale MPPT-Sensoren je A/D-Gerät
 - frei einstellbare bevorzugte Ladeleistung und Nennkapazität je Speicher
 - minimale und maximale SoC-Grenze werden ausschließlich vom jeweiligen Gerät
   gelesen; die Integration erzeugt und schreibt keine zweite SoC-Grenze
@@ -59,7 +96,7 @@ gewichtet.
 ### Wechsel von Beta 7
 
 1. Vor dem Update die alten Automationen deaktiviert lassen.
-2. RC5 über HACS installieren und Home Assistant neu starten.
+2. RC10 über HACS installieren und Home Assistant neu starten.
 3. Der erste RC-Start erfolgt absichtlich in **Beobachten**. Entitäten und Plan
    prüfen.
 4. Danach `select.speicher_ladelogik_betriebsart` auf **Automatik** stellen.

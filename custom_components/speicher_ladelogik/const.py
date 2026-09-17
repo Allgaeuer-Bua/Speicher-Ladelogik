@@ -8,7 +8,7 @@ from homeassistant.const import Platform
 
 DOMAIN: Final = "speicher_ladelogik"
 NAME: Final = "Speicher-Ladelogik"
-VERSION: Final = "1.0.0-rc.5"
+VERSION: Final = "1.0.0-rc.10"
 
 PLATFORMS: Final = [
     Platform.SENSOR,
@@ -19,45 +19,6 @@ PLATFORMS: Final = [
 ]
 UPDATE_INTERVAL_SECONDS: Final = 15
 
-SHADOW_TRACKED_ENTITIES: Final = (
-    "sun.sun",
-    "sensor.speicher_ladelogik_planung",
-    "sensor.speicher_ladelogik_kalibrierung_planung",
-    "sensor.speicher_ladelogik_lernspeicher",
-    "input_boolean.speicher_ladelogik_aktiv",
-    "input_boolean.speicher_ladelogik_mittagsspitzen",
-    "input_boolean.speicher_ladelogik_manuell_a_aktiv",
-    "input_boolean.speicher_ladelogik_manuell_e_aktiv",
-    "input_boolean.speicher_ladelogik_kalibrierung_a_freigegeben",
-    "input_boolean.speicher_ladelogik_kalibrierung_e_freigegeben",
-    "input_boolean.speicher_ladelogik_kalibrierung_a_laden_sperren",
-    "input_boolean.speicher_ladelogik_kalibrierung_e_laden_sperren",
-    "input_boolean.speicher_ladelogik_v1_beta_1_initialisiert",
-    "input_select.speicher_ladelogik_betriebsart",
-    "input_text.speicher_ladelogik_kalibrierung_sitzung",
-    "input_text.speicher_ladelogik_kalibrierung_vormerkungen",
-    "input_text.speicher_ladelogik_sicherung",
-    "input_text.speicher_ladelogik_kalibrierung_sicherung",
-    "input_number.speicher_ladelogik_mindestreserve",
-    "input_number.speicher_ladelogik_prognose_sicherheit",
-    "input_number.speicher_ladelogik_unplanbare_reserve",
-    "input_number.speicher_ladelogik_ladewirkungsgrad",
-    "input_number.speicher_ladelogik_hysterese",
-    "input_number.speicher_ladelogik_schwacher_tag",
-    "input_number.speicher_ladelogik_mittlerer_tag",
-    "input_number.speicher_ladelogik_starker_tag",
-    "input_number.speicher_ladelogik_knappheitsreserve",
-    "input_number.speicher_ladelogik_min_effiziente_leistung",
-    "input_number.speicher_ladelogik_venus_a_packs",
-    "input_number.speicher_ladelogik_schreibfehler",
-    "input_number.speicher_ladelogik_schreibfehler_a",
-    "input_number.speicher_ladelogik_schreibfehler_e",
-    "input_number.speicher_ladelogik_manuell_laden_a_w",
-    "input_number.speicher_ladelogik_manuell_entladen_a_w",
-    "input_number.speicher_ladelogik_manuell_laden_e_w",
-    "input_number.speicher_ladelogik_manuell_entladen_e_w",
-)
-
 CONF_NAME: Final = "name"
 CONF_PV_AC: Final = "pv_ac"
 CONF_MPPT_SENSORS: Final = "mppt_sensors"
@@ -66,6 +27,8 @@ CONF_HOUSE_POWER: Final = "house_power"
 CONF_HOUSE_POWER_AVERAGE: Final = "house_power_average"
 CONF_PV_DAILY_ENERGY: Final = "pv_daily_energy"
 CONF_FORECAST_SENSORS: Final = "forecast_sensors"
+CONF_MOBILE_NOTIFY_SERVICE: Final = "mobile_notify_service"
+CONF_ENABLED_MODELS: Final = "enabled_models"
 
 CONF_A_SOC: Final = "a_soc"
 CONF_A_AC_POWER: Final = "a_ac_power"
@@ -83,6 +46,24 @@ CONF_A_MAX_CELL_VOLTAGE: Final = "a_max_cell_voltage"
 CONF_A_MAX_CELL_TEMP: Final = "a_max_cell_temp"
 CONF_A_MIN_CELL_TEMP: Final = "a_min_cell_temp"
 CONF_A_PACK_DRIFT: Final = "a_pack_drift"
+CONF_A_MPPT_SENSORS: Final = "a_mppt_sensors"
+
+CONF_D_SOC: Final = "d_soc"
+CONF_D_AC_POWER: Final = "d_ac_power"
+CONF_D_DC_POWER: Final = "d_dc_power"
+CONF_D_CHARGE_LIMIT: Final = "d_charge_limit"
+CONF_D_DISCHARGE_LIMIT: Final = "d_discharge_limit"
+CONF_D_AUTO_TARGET: Final = "d_auto_target"
+CONF_D_ACTIVE: Final = "d_active"
+CONF_D_CHARGE_OVERRIDE: Final = "d_charge_override"
+CONF_D_MAX_SOC: Final = "d_max_soc"
+CONF_D_MIN_SOC: Final = "d_min_soc"
+CONF_D_PACK_SOC: Final = "d_pack_soc"
+CONF_D_MAX_CELL_VOLTAGE: Final = "d_max_cell_voltage"
+CONF_D_MAX_CELL_TEMP: Final = "d_max_cell_temp"
+CONF_D_MIN_CELL_TEMP: Final = "d_min_cell_temp"
+CONF_D_PACK_DRIFT: Final = "d_pack_drift"
+CONF_D_MPPT_SENSORS: Final = "d_mppt_sensors"
 
 CONF_E_SOC: Final = "e_soc"
 CONF_E_AC_POWER: Final = "e_ac_power"
@@ -121,6 +102,8 @@ DEFAULTS: Final = {
         "sensor.so_energy_production_tomorrow",
         "sensor.no_energy_production_tomorrow",
     ],
+    CONF_MOBILE_NOTIFY_SERVICE: "",
+    CONF_ENABLED_MODELS: ["A", "E"],
     CONF_A_SOC: "sensor.marstek_venus_a_soc_batterie",
     CONF_A_AC_POWER: "sensor.marstek_venus_a_ac_leistung",
     CONF_A_DC_POWER: "sensor.marstek_venus_a_batterieleistung",
@@ -141,6 +124,28 @@ DEFAULTS: Final = {
         "sensor.venus_a_pack_1_zelldrift",
         "sensor.venus_a_pack_2_zelldrift",
     ],
+    CONF_A_MPPT_SENSORS: [],
+    CONF_D_SOC: "sensor.marstek_venus_d_soc",
+    CONF_D_AC_POWER: "sensor.marstek_venus_d_ac_leistung",
+    CONF_D_DC_POWER: "sensor.marstek_venus_d_batterieleistung",
+    CONF_D_CHARGE_LIMIT: "number.marstek_venus_d_maximale_ladeleistung",
+    CONF_D_DISCHARGE_LIMIT: "number.marstek_venus_d_maximale_entladeleistung",
+    CONF_D_AUTO_TARGET: "switch.astrameter_venus_d_auto_target",
+    CONF_D_ACTIVE: "switch.astrameter_venus_d_active",
+    CONF_D_MAX_SOC: "number.marstek_venus_d_maximaler_soc",
+    CONF_D_MIN_SOC: "number.marstek_venus_d_minimaler_soc",
+    CONF_D_PACK_SOC: [
+        "sensor.marstek_venus_d_soc_batteriepack_1",
+        "sensor.marstek_venus_d_soc_batteriepack_2",
+    ],
+    CONF_D_MAX_CELL_VOLTAGE: "sensor.marstek_venus_d_maximale_zellenspannung",
+    CONF_D_MAX_CELL_TEMP: "sensor.marstek_venus_d_maximale_zellentemperatur",
+    CONF_D_MIN_CELL_TEMP: "sensor.marstek_venus_d_minimale_zellentemperatur",
+    CONF_D_PACK_DRIFT: [
+        "sensor.venus_d_pack_1_zelldrift",
+        "sensor.venus_d_pack_2_zelldrift",
+    ],
+    CONF_D_MPPT_SENSORS: [],
     CONF_E_SOC: "sensor.marstek_venus_e_soc",
     CONF_E_AC_POWER: "sensor.marstek_venus_e_ac_leistung",
     CONF_E_DC_POWER: "sensor.marstek_venus_e_dc_leistung",
@@ -182,6 +187,26 @@ VENUS_A_KEYS: Final = (
     CONF_A_MAX_CELL_TEMP,
     CONF_A_MIN_CELL_TEMP,
     CONF_A_PACK_DRIFT,
+    CONF_A_MPPT_SENSORS,
+)
+
+VENUS_D_KEYS: Final = (
+    CONF_D_SOC,
+    CONF_D_AC_POWER,
+    CONF_D_DC_POWER,
+    CONF_D_CHARGE_LIMIT,
+    CONF_D_DISCHARGE_LIMIT,
+    CONF_D_AUTO_TARGET,
+    CONF_D_ACTIVE,
+    CONF_D_CHARGE_OVERRIDE,
+    CONF_D_MAX_SOC,
+    CONF_D_MIN_SOC,
+    CONF_D_PACK_SOC,
+    CONF_D_MAX_CELL_VOLTAGE,
+    CONF_D_MAX_CELL_TEMP,
+    CONF_D_MIN_CELL_TEMP,
+    CONF_D_PACK_DRIFT,
+    CONF_D_MPPT_SENSORS,
 )
 
 VENUS_E_KEYS: Final = (
@@ -223,4 +248,13 @@ REQUIRED_E_KEYS: Final = (
     CONF_E_DISCHARGE_LIMIT,
     CONF_E_AUTO_TARGET,
     CONF_E_ACTIVE,
+)
+
+REQUIRED_D_KEYS: Final = (
+    CONF_D_SOC,
+    CONF_D_AC_POWER,
+    CONF_D_CHARGE_LIMIT,
+    CONF_D_DISCHARGE_LIMIT,
+    CONF_D_AUTO_TARGET,
+    CONF_D_ACTIVE,
 )

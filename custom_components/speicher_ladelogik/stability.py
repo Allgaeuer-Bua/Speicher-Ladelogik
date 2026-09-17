@@ -19,6 +19,18 @@ DELIBERATE_ZERO_STATUSES = {
 }
 
 
+def calibration_available_surplus(
+    live_surplus_w: float,
+    actual_charge_w: float | None,
+    *,
+    running: bool,
+) -> float:
+    """Return surplus before a running calibration's own measured draw."""
+    if not running or actual_charge_w is None:
+        return max(0.0, float(live_surplus_w))
+    return max(0.0, float(live_surplus_w)) + max(0.0, float(actual_charge_w))
+
+
 def target_latch(
     *,
     goal: float,

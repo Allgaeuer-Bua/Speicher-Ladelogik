@@ -35,19 +35,6 @@ PHASE_LABELS = {
 }
 
 
-def _comparison_state(data: dict[str, Any]) -> str:
-    if data.get("schattenplanung_fehler"):
-        return "Fehler"
-    comparison = data.get("shadow_comparison", {})
-    if not comparison.get("available"):
-        return "Referenz fehlt"
-    if comparison.get("matches"):
-        return "Übereinstimmend"
-    if comparison.get("funktional_passend"):
-        return "Nur gewollte Abweichungen"
-    return f"{len(comparison.get('differences', []))} Abweichungen"
-
-
 @dataclass(frozen=True, kw_only=True)
 class SpeicherSensorDescription(SensorEntityDescription):
     """Describe a Speicher-Ladelogik sensor."""
@@ -84,6 +71,12 @@ SENSORS = (
         value_fn=lambda data: "bereit" if data["daten_gueltig_venus_a"] else "unvollständig",
     ),
     SpeicherSensorDescription(
+        key="daten_venus_d",
+        name="Daten Venus D",
+        icon="mdi:battery-check-outline",
+        value_fn=lambda data: "bereit" if data["daten_gueltig_venus_d"] else "unvollständig",
+    ),
+    SpeicherSensorDescription(
         key="daten_venus_e",
         name="Daten Venus E",
         icon="mdi:battery-check-outline",
@@ -93,22 +86,16 @@ SENSORS = (
         key="planung",
         name="Planung",
         icon="mdi:timeline-clock-outline",
-        value_fn=lambda data: data.get("shadow_plan", {}).get("status", "Fehler"),
+        value_fn=lambda data: data.get("plan", {}).get("status", "Fehler"),
     ),
     SpeicherSensorDescription(
         key="kalibrierung",
         name="Kalibrierung",
         icon="mdi:battery-sync-outline",
         value_fn=lambda data: PHASE_LABELS.get(
-            data.get("shadow_calibration", {}).get("phase"),
-            data.get("shadow_calibration", {}).get("phase", "Fehler"),
+            data.get("calibration", {}).get("phase"),
+            data.get("calibration", {}).get("phase", "Fehler"),
         ),
-    ),
-    SpeicherSensorDescription(
-        key="planvergleich",
-        name="Planvergleich",
-        icon="mdi:compare-horizontal",
-        value_fn=_comparison_state,
     ),
     SpeicherSensorDescription(
         key="wirkungsgrad_venus_a",
@@ -136,6 +123,23 @@ SENSORS = (
         value_fn=lambda data: data["wirkungsgrad_venus_e"]["wirkungsgrad"],
     ),
     SpeicherSensorDescription(
+        key="wirkungsgrad_venus_d",
+        name="Wirkungsgrad Venus D",
+        icon="mdi:percent-outline",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda data: data["wirkungsgrad_venus_d"]["wirkungsgrad"],
+    ),
+    SpeicherSensorDescription(
+        key="verlustleistung_venus_d",
+        name="Verlustleistung Venus D",
+        icon="mdi:lightning-bolt-outline",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda data: data["wirkungsgrad_venus_d"]["verlust_w"],
+    ),
+    SpeicherSensorDescription(
         key="verlustleistung_venus_e",
         name="Verlustleistung Venus E",
         icon="mdi:lightning-bolt-outline",
@@ -155,7 +159,13 @@ async def async_setup_entry(
     """Set up Speicher-Ladelogik sensors."""
     coordinator: SpeicherLadelogikCoordinator = entry.runtime_data
     async_add_entities(
-        SpeicherLadelogikSensor(coordinator, description) for description in SENSORS
+        SpeicherLadelogikSensor(coordinator, description)
+        for description in SENSORS
+        if not any(
+            f"venus_{model.lower()}" in description.key
+            and model not in coordinator.enabled_models
+            for model in ("A", "D", "E")
+        )
     )
 
 
@@ -180,23 +190,17 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any] | None:
         data = self.coordinator.data
         if self.entity_description.key == "status":
-            return {
+            attributes = {
                 "version": data["version"],
                 "betriebsart": data["betriebsart"],
                 "schreibzugriffe_aktiv": data["schreibzugriffe_aktiv"],
-                "schattenplanung_aktiv": data["schattenplanung_aktiv"],
-                "schattenplanung_fehler": data["schattenplanung_fehler"],
+                "planung_aktiv": data["planung_aktiv"],
+                "planungsfehler": data["planungsfehler"],
                 "daten_gueltig_gemeinsam": data["daten_gueltig_gemeinsam"],
-                "daten_gueltig_venus_a": data["daten_gueltig_venus_a"],
-                "daten_gueltig_venus_e": data["daten_gueltig_venus_e"],
                 "pv_planungswert_w": data["pv_planungswert_w"],
                 "pv_planungswert_quelle": data["pv_planungswert_quelle"],
                 "pv_ac_w": data["pv_ac_w"],
                 "pv_mppt_summe_dc_w": data["pv_mppt_summe_dc_w"],
-                "soc_venus_a": data["soc_venus_a"],
-                "soc_venus_e": data["soc_venus_e"],
-                "ac_leistung_venus_a_w": data["ac_leistung_venus_a_w"],
-                "ac_leistung_venus_e_w": data["ac_leistung_venus_e_w"],
                 "quellen_gesamt": data["quellen_gesamt"],
                 "quellen_verfuegbar": data["quellen_verfuegbar"],
                 "fehlende_entitaeten": data["fehlende_entitaeten"],
@@ -204,19 +208,29 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "letzter_schreibzugriff_ts": data.get("letzter_schreibzugriff_ts"),
                 "letzter_schreibfehler": data.get("letzter_schreibfehler"),
                 "letzte_schreibergebnisse": data.get("letzte_schreibergebnisse", []),
-                "kalibrierung_faellig_a": data.get("kalibrierung_faellig_a"),
-                "kalibrierung_faellig_e": data.get("kalibrierung_faellig_e"),
             }
+            for model in self.coordinator.enabled_models:
+                name = model.lower()
+                for prefix in (
+                    "daten_gueltig_venus_",
+                    "soc_venus_",
+                    "ac_leistung_venus_",
+                ):
+                    suffix = "_w" if prefix == "ac_leistung_venus_" else ""
+                    key = f"{prefix}{name}{suffix}"
+                    attributes[key] = data.get(key)
+                attributes[f"kalibrierung_faellig_{name}"] = data.get(
+                    f"kalibrierung_faellig_{name}"
+                )
+            return attributes
         if self.entity_description.key == "planung":
-            plan = data.get("shadow_plan", {})
+            plan = data.get("plan", {})
             keys = (
                 "version",
                 "betriebsart",
                 "regelung_aktiv",
                 "daten_gueltig",
                 "daten_gueltig_gemeinsam",
-                "daten_gueltig_venus_a",
-                "daten_gueltig_venus_e",
                 "normaler_fahrplan_status",
                 "normaler_fahrplan_grund",
                 "pv_planungswert_w",
@@ -236,38 +250,8 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "deckungsfaktor",
                 "knapp",
                 "restbedarf_kwh",
-                "restbedarf_venus_a_kwh",
-                "restbedarf_venus_e_kwh",
-                "untere_geraetegrenze_venus_a_prozent",
-                "obere_geraetegrenze_venus_a_prozent",
-                "untere_geraetegrenze_venus_e_prozent",
-                "obere_geraetegrenze_venus_e_prozent",
                 "soll_laden",
                 "soll_ladeleistung_gesamt_w",
-                "soll_ladegrenze_venus_a_w",
-                "soll_ladegrenze_venus_e_w",
-                "fahrplan_ladegrenze_roh_venus_a_w",
-                "fahrplan_ladegrenze_stabil_venus_a_w",
-                "sollwert_venus_a_gehalten",
-                "sollwert_venus_a_grund",
-                "ziel_venus_a_erreicht",
-                "ziel_venus_a_latch_soc",
-                "ziel_venus_a_latch_grund",
-                "ziel_venus_a_latch_aktiv",
-                "ac_leistung_venus_a_frisch",
-                "ac_leistung_venus_a_status",
-                "ac_leistung_venus_a_alter_min",
-                "fahrplan_ladegrenze_roh_venus_e_w",
-                "fahrplan_ladegrenze_stabil_venus_e_w",
-                "sollwert_venus_e_gehalten",
-                "sollwert_venus_e_grund",
-                "ziel_venus_e_erreicht",
-                "ziel_venus_e_latch_soc",
-                "ziel_venus_e_latch_grund",
-                "ziel_venus_e_latch_aktiv",
-                "ac_leistung_venus_e_frisch",
-                "ac_leistung_venus_e_status",
-                "ac_leistung_venus_e_alter_min",
                 "verteilungsmodus",
                 "mittagsspitzen_aktiv",
                 "mittagsspitzen_planbar",
@@ -284,22 +268,43 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "fahrplan_slot_verriegelt",
                 "fahrplan_slot_aktiv",
                 "fahrplan_slot_status",
-                "fahrplan_slot_aktiv_venus_a",
-                "fahrplan_slot_grund_venus_a",
-                "fahrplan_slot_aktiv_venus_e",
-                "fahrplan_slot_grund_venus_e",
                 "entscheidungsgrund",
                 "warnungen",
                 "datenfehler_aktuell",
             )
             attributes = {key: plan.get(key) for key in keys}
+            model_fields = (
+                "daten_gueltig_venus_{name}",
+                "restbedarf_venus_{name}_kwh",
+                "untere_geraetegrenze_venus_{name}_prozent",
+                "obere_geraetegrenze_venus_{name}_prozent",
+                "soll_ladegrenze_venus_{name}_w",
+                "fahrplan_ladegrenze_roh_venus_{name}_w",
+                "fahrplan_ladegrenze_stabil_venus_{name}_w",
+                "sollwert_venus_{name}_gehalten",
+                "sollwert_venus_{name}_grund",
+                "ziel_venus_{name}_erreicht",
+                "ziel_venus_{name}_latch_soc",
+                "ziel_venus_{name}_latch_grund",
+                "ziel_venus_{name}_latch_aktiv",
+                "ac_leistung_venus_{name}_frisch",
+                "ac_leistung_venus_{name}_status",
+                "ac_leistung_venus_{name}_alter_min",
+                "fahrplan_slot_aktiv_venus_{name}",
+                "fahrplan_slot_grund_venus_{name}",
+            )
+            for model in self.coordinator.enabled_models:
+                name = model.lower()
+                for template in model_fields:
+                    key = template.format(name=name)
+                    attributes[key] = plan.get(key)
             attributes["vorgeschlagene_befehle"] = data.get(
-                "shadow_proposed_commands", []
+                "proposed_commands", []
             )
             attributes["schreibzugriffe_aktiv"] = data["schreibzugriffe_aktiv"]
             return attributes
         if self.entity_description.key == "kalibrierung":
-            calibration = data.get("shadow_calibration", {})
+            calibration = data.get("calibration", {})
             keys = (
                 "phase",
                 "batterie",
@@ -308,17 +313,6 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "energie_ac_kwh",
                 "start_ts",
                 "ende_ts",
-                "kalibrieren_a_sicher",
-                "kalibrieren_e_sicher",
-                "a_pruefhinweise",
-                "e_pruefhinweise",
-                "heute_a",
-                "heute_e",
-                "morgen_a",
-                "morgen_e",
-                "drift_a_p1_mv",
-                "drift_a_p2_mv",
-                "drift_e_mv",
                 "peer_entladesperre_freigegeben",
                 "peer_dauerfreigabe_14_prozent",
                 "peer_netzbezug_freigegeben",
@@ -329,24 +323,32 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "peer_freigabe_schwelle_prozent",
             )
             attributes = {key: calibration.get(key) for key in keys}
-            for key in (
-                "kalibrierung_letzter_erfolg_a_ts",
-                "kalibrierung_letzter_erfolg_e_ts",
-                "kalibrierung_naechste_faelligkeit_a_ts",
-                "kalibrierung_naechste_faelligkeit_e_ts",
-                "kalibrierung_faellig_a",
-                "kalibrierung_faellig_e",
-            ):
-                attributes[key] = data.get(key)
+            for model in self.coordinator.enabled_models:
+                name = model.lower()
+                for key in (
+                    f"kalibrieren_{name}_sicher",
+                    f"{name}_pruefhinweise",
+                    f"heute_{name}",
+                    f"morgen_{name}",
+                    f"kalibrierung_letzter_erfolg_{name}_ts",
+                    f"kalibrierung_naechste_faelligkeit_{name}_ts",
+                    f"kalibrierung_faellig_{name}",
+                ):
+                    source = data if key.startswith("kalibrierung_") else calibration
+                    attributes[key] = source.get(key)
+                drift_fields = (
+                    (f"drift_{name}_p1_mv", f"drift_{name}_p2_mv")
+                    if model in {"A", "D"}
+                    else (f"drift_{name}_mv",)
+                )
+                for key in drift_fields:
+                    attributes[key] = calibration.get(key)
             return attributes
-        if self.entity_description.key == "planvergleich":
-            return dict(data.get("shadow_comparison", {}))
-        if self.entity_description.key in {
-            "wirkungsgrad_venus_a", "verlustleistung_venus_a"
-        }:
-            return dict(data["wirkungsgrad_venus_a"])
-        if self.entity_description.key in {
-            "wirkungsgrad_venus_e", "verlustleistung_venus_e"
-        }:
-            return dict(data["wirkungsgrad_venus_e"])
+        for model in self.coordinator.enabled_models:
+            name = model.lower()
+            if self.entity_description.key in {
+                f"wirkungsgrad_venus_{name}",
+                f"verlustleistung_venus_{name}",
+            }:
+                return dict(data[f"wirkungsgrad_venus_{name}"])
         return None
