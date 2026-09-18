@@ -85,18 +85,6 @@ zusätzlich die angebotenen Gerätewerte ausgewählt, beispielsweise
 DC-Batterieleistung, SoC-Grenzen, Zellspannung, Zelltemperatur, Zelldrift und
 bei Venus A/D die vorhandenen Pack-Sensoren.
 
-## Ist AstraMeter erforderlich?
-
-**Nein.** Die Messwerte können aus beliebigen geeigneten
-Home-Assistant-Integrationen stammen. Auch die Steuerung ist nicht an den Namen
-einer bestimmten Integration gebunden, solange die ausgewählten Entitäten die
-benötigten Mess- und Schaltfunktionen bereitstellen.
-
-[AstraMeter](https://github.com/tomquist/AstraMeter) kann optional verwendet
-werden. In dieser Kombination übernimmt Speicher-Ladelogik die vorausschauende
-Planung und setzt die zulässigen Leistungsgrenzen, während AstraMeter die
-schnelle Feinregelung anhand des Netzbezugs übernimmt.
-
 ## Funktionen
 
 ### Planung und Regelung
