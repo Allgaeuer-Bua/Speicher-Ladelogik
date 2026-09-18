@@ -113,6 +113,7 @@ PANEL_ENTITIES: Final = {
     "starker_tag": ("number", "starker_tag"),
     "knappheitsreserve": ("number", "knappheitsreserve"),
     "min_effiziente_leistung": ("number", "min_effiziente_leistung"),
+    "kalibrierleistung": ("number", "kalibrierleistung"),
     "venus_a_packs": ("number", "venus_a_packs"),
     "venus_d_packs": ("number", "venus_d_packs"),
     "kalibrierung_venus_a_anfordern": (

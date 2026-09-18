@@ -45,6 +45,7 @@ NUMBERS = (
     SpeicherNumberDescription(key="starker_tag", name="Starker PV-Tag", control_key="starker_tag", minimum=0, maximum=200, step=1, native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR),
     SpeicherNumberDescription(key="knappheitsreserve", name="Knappheitsreserve", control_key="knappheitsreserve", minimum=100, maximum=200, step=1, native_unit_of_measurement=PERCENTAGE),
     SpeicherNumberDescription(key="min_effiziente_leistung", name="Minimale effiziente Ladeleistung", control_key="min_effiziente_leistung", minimum=0, maximum=5000, step=50, native_unit_of_measurement=UnitOfPower.WATT),
+    SpeicherNumberDescription(key="kalibrierleistung", name="Kalibrierleistung", control_key="kalibrierleistung_w", minimum=400, maximum=1500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
     SpeicherNumberDescription(key="venus_a_packs", name="Anzahl Packs Venus A", control_key="venus_a_packs", minimum=1, maximum=8, step=1),
     SpeicherNumberDescription(key="venus_d_packs", name="Anzahl Packs Venus D", control_key="venus_d_packs", minimum=1, maximum=8, step=1),
 )
