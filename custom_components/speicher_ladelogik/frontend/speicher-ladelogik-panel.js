@@ -1202,7 +1202,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 }
 
-const PANEL_ELEMENT = "speicher-ladelogik-panel-1-0-0-rc-10";
+const PANEL_ELEMENT = "speicher-ladelogik-panel-1-0-0-rc-11";
 
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);
