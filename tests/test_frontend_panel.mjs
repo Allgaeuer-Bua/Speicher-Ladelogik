@@ -24,7 +24,7 @@ await import(
   "../custom_components/speicher_ladelogik/frontend/speicher-ladelogik-panel.js"
 );
 
-const Panel = registry.get("speicher-ladelogik-panel-1-0-0-rc-10");
+const Panel = registry.get("speicher-ladelogik-panel-1-0-0-rc-11");
 
 function createPanel() {
   const calls = [];
@@ -187,6 +187,11 @@ test("energy flow uses a four-node aggregate power-flow layout", () => {
   assert.match(styles, /flow-node\.pv\{left:50%;top:19%;[^}]*flex-direction:column-reverse/);
   assert.match(styles, /flow-node\.battery\{left:50%;top:81%/);
   assert.match(styles, /flow-node\.battery\{top:79%/);
+});
+
+test("frontend element name matches the integration release version", () => {
+  assert.equal(registry.get("speicher-ladelogik-panel-1-0-0-rc-11"), Panel);
+  assert.equal(registry.has("speicher-ladelogik-panel-1-0-0-rc-10"), false);
 });
 
 test("charts render a combined hover tooltip and clickable sensor legends", () => {
