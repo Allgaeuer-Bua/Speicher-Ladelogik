@@ -1,146 +1,233 @@
 # Speicher-Ladelogik
 
-Intelligente Speicher-Ladesteuerung für Home Assistant mit unabhängig
-regelbaren Speichern und AstraMeter.
+**Speicher-Ladelogik** ist eine native Home-Assistant-Integration zur
+prognose- und überschussabhängigen Steuerung von bis zu drei AC-gekoppelten
+Marstek-Speichern. Sie koordiniert die Modelle **Venus A**, **Venus D** und
+**Venus E** unabhängig voneinander und stellt Planung, Bedienung und Diagnose
+in einem eigenen Dashboard bereit.
 
-## V1.0.1
+Die Integration kommuniziert nicht direkt mit Wechselrichtern, Stromzählern
+oder Speichern. Sie verwendet vorhandene Home-Assistant-Entitäten. Dadurch
+können Messwerte aus unterschiedlichen Integrationen und von verschiedenen
+Anbietern verwendet werden, sofern Bedeutung, Einheit und Vorzeichen passen.
 
-Die Energieflusslinien bleiben dauerhaft sichtbar. Die laufenden Punkte
-pausieren nun jedoch bei exakt 0 W, damit PV, Netz und Speicher keinen
-Energiefluss anzeigen, wenn tatsächlich keine Leistung fließt.
+> **Aktuelle Version:** 1.0.1  
+> **Erforderliche Home-Assistant-Version:** 2026.9.1 oder neuer
 
-## V1.0
+## Wofür ist die Integration gedacht?
 
-V1.0 ersetzt die bisherigen YAML-Helfer und
-Steuerautomationen durch native Entitäten der Integration.
+Speicher-Ladelogik entscheidet anhand von PV-Prognose, tatsächlicher
+PV-Erzeugung, Hausverbrauch, Netzbilanz und Ladezuständen:
 
-RC5 ergänzt ein eigenständiges, responsives Dashboard. Es wird von der
-Integration automatisch mitinstalliert und erscheint nach dem Neustart als
-**Speicher-Ladelogik** in der Home-Assistant-Seitenleiste. Zusätzliche Karten,
-Themes oder eine manuelle YAML-Konfiguration sind dafür nicht erforderlich.
+- wann ein Speicher geladen werden soll,
+- wie viel Ladeleistung freigegeben wird,
+- welcher Speicher welchen Anteil übernimmt,
+- wann Energie für später reserviert werden sollte,
+- wann eine Mittagsspitze abgefangen werden kann,
+- und ob ein geplantes Kalibrierfenster ausreicht.
 
-RC6 überarbeitet dieses Panel mit einem dauerhaft dunklen Design, einem
-richtungsgenauen Energiefluss, deutschen Kalibrierphasen, gerundeten Messwerten
-und einer verständlichen Diagnose der Schreibzugriffe.
+Die Planung arbeitet in verbindlichen 15-Minuten-Slots. Sicherheitsstopps,
+manuelle Eingriffe und ungültige Sensordaten wirken trotzdem sofort. Kleine
+Messwertschwankungen führen dadurch nicht ständig zu neuen Schaltentscheidungen.
 
-RC7 ergänzt Tagesenergie und Verlaufsdiagramme aus der Home-Assistant-Historie,
-verschiebt die Speicher-Detailkarten vollständig in den Reiter **Speicher** und
-verhindert, dass die Energieflussanimation bei Zustandsupdates neu beginnt.
+## Unterstützte Speicher
 
-RC8 ersetzt die ruckelnden Energieflusspunkte durch ruhige Richtungspfade,
-verwendet feinere Diagrammlinien und getrennte Zeitraumwahlen je Diagramm. Ein
-versionsgebundener Web-Component-Name und ein Inhalts-Hash der Frontend-Datei
-verhindern, dass Home Assistant nach einem Update ein altes Dashboard weiter
-anzeigt.
+Es können ein bis drei Speicher eingerichtet werden – jeweils maximal ein
+Gerät der folgenden Modelle:
 
-RC9 fasst die Speicher in der Übersicht zu einem gemeinsamen Energiefluss
-zusammen, ergänzt anklickbare Verlaufswerte, modellspezifische Leistungsachsen,
-farbige Zelldrift-Warnstufen und konfigurierte MPPT-Werte im Speicherreiter.
-Bei der Einrichtung lassen sich ein bis drei Speicher der Modelle Venus A, D
-und E auswählen. A und D unterstützen dabei die konfigurierte Packanzahl und
-bis zu vier optionale MPPT-Sensoren; nicht eingerichtete Modelle erscheinen
-weder in der Planung noch im Dashboard.
-Der nicht mehr benötigte Vergleich mit den alten YAML-Planungssensoren wurde
-vollständig entfernt. Eine dauerhafte HA-Mitteilung meldet Planungsfehler sofort
-und ungültige Daten nach fünf Minuten; über die Integrationsoptionen kann
-zusätzlich ein `notify.mobile_app_*`-Dienst gewählt werden. Die
-Kalibrier-Überschussprüfung berücksichtigt nun den eigenen 500-W-Ladestrom und
-verhindert damit den beobachteten 0/500-W-Regelkreis.
+| Modell | Besonderheiten |
+| --- | --- |
+| Venus A | Pack-SoC und Pack-Zelldrift, bis zu vier optionale MPPT-Sensoren |
+| Venus D | Pack-SoC und Pack-Zelldrift, bis zu vier optionale MPPT-Sensoren |
+| Venus E | Zellspannungsdifferenz und Gerätedaten ohne Pack-Auswahl |
 
-RC10 ordnet den Energiefluss als ruhige Power-Flow-Ansicht mit Solar, Netz,
-Haus und einem zusammengefassten Speicher an. Quellsensoren aktualisieren nur
-noch die sichtbaren Live-Werte statt das komplette Panel neu aufzubauen;
-Verlaufsgrafiken bleiben dadurch stabil und die Bedienung reagiert spürbar
-flüssiger. Die Speicherdetails zeigen Verlust und Restbedarf wieder in der
-gewünschten Reihenfolge, und das Beispiel für den optionalen Handy-Dienst ist
-vollständig neutral gehalten.
+Nicht eingerichtete Modelle erscheinen weder in der Planung noch im Dashboard.
+Jeder Speicher besitzt eigene Leistungsgrenzen, Kapazität, Fahrplanfreigabe,
+Handsteuerung, Kalibrierung und Fehlerbehandlung.
 
-RC11 hält die Netz-, PV- und Speicherpfade mit einem sichtbaren Abstand vor
-dem Haus-Knoten an. Dadurch liegen Linien und Pfeilspitzen weder auf dem
-Kreisrand noch unter dem Knoten – auch nicht in der schmaleren Smartphone-
-Ansicht.
+## Was wird benötigt?
 
-RC12 ersetzte die Pfeilspitzen durch kleine laufende Leuchtpunkte.
+### Home Assistant
 
-V1.0 führt die Punkte auf allen Pfaden dauerhaft weiter, entfernt Statuszusätze
-unter Netz und Speicher und lässt die Netzrichtung ohne 30-W-Hysterese direkt
-dem Vorzeichen des Messwerts folgen. Die Pfadenden verschwinden auf Desktop und
-Smartphone sauber unter den Kreisen. Die Kalibrierleistung ist zwischen 400 und
-1.500 W einstellbar; für jeden konfigurierten Speicher zeigt die Steuerung das
-verfügbare Kalibrierfenster und den errechneten Zeitbedarf für heute und morgen.
+- Home Assistant **2026.9.1** oder neuer
+- [HACS](https://www.hacs.xyz/) für die komfortable Installation
+- Recorder-/Verlaufsdaten für die Diagramme im Dashboard
+- bereits in Home Assistant vorhandene Mess- und Steuerentitäten
 
-### Funktionen
+### Gemeinsame Datenquellen
+
+Bei der Einrichtung werden die passenden Entitäten ausgewählt:
+
+- aktuelle Leistung am Netzanschlusspunkt,
+- aktuelle Hausleistung,
+- gemittelte Hausleistung,
+- heutige PV-Energie,
+- aktuelle PV-AC-Leistung oder geeignete MPPT-Leistungssensoren,
+- 15-Minuten-PV-Prognosen für heute und morgen.
+
+Die Prognosequelle ist nicht fest vorgegeben. Verwendet werden können
+beispielsweise Open-Meteo-Sensoren oder andere Quellen, die passende
+15-Minuten-Energiewerte in Home Assistant bereitstellen.
+
+### Daten und Stellglieder je Speicher
+
+Für jeden ausgewählten Speicher werden mindestens benötigt:
+
+- SoC-Sensor,
+- AC-Leistungssensor,
+- beschreibbare maximale Ladeleistung,
+- beschreibbare maximale Entladeleistung,
+- Schalter für die automatische Zielwertregelung,
+- Schalter zum Aktivieren der externen Leistungsregelung.
+
+Für vollständige Diagnose-, Wirkungsgrad- und Kalibrierfunktionen werden
+zusätzlich die angebotenen Gerätewerte ausgewählt, beispielsweise
+DC-Batterieleistung, SoC-Grenzen, Zellspannung, Zelltemperatur, Zelldrift und
+bei Venus A/D die vorhandenen Pack-Sensoren.
+
+## Ist AstraMeter erforderlich?
+
+**Nein.** Die Messwerte können aus beliebigen geeigneten
+Home-Assistant-Integrationen stammen. Auch die Steuerung ist nicht an den Namen
+einer bestimmten Integration gebunden, solange die ausgewählten Entitäten die
+benötigten Mess- und Schaltfunktionen bereitstellen.
+
+[AstraMeter](https://github.com/tomquist/AstraMeter) kann optional verwendet
+werden. In dieser Kombination übernimmt Speicher-Ladelogik die vorausschauende
+Planung und setzt die zulässigen Leistungsgrenzen, während AstraMeter die
+schnelle Feinregelung anhand des Netzbezugs übernimmt.
+
+## Funktionen
+
+### Planung und Regelung
 
 - Betriebsarten **Aus**, **Beobachten** und **Automatik**
 - Fahrplan aus PV-Prognose, realem Ertrag, Hauslast und Netzbilanz
 - PV-AC-Messung mit MPPT- und Bilanz-Fallback
-- ein bis drei unabhängig geregelte Speicher der Modelle **Venus A**, **Venus
-  D** und **Venus E**
-- Packanzahl für A und D sowie bis zu vier optionale MPPT-Sensoren je A/D-Gerät
-- frei einstellbare bevorzugte Ladeleistung und Nennkapazität je Speicher
-- minimale und maximale SoC-Grenze werden ausschließlich vom jeweiligen Gerät
-  gelesen; die Integration erzeugt und schreibt keine zweite SoC-Grenze
-- stabile Leistungsgrenzen: Register werden nur bei einer wirklichen Änderung
-  geschrieben; die Feinregelung übernimmt AstraMeter
-- verbindliche 15-Minuten-Entscheidungsslots verhindern ein erneutes Ein- und
-  Ausschalten innerhalb desselben Prognoseintervalls; Sicherheitsstopps und
-  Benutzereingriffe wirken weiterhin sofort
-- die Planung veröffentlicht Spitzenfenster, Einspeiseziel, Vorziehen,
-  Deckungsfaktor und die bis zur nächsten Viertelstunde fixierte Entscheidung
-- kein künstliches Absenken des Registers oberhalb 90 % und kein 0-W-Schreiben
-  beim Erreichen der oberen Gerätegrenze
-- dauerhafter Handbetrieb getrennt je Speicher; der andere Speicher bleibt im
-  automatischen Fahrplan. Eine bleibende HA-Meldung erinnert an den Handbetrieb
-- Kalibrierwarteschlange und einstellbare Kalibrierleistung (400–1.500 W,
-  Standard 500 W); Vorbereitung durch natürlichen
-  Hausverbrauch bis 13 %, das BMS begrenzt anschließend an der unteren
-  Gerätegrenze (für die Kalibrierung 12 %)
-- die Entladevorbereitung beginnt auf ausdrücklichen Tastendruck sofort, ohne
-  feste Uhrzeit und ohne PV-Leistungsschwelle
-- der jeweils andere Speicher bleibt während der Vorbereitung bis 14 % gesperrt;
-  bei mindestens 15 Sekunden Netzbezug wird er vorübergehend freigegeben und
-  nach 15 Sekunden ohne Netzbezug wieder gesperrt
-- ab 14 % bleibt der andere Speicher mit seiner vom Gerät gemeldeten maximalen
-  Entladeleistung dauerhaft freigegeben
-- drei nicht bestätigte Schreibvorgänge sperren nur den betroffenen Speicher;
-  Home Assistant meldet die Sperre dauerhaft bis zur Quittierung
-- momentaner Lade- und Entladewirkungsgrad sowie Verlustleistung je Speicher;
-  auch kleine Leistungen werden erfasst, sofern AC- und DC-Richtung plausibel
-  sind
-- Zustände, Vormerkungen, Sicherungen und Einstellungen werden intern über
-  Home Assistant gespeichert
+- getrennte Planung für jeden konfigurierten Speicher
+- frei einstellbare bevorzugte Ladeleistung und Nennkapazität
+- Mittagsspitzenkappung mit planbarem Einspeiseziel
+- Berücksichtigung von Prognosegüte, Reserve und verfügbarem Tagesfenster
+- stabile Leistungsgrenzen ohne unnötige Wiederholung identischer Schreibwerte
+- keine künstliche Reduzierung allein aufgrund eines SoC oberhalb von 90 %
 
-Wetter wird in V1.0 nicht ein zweites Mal direkt bewertet: Die PV-Prognose
-enthält den Wettereinfluss bereits. So wird dieselbe Wetterlage nicht doppelt
-gewichtet.
+### Speichersteuerung
 
-### Wechsel von Beta 7
+- dauerhafter Handbetrieb je Speicher
+- automatische Steuerung der übrigen Speicher bleibt dabei erhalten
+- minimale und maximale SoC-Grenzen werden vom jeweiligen Gerät gelesen
+- ein Fehler sperrt nur den betroffenen Speicher
+- drei nicht bestätigte Schreibvorgänge führen zu einer Sicherheitssperre
+- Sperren und Schreibfehler können nach Prüfung quittiert werden
+- Einstellungen, Vormerkungen und Sicherungszustände bleiben nach Neustarts
+  erhalten
 
-1. Vor dem Update die alten Automationen deaktiviert lassen.
-2. V1.0 über HACS installieren und Home Assistant neu starten.
-3. Der erste Integrationsstart erfolgt absichtlich in **Beobachten**. Entitäten und Plan
-   prüfen.
-4. Danach `select.speicher_ladelogik_betriebsart` auf **Automatik** stellen.
-   Diese Auswahl bleibt bei späteren Neustarts erhalten.
-5. Alte `pv_ladelogik_*`-Helfer erst entfernen, wenn Planung, Handbetrieb und
-   Kalibrierknöpfe im neuen Gerät geprüft wurden.
+### Kalibrierung
 
-> Niemals die alte Registerautomation und die Integration gleichzeitig steuern
-> lassen. Die Integration verweigert Automatik, solange eine bekannte alte
-> Steuerautomation aktiv ist.
+- getrennte Kalibrieranforderung je Speicher
+- Warteschlange für mehrere Speicher
+- einstellbare Kalibrierleistung von **400 bis 1.500 W**
+- Berechnung des verfügbaren Fensters und der benötigten Dauer für heute und
+  morgen
+- Entladevorbereitung durch den natürlichen Hausverbrauch
+- Schutz vor gegenseitigem Laden oder Entladen mehrerer Speicher
+- automatische Wiederherstellung der vorherigen Leistungsgrenzen
 
-### Eigenständiges Dashboard
+### Überwachung und Benachrichtigungen
 
-Das Dashboard wird zusammen mit der Integration ausgeliefert und automatisch
-als Seitenleisten-Panel registriert. Es enthält die Ansichten **Übersicht**,
-**Speicher**, **Steuerung** und **Diagnose**. Entitäten werden über ihre stabilen
-Unique IDs aufgelöst, sodass das Panel auch nach einer Änderung der Entity-ID
-funktioniert.
+- momentaner Lade- und Entladewirkungsgrad
+- berechnete Verlustleistung je Speicher
+- farbliche Zelldrift-Bewertung:
+  - bis 20 mV: grün
+  - über 20 bis unter 50 mV: gelb
+  - ab 50 mV: rot
+- dauerhafte Home-Assistant-Mitteilungen bei relevanten Problemen
+- optional zusätzliche Nachricht über einen frei wählbaren
+  `notify.mobile_app_*`-Dienst
 
-Das bisherige YAML-Dashboard bleibt im Verzeichnis [`dashboards/`](dashboards/)
-als kompatible Alternative erhalten.
+## Eigenständiges Dashboard
 
-Projektseite und Fehlerberichte:
+Das Dashboard wird mit der Integration installiert und automatisch als
+**Speicher-Ladelogik** in der Home-Assistant-Seitenleiste registriert.
+Zusätzliche Karten, Themes oder eine manuelle YAML-Konfiguration sind nicht
+erforderlich.
 
-- <https://github.com/Allgaeuer-Bua/Speicher-Ladelogik>
-- <https://github.com/Allgaeuer-Bua/Speicher-Ladelogik/issues>
+Es enthält vier Ansichten:
+
+- **Übersicht:** Systemstatus, Tagesplanung, gemeinsamer Energiefluss,
+  Tagesenergie sowie Leistungs- und SoC-Verläufe
+- **Speicher:** Detailwerte, Tagesenergien, SoC-/Leistungsverlauf, Packdaten und
+  optionale MPPT-Werte
+- **Steuerung:** Betriebsart, Planungseinstellungen, Handbetrieb, Kalibrierung
+  und Kalibrierfenster
+- **Diagnose:** Datenquellen, Warnungen, Schreibzugriffe und fehlende Entitäten
+
+Messwerte und Diagrammlegenden sind anklickbar und öffnen die zugehörige
+Home-Assistant-Entität. Das mitgelieferte YAML-Dashboard im Verzeichnis
+[`dashboards/`](dashboards/) bleibt als Alternative verfügbar.
+
+## Installation über HACS
+
+1. In HACS den Bereich **Integrationen** öffnen.
+2. Falls das Repository noch nicht gelistet ist, unter
+   **Benutzerdefinierte Repositories** hinzufügen:
+   `https://github.com/Allgaeuer-Bua/Speicher-Ladelogik`
+3. **Speicher-Ladelogik** herunterladen.
+4. Home Assistant neu starten.
+5. Unter **Einstellungen → Geräte & Dienste → Integration hinzufügen**
+   nach **Speicher-Ladelogik** suchen.
+
+## Einrichtung
+
+1. Vorhandene Automationen deaktivieren, die dieselben Lade- oder
+   Entladeleistungsgrenzen schreiben.
+2. Gemeinsame Messwerte und Prognosesensoren auswählen.
+3. Die vorhandenen Modelle Venus A, D und/oder E auswählen.
+4. Für jeden Speicher die Messwerte und Stellglieder zuordnen.
+5. Optional einen Handy-Benachrichtigungsdienst eintragen.
+6. Nach Abschluss Entitäten, Vorzeichen und Planung im Modus
+   **Beobachten** prüfen.
+7. Erst danach die Betriebsart auf **Automatik** stellen.
+
+Die gewählte Betriebsart bleibt bei einem Neustart erhalten.
+
+## Betriebsarten
+
+| Betriebsart | Verhalten |
+| --- | --- |
+| Aus | Keine automatische Planung oder Regelung |
+| Beobachten | Planung und Diagnose laufen, ohne automatische Leistungssteuerung |
+| Automatik | Planung und Leistungsgrenzen werden automatisch umgesetzt |
+
+Ein einzelner Speicher kann zusätzlich in den Handbetrieb versetzt werden,
+während die übrigen Speicher weiter automatisch geplant werden.
+
+## Wichtige Hinweise
+
+> Die Integration und eine alte Registerautomation dürfen niemals gleichzeitig
+> dieselben Speicherwerte schreiben.
+
+Beim ersten Start beginnt die Integration absichtlich im sicheren Modus
+**Beobachten**. Vor dem Umschalten auf **Automatik** sollten insbesondere
+Netzrichtung, Speicher-Leistungsvorzeichen, SoC-Werte und Stellglieder geprüft
+werden.
+
+Das Wetter wird nicht ein zweites Mal direkt bewertet. Der Wettereinfluss ist
+bereits Bestandteil der PV-Prognose und würde sonst doppelt gewichtet.
+
+Speicher-Ladelogik ist für die genannten Marstek-Venus-Modelle und deren
+Entitäten ausgelegt. Sie ist kein universeller Treiber für beliebige
+Batteriesysteme und ersetzt weder die Geräteintegration noch die
+Schutzfunktionen des BMS.
+
+## Aktualisierung
+
+Nach einem Update über HACS Home Assistant neu starten. Änderungen und
+Fehlerbehebungen sind auf der
+[Release-Seite](https://github.com/Allgaeuer-Bua/Speicher-Ladelogik/releases)
+aufgeführt.
+
+## Projekt und Fehlerberichte
+
+- [GitHub-Projekt](https://github.com/Allgaeuer-Bua/Speicher-Ladelogik)
+- [Fehler oder Funktionswunsch melden](https://github.com/Allgaeuer-Bua/Speicher-Ladelogik/issues)

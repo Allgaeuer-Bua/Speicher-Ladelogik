@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Gemeinsame Datenquellen",
-        "description": "Datenquellen auswählen. Nach dem ersten RC-Start beginnt die Integration sicher in Beobachten.",
+        "description": "Datenquellen auswählen. Nach der ersten Einrichtung beginnt die Integration sicher im Modus Beobachten.",
         "data": {
           "name": "Name",
           "enabled_models": "Vorhandene Speicher (1–3 Modelle auswählen)",
