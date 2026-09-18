@@ -41,6 +41,8 @@ function createPanel() {
         betriebsart: "select.speicher_ladelogik_betriebsart",
         mittagsspitzen: "switch.speicher_ladelogik_mittagsspitzen",
         mindestreserve: "number.speicher_ladelogik_mindestreserve",
+        kalibrierleistung: "number.speicher_ladelogik_kalibrierleistung",
+        kalibrierung: "sensor.speicher_ladelogik_kalibrierung",
         fehler_quittieren: "button.speicher_ladelogik_fehler_quittieren",
       },
       sources: {
@@ -59,6 +61,19 @@ function createPanel() {
     states: {
       "switch.speicher_ladelogik_mittagsspitzen": { state: "on", attributes: {} },
       "number.speicher_ladelogik_mindestreserve": { state: "2", attributes: {} },
+      "number.speicher_ladelogik_kalibrierleistung": {
+        state: "750",
+        attributes: { min: 400, max: 1500, step: 50, unit_of_measurement: "W" },
+      },
+      "sensor.speicher_ladelogik_kalibrierung": {
+        state: "Bereit",
+        attributes: {
+          heute_a: { ok: true, start: 1_800_000_000, end: 1_800_007_200, longest_h: 4.5, required_h: 2 },
+          morgen_a: { ok: false, longest_h: 1, required_h: 2 },
+          batterie: "—",
+          grund: "Kein Auftrag aktiv",
+        },
+      },
       "sensor.pv_power": { state: "4200", attributes: {} },
       "sensor.grid_power": { state: "-250", attributes: {} },
       "sensor.house_power": { state: "1200", attributes: {} },
@@ -89,6 +104,7 @@ test("panel controls call the matching Home Assistant services", async () => {
   await panel._setMode("Automatik");
   await panel._toggle("mittagsspitzen");
   await panel._setNumber("mindestreserve", "3.5");
+  await panel._setNumber("kalibrierleistung", "800");
   await panel._press("fehler_quittieren");
 
   assert.deepEqual(calls, [
@@ -102,6 +118,10 @@ test("panel controls call the matching Home Assistant services", async () => {
     ["number", "set_value", {
       entity_id: "number.speicher_ladelogik_mindestreserve",
       value: 3.5,
+    }],
+    ["number", "set_value", {
+      entity_id: "number.speicher_ladelogik_kalibrierleistung",
+      value: 800,
     }],
     ["button", "press", {
       entity_id: "button.speicher_ladelogik_fehler_quittieren",
@@ -179,15 +199,16 @@ test("energy flow uses a four-node aggregate power-flow layout", () => {
   const flow = panel._flowCard();
 
   assert.match(flow, /flow-route active/);
-  assert.match(flow, /flow-dots active/);
-  assert.match(flow, /M 500 145 C 525 190 660 214 780 234/);
-  assert.match(flow, /M 780 250 C 610 250 400 250 205 250/);
-  assert.match(flow, /M 500 355 C 525 310 650 284 780 266/);
-  assert.doesNotMatch(flow, /805 (?:231|269)/);
+  assert.equal((flow.match(/flow-dots active/g) || []).length, 3);
+  assert.match(flow, /M 500 125 C 525 190 660 214 880 250/);
+  assert.match(flow, /M 880 250 C 610 250 400 250 120 250/);
+  assert.match(flow, /M 500 405 C 525 310 650 284 880 250/);
   assert.match(flow, /viewBox="0 0 1000 500"/);
   assert.match(flow, /flow-node home/);
   assert.match(flow, /battery-soc/);
-  assert.match(flow, /Speicher ·/);
+  assert.match(flow, /<span>Netz<\/span>/);
+  assert.match(flow, /<span>Speicher<\/span>/);
+  assert.doesNotMatch(flow, /Netz ·|Speicher ·/);
   assert.doesNotMatch(flow, /Venus A ·/);
   assert.doesNotMatch(flow, /marker-end|flow-arrow-/);
   assert.doesNotMatch(flow, /neutral/);
@@ -199,21 +220,28 @@ test("energy flow uses a four-node aggregate power-flow layout", () => {
   assert.match(styles, /flow-node\.battery\{top:79%/);
 });
 
-test("grid flow direction stays stable around zero", () => {
+test("grid flow direction follows the sign without hysteresis", () => {
   const { panel } = createPanel();
 
-  assert.equal(panel._gridDirection(-50), "export");
-  assert.equal(panel._gridDirection(-5), "export");
-  assert.equal(panel._gridDirection(5), "export");
-  assert.equal(panel._gridDirection(30), "import");
-  assert.equal(panel._gridDirection(-5), "import");
-  assert.equal(panel._gridDirection(-30), "export");
+  assert.equal(panel._gridDirection(-1), "export");
+  assert.equal(panel._gridDirection(0), "import");
+  assert.equal(panel._gridDirection(1), "import");
+});
+
+test("calibration offers a configurable power and per-storage window overview", () => {
+  const { panel } = createPanel();
+  const card = panel._calibrationCard();
+
+  assert.match(card, /Kalibrierleistung/);
+  assert.match(card, /data-number="kalibrierleistung"/);
+  assert.match(card, /4,5 h verfügbar · 2 h benötigt/);
+  assert.match(card, /kein ausreichendes Fenster/);
 });
 
 test("frontend element name matches the integration release version", () => {
-  assert.equal(panelElementName, "speicher-ladelogik-panel-1-0-0-rc-12");
+  assert.equal(panelElementName, "speicher-ladelogik-panel-1-0-0");
   assert.equal(registry.get(panelElementName), Panel);
-  assert.equal(registry.has("speicher-ladelogik-panel-1-0-0-rc-11"), false);
+  assert.equal(registry.has("speicher-ladelogik-panel-1-0-0-rc-12"), false);
 });
 
 test("charts render a combined hover tooltip and clickable sensor legends", () => {

@@ -28,7 +28,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
 
     output = {}
 
-    VERSION = "1.0.0-rc.12"
+    VERSION = "1.0.0"
     NOW = float(data.get("now", time.time()))
     DAY0 = float(data.get("day0", 0))
     DAY1 = float(data.get("day1", 0))
@@ -158,7 +158,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "requested": "Auftrag vorgemerkt",
         "drain": "Entladen auf 13 %",
         "wait": "Wartet auf PV-Fenster",
-        "charge": "Kalibrierladung mit 500 W",
+        "charge": "Kalibrierladung",
         "rest": "Ruheprüfung",
         "paused": "Pausiert – Auftrag bleibt erhalten",
         "restore": "Grenzwerte wiederherstellen",
@@ -389,7 +389,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             end = row["t"] + 900
             if end <= after:
                 continue
-            adequate = row["wh"] * 4 * factor - load >= 600
+            adequate = row["wh"] * 4 * factor - load >= calibration_power + 100
             if adequate:
                 if beginning is None or previous_end is None or abs(row["t"] - previous_end) > 1:
                     beginning = start
@@ -450,9 +450,9 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         key = s["b"]
         peers = [candidate for candidate in BATTERY_KEYS if candidate != key]
         request = context["request"]
-        # A running 500-W calibration lowers the measured live surplus by its
+        # A running calibration lowers the measured live surplus by its own
         # own draw.  Judging the calibration from that already reduced value
-        # caused the observed 500/0-W feedback loop.  Reconstruct the surplus
+        # caused the observed on/off feedback loop. Reconstruct the surplus
         # before the calibration load from its actual charging power.  The
         # waiting phase deliberately keeps using the unmodified value so a
         # calibration cannot start on energy supplied by the peer storage.
@@ -490,7 +490,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             resume = s["u"] or "requested"
             if resume in ["charge", "rest"] and NOW >= s["x"] + 1800:
                 transition(s, "restore", "retry_window")
-            elif resume not in ["charge", "rest"] or calibration_surplus >= 600:
+            elif resume not in ["charge", "rest"] or calibration_surplus >= calibration_power + 100:
                 transition(s, resume, "resumed")
                 s["u"] = ""
                 s["q"] = int(NOW)
@@ -534,7 +534,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         elif p == "wait":
             if NOW >= s["s"] and s["n"] <= DAY0:
                 preview = context["today"][key]
-                if preview["ok"] and context["live_surplus"] >= 600:
+                if preview["ok"] and context["live_surplus"] >= calibration_power + 100:
                     if context["batteries"][key]["cal_empty_ready"]:
                         transition(s, "charge", "charging")
                         s["s"] = int(preview["start"])
@@ -560,7 +560,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             power = charging_power(key, bat["power"])
             report_after_start = (bat["power_reported_ts"] is not None
                                   and bat["power_reported_ts"] >= s["t"] - 1)
-            if not s["h"] and report_after_start and power is not None and power >= 400:
+            if not s["h"] and report_after_start and power is not None and power >= calibration_min_power:
                 s["h"] = 1
             if not s["h"] and NOW - s["t"] >= 180:
                 pause_session(s, "telemetry_no_response")
@@ -580,9 +580,9 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 else:
                     s["f"] = 0
                 if s["p"] == "charge":
-                    if calibration_surplus < 400:
+                    if calibration_surplus < calibration_min_power:
                         pause_session(s, "pv_pause")
-                    elif s["h"] and power is not None and power < 400 and not bat["all_full"]:
+                    elif s["h"] and power is not None and power < calibration_min_power and not bat["all_full"]:
                         s["l"] = s["l"] or int(NOW)
                         if NOW - s["l"] >= 300:
                             if bat["lowest_soc"] >= 99:
@@ -655,7 +655,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             result["charge"][key] = 0
             result["discharge"][key] = 0
         elif s["p"] == "charge":
-            result["charge"][key] = 500
+            result["charge"][key] = calibration_power
             result["discharge"][key] = 0
         return result
 
@@ -747,6 +747,11 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             ),
             cfg["maximum"],
         )
+    calibration_power = rounded_limit(
+        setting("kalibrierleistung_w", 500, 400, 1500),
+        1500,
+    )
+    calibration_min_power = max(300, calibration_power * 0.8)
     manual_charge = {key: rounded_limit(number(raw(MANUAL_CHARGE[key]), 0),
                                         BATTERIES[key]["maximum"]) for key in BATTERY_KEYS}
     manual_discharge = {key: rounded_limit(number(raw(MANUAL_DISCHARGE[key]), 0),
@@ -1001,7 +1006,10 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 and abs(number(model.get("usable_reference"), 0) - bats[key]["usable"]) < 0.01):
             learned_ac = number(model.get("ac_kwh"), 0)
 
-        hours = (max(cfg["measured_ac"], bats[key]["usable"] / eta, learned_ac) + 0.25) / 0.5
+        calibration_energy = max(
+            cfg["measured_ac"], bats[key]["usable"] / eta, learned_ac
+        ) + 0.25
+        hours = calibration_energy / (calibration_power / 1000)
         previews_today[key] = continuous_window(today["rows"], NOW, hours, load, min(day_factor, short_factor) * safety)
         previews_tomorrow[key] = continuous_window(tomorrow["rows"], DAY1, hours, load, safety)
         # Keine Altersgrenze fuer die Zelltemperatur -- der LilyGo-
@@ -1027,8 +1035,16 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             problems.append("Venus " + key + ": oberes SoC-Limit muss 100 % sein")
         if number(raw(cfg["bottom"]), cfg["floor"]) != 12:
             problems.append("Venus " + key + ": unteres SoC-Limit muss für die Kalibrierung 12 % sein")
-        if not writable(cfg["discharge"], 0) or not writable(cfg["charge"], 500):
-            problems.append("Venus " + key + ": eigene 0-W-Entlade-/500-W-Ladegrenze fehlt")
+        if not writable(cfg["discharge"], 0) or not writable(
+            cfg["charge"], calibration_power
+        ):
+            problems.append(
+                "Venus "
+                + key
+                + ": eigene 0-W-Entlade-/"
+                + str(calibration_power)
+                + "-W-Ladegrenze fehlt"
+            )
         if failure_counts[key] >= 3:
             problems.append("Venus " + key + ": drei Schreibfehler; Quittierung erforderlich")
         cal_safe[key] = not problems
@@ -1219,7 +1235,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         cal_reservation = 0
         if cal_active and session["p"] in ["wait", "charge", "paused"]:
             overlap = max(0, min(row["t"] + 900, session["x"] + 1800) - max(row["t"], session["s"]))
-            cal_reservation = 500 * overlap / 3600
+            cal_reservation = calibration_power * overlap / 3600
         normal_rows.append({"t": row["t"], "wh": max(0, row["wh"] - cal_reservation)})
     solar_rows = [row for row in rows if row["wh"] * 4 > load]
     solar_start = solar_rows[0]["t"] if solar_rows else None
@@ -1292,7 +1308,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     total = 0
     peak = {"ok": False, "target": 0, "start": None, "end": None, "finish": None}
     peak_enabled = raw("input_boolean.speicher_ladelogik_mittagsspitzen") != "off"
-    cal_draw = 500 if session["p"] == "charge" else 0
+    cal_draw = calibration_power if session["p"] == "charge" else 0
     normal_live = max(0, live_surplus - cal_draw)
     if not live_valid:
         reason = "Keine verlässliche Live-Überschusserkennung"
@@ -1349,15 +1365,22 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     # Registerwert und erzeugt so keine unnötigen Schreibzyklen.
     dispatch_caps = caps.copy()
     if cal_draw:
-        total = min(total, max(0, live_surplus - 600))
-        if bats[session["b"]]["charge_power"] < 400 and not bats[session["b"]]["all_full"]:
+        total = min(total, max(0, live_surplus - calibration_power - 100))
+        if (
+            bats[session["b"]]["charge_power"] < calibration_min_power
+            and not bats[session["b"]]["all_full"]
+        ):
             total = 0
-            automatic_reason = "Kalibrierladung erhält zuerst 400–500 W; danach gilt der normale Fahrplan für den Rest"
+            automatic_reason = (
+                "Kalibrierladung erhält zuerst "
+                + str(calibration_power)
+                + " W; danach gilt der normale Fahrplan für den Rest"
+            )
 
     if total >= 50:
         if cal_draw:
             # Nur waehrend einer Kalibrierung wird der Rest dynamisch begrenzt,
-            # damit deren 500 W sicher Vorrang behalten.
+            # damit deren eingestellte Leistung sicher Vorrang behält.
             limits = split_power(min(max_total, total), needs, dispatch_caps, {})
         else:
             limits = {key: dispatch_caps[key] if needs[key] > 0 else 0
@@ -1605,7 +1628,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "waiting_data": "Auftrag bleibt vorgemerkt; erforderliche eigene Daten fehlen",
         "waiting_pv": "Leer vorbereitet; wartet auf vorgesehenes PV-Fenster",
         "natural_discharge": "Vorbereitung durch Hausverbrauch; keine erzwungene Einspeisung",
-        "charging": "500-W-Limit; tatsächliche Ladeleistung wird überwacht",
+        "charging": str(calibration_power) + "-W-Limit; tatsächliche Ladeleistung wird überwacht",
         "resting": "Alle erwarteten SoCs bei 100 %; Ruhephase",
         "success": "100 % und Ruhe bestätigt; eigene Grenzwerte zurückgegeben",
         "cancelled": "Vom Benutzer, Betriebsmodus oder eigener Freigabe beendet",
@@ -1620,7 +1643,11 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "state_corrupt": "Gespeicherter Sitzungszustand ungültig",
         "retry_empty": "Speicher noch nicht leer; Auftrag für nächsten geeigneten Tag erhalten",
         "retry_window": "PV-Fenster reicht nicht mehr; Auftrag für nächsten geeigneten Tag erhalten",
-        "under_400w": "Pausiert: eigene Ladeleistung mindestens 5 Minuten unter 400 W",
+        "under_400w": (
+            "Pausiert: eigene Ladeleistung mindestens 5 Minuten unter "
+            + str(round(calibration_min_power))
+            + " W"
+        ),
         "full_unconfirmed": "100 % nicht bestätigt; 99 % gilt nicht als Erfolg",
         "sample_gap": "Pausiert: Messlücke über 90 Sekunden; Kontinuität nicht belegbar",
         "telemetry_no_response": "Pausiert: nach Ladefreigabe keine neue AC-Rückmeldung innerhalb von drei Minuten",
@@ -1806,6 +1833,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
 
     calibration = {"phase": session["p"], "batterie": session["b"],
         "grund": cal_reason, "grund_code": session["r"],
+        "leistung_w": calibration_power,
         "energie_ac_kwh": round(session["w"] / 1000, 3), "start_ts": session["s"] or None,
         "ende_ts": session["x"] or None,
         "peer_entladesperre_freigegeben": bool(
@@ -1830,7 +1858,11 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         ),
         "netzleistung_w": round(grid) if grid is not None else None,
         "peer_freigabe_schwelle_prozent": 14,
-        "hinweis": "Prognose ist keine Garantie; 500 W sind ein Limit."}
+        "hinweis": (
+            "Prognose ist keine Garantie; "
+            + str(calibration_power)
+            + " W sind ein Limit."
+        )}
     for key in BATTERY_KEYS:
         name = key.lower()
         calibration["kalibrieren_" + name + "_sicher"] = cal_safe[key]

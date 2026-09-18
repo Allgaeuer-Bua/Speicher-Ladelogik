@@ -24,7 +24,7 @@ PHASE_LABELS = {
     "requested": "Auftrag vorgemerkt",
     "drain": "Entladen auf 13 %",
     "wait": "Wartet auf PV-Fenster",
-    "charge": "Kalibrierladung mit 500 W",
+    "charge": "Kalibrierladung",
     "rest": "Ruheprüfung",
     "paused": "Pausiert",
     "restore": "Grenzwerte wiederherstellen",
@@ -33,6 +33,16 @@ PHASE_LABELS = {
     "cancelled": "Abgebrochen",
     "error": "Fehler",
 }
+
+
+def _calibration_state(data: dict[str, Any]) -> str:
+    """Return the translated calibration phase including its configured power."""
+    calibration = data.get("calibration", {})
+    phase = calibration.get("phase", "error")
+    if phase == "charge":
+        power = round(float(calibration.get("leistung_w", 500)))
+        return f"Kalibrierladung mit {power} W"
+    return PHASE_LABELS.get(phase, phase)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -92,10 +102,7 @@ SENSORS = (
         key="kalibrierung",
         name="Kalibrierung",
         icon="mdi:battery-sync-outline",
-        value_fn=lambda data: PHASE_LABELS.get(
-            data.get("calibration", {}).get("phase"),
-            data.get("calibration", {}).get("phase", "Fehler"),
-        ),
+        value_fn=_calibration_state,
     ),
     SpeicherSensorDescription(
         key="wirkungsgrad_venus_a",
@@ -310,6 +317,7 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "batterie",
                 "grund",
                 "grund_code",
+                "leistung_w",
                 "energie_ac_kwh",
                 "start_ts",
                 "ende_ts",
