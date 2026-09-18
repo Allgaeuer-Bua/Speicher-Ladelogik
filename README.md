@@ -3,7 +3,7 @@
 Intelligente Speicher-Ladesteuerung für Home Assistant mit unabhängig
 regelbaren Speichern und AstraMeter.
 
-## V1.0 RC 10
+## V1.0 RC 11
 
 Der Release Candidate ersetzt die bisherigen YAML-Helfer und
 Steuerautomationen durch native Entitäten der Integration.
@@ -48,6 +48,11 @@ Verlaufsgrafiken bleiben dadurch stabil und die Bedienung reagiert spürbar
 flüssiger. Die Speicherdetails zeigen Verlust und Restbedarf wieder in der
 gewünschten Reihenfolge, und das Beispiel für den optionalen Handy-Dienst ist
 vollständig neutral gehalten.
+
+RC11 hält die Netz-, PV- und Speicherpfade mit einem sichtbaren Abstand vor
+dem Haus-Knoten an. Dadurch liegen Linien und Pfeilspitzen weder auf dem
+Kreisrand noch unter dem Knoten – auch nicht in der schmaleren Smartphone-
+Ansicht.
 
 ### Funktionen
 
@@ -96,7 +101,7 @@ gewichtet.
 ### Wechsel von Beta 7
 
 1. Vor dem Update die alten Automationen deaktiviert lassen.
-2. RC10 über HACS installieren und Home Assistant neu starten.
+2. RC11 über HACS installieren und Home Assistant neu starten.
 3. Der erste RC-Start erfolgt absichtlich in **Beobachten**. Entitäten und Plan
    prüfen.
 4. Danach `select.speicher_ladelogik_betriebsart` auf **Automatik** stellen.

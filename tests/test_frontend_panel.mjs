@@ -173,7 +173,10 @@ test("energy flow uses a four-node aggregate power-flow layout", () => {
   const flow = panel._flowCard();
 
   assert.match(flow, /flow-route active/);
-  assert.match(flow, /M 500 145 C 525 190 660 214 805 231/);
+  assert.match(flow, /M 500 145 C 525 190 660 214 780 234/);
+  assert.match(flow, /M 780 250 C 610 250 400 250 205 250/);
+  assert.match(flow, /M 500 355 C 525 310 650 284 780 266/);
+  assert.doesNotMatch(flow, /805 (?:231|269)/);
   assert.match(flow, /viewBox="0 0 1000 500"/);
   assert.match(flow, /flow-node home/);
   assert.match(flow, /battery-soc/);

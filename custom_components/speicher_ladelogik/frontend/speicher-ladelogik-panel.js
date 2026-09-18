@@ -718,13 +718,16 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const batteryMode = this._batteryMode(batteryPower);
     const batteryIcon = batteryMode.tone === "charge" ? "mdi:battery-arrow-up-outline"
       : batteryMode.tone === "discharge" ? "mdi:battery-arrow-down-outline" : "mdi:battery-outline";
+    // Keep a visible gap between the routes (including their arrowheads) and
+    // the home ring.  The mobile layout moves the home node slightly inward,
+    // so paths ending around x=800 otherwise touch or disappear below it.
     const gridPath = grid >= 0
-      ? "M 205 250 C 400 250 610 250 795 250"
-      : "M 795 250 C 610 250 400 250 205 250";
-    const pvPath = "M 500 145 C 525 190 660 214 805 231";
+      ? "M 205 250 C 400 250 610 250 780 250"
+      : "M 780 250 C 610 250 400 250 205 250";
+    const pvPath = "M 500 145 C 525 190 660 214 780 234";
     const batteryPath = batteryPower < -10
-      ? "M 805 269 C 660 287 525 310 500 355"
-      : "M 500 355 C 525 310 660 287 805 269";
+      ? "M 780 266 C 650 284 525 310 500 355"
+      : "M 500 355 C 525 310 650 284 780 266";
     return {
       pv, grid, home, batteryPower, batteryMode, batteryIcon, gridPath, pvPath, batteryPath,
       combinedSoc: this._combinedCurrentSoc(),
