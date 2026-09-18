@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const registry = new Map();
@@ -24,7 +25,12 @@ await import(
   "../custom_components/speicher_ladelogik/frontend/speicher-ladelogik-panel.js"
 );
 
-const Panel = registry.get("speicher-ladelogik-panel-1-0-0-rc-11");
+const manifest = JSON.parse(readFileSync(
+  new URL("../custom_components/speicher_ladelogik/manifest.json", import.meta.url),
+  "utf8",
+));
+const panelElementName = `speicher-ladelogik-panel-${manifest.version.replaceAll(".", "-")}`;
+const Panel = registry.get(panelElementName);
 
 function createPanel() {
   const calls = [];
@@ -173,6 +179,7 @@ test("energy flow uses a four-node aggregate power-flow layout", () => {
   const flow = panel._flowCard();
 
   assert.match(flow, /flow-route active/);
+  assert.match(flow, /flow-dots active/);
   assert.match(flow, /M 500 145 C 525 190 660 214 780 234/);
   assert.match(flow, /M 780 250 C 610 250 400 250 205 250/);
   assert.match(flow, /M 500 355 C 525 310 650 284 780 266/);
@@ -182,16 +189,31 @@ test("energy flow uses a four-node aggregate power-flow layout", () => {
   assert.match(flow, /battery-soc/);
   assert.match(flow, /Speicher ·/);
   assert.doesNotMatch(flow, /Venus A ·/);
+  assert.doesNotMatch(flow, /marker-end|flow-arrow-/);
+  assert.doesNotMatch(flow, /neutral/);
   assert.doesNotMatch(flow, /animateMotion/);
   const styles = panel._styles();
+  assert.match(styles, /@keyframes flow-dots/);
   assert.match(styles, /flow-node\.pv\{left:50%;top:19%;[^}]*flex-direction:column-reverse/);
   assert.match(styles, /flow-node\.battery\{left:50%;top:81%/);
   assert.match(styles, /flow-node\.battery\{top:79%/);
 });
 
+test("grid flow direction stays stable around zero", () => {
+  const { panel } = createPanel();
+
+  assert.equal(panel._gridDirection(-50), "export");
+  assert.equal(panel._gridDirection(-5), "export");
+  assert.equal(panel._gridDirection(5), "export");
+  assert.equal(panel._gridDirection(30), "import");
+  assert.equal(panel._gridDirection(-5), "import");
+  assert.equal(panel._gridDirection(-30), "export");
+});
+
 test("frontend element name matches the integration release version", () => {
-  assert.equal(registry.get("speicher-ladelogik-panel-1-0-0-rc-11"), Panel);
-  assert.equal(registry.has("speicher-ladelogik-panel-1-0-0-rc-10"), false);
+  assert.equal(panelElementName, "speicher-ladelogik-panel-1-0-0-rc-12");
+  assert.equal(registry.get(panelElementName), Panel);
+  assert.equal(registry.has("speicher-ladelogik-panel-1-0-0-rc-11"), false);
 });
 
 test("charts render a combined hover tooltip and clickable sensor legends", () => {

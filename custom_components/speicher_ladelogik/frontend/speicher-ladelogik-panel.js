@@ -72,6 +72,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     this._stateRefs = new Map();
     this._liveFrame = null;
     this._rendered = false;
+    this._gridFlowDirection = null;
   }
 
   set hass(value) {
@@ -257,8 +258,21 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return { label: "Bereit", tone: "idle" };
   }
 
-  _flowPath(active, path, color, marker, route) {
-    return `<path data-flow-route="${route}" d="${path}" class="flow-route ${active ? "active" : "idle"}" ${active ? `style="--flow-color:${color}" marker-end="url(#${marker})"` : ""}></path>`;
+  _gridDirection(power) {
+    const watts = this._num(power, 0);
+    if (this._gridFlowDirection === null) {
+      this._gridFlowDirection = watts < 0 ? "export" : "import";
+    } else if (watts >= 30) {
+      this._gridFlowDirection = "import";
+    } else if (watts <= -30) {
+      this._gridFlowDirection = "export";
+    }
+    return this._gridFlowDirection;
+  }
+
+  _flowPath(active, path, color, route) {
+    const state = active ? "active" : "idle";
+    return `<g data-flow-route="${route}" class="flow-route-group ${state}" style="--flow-color:${color}"><path data-flow-base d="${path}" class="flow-route ${state}"></path><path data-flow-dots d="${path}" class="flow-dots ${state}"></path></g>`;
   }
 
   _historySourceIds() {
@@ -716,12 +730,12 @@ class SpeicherLadelogikPanel extends HTMLElement {
       );
     }, 0);
     const batteryMode = this._batteryMode(batteryPower);
+    const gridDirection = this._gridDirection(grid);
     const batteryIcon = batteryMode.tone === "charge" ? "mdi:battery-arrow-up-outline"
       : batteryMode.tone === "discharge" ? "mdi:battery-arrow-down-outline" : "mdi:battery-outline";
-    // Keep a visible gap between the routes (including their arrowheads) and
-    // the home ring.  The mobile layout moves the home node slightly inward,
-    // so paths ending around x=800 otherwise touch or disappear below it.
-    const gridPath = grid >= 0
+    // Keep a visible gap between the routes and the rings. The route direction
+    // also drives the moving dots; hysteresis prevents jitter around zero.
+    const gridPath = gridDirection === "import"
       ? "M 205 250 C 400 250 610 250 780 250"
       : "M 780 250 C 610 250 400 250 205 250";
     const pvPath = "M 500 145 C 525 190 660 214 780 234";
@@ -729,7 +743,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
       ? "M 780 266 C 650 284 525 310 500 355"
       : "M 500 355 C 525 310 650 284 780 266";
     return {
-      pv, grid, home, batteryPower, batteryMode, batteryIcon, gridPath, pvPath, batteryPath,
+      pv, grid, home, batteryPower, batteryMode, batteryIcon, gridDirection,
+      gridPath, pvPath, batteryPath,
       combinedSoc: this._combinedCurrentSoc(),
     };
   }
@@ -740,20 +755,14 @@ class SpeicherLadelogikPanel extends HTMLElement {
       <section class="card flow-card span-7">
         ${this._cardTitle("mdi:transmission-tower", "Energiefluss", this._badge("Live", "good"))}
         <div class="flow-canvas">
-          <div class="flow-node grid entity-card" data-entity="${esc(this._sid("grid"))}"><div class="flow-ring"><ha-icon icon="mdi:transmission-tower"></ha-icon><strong data-live-flow="grid-value">${this._power(Math.abs(flow.grid))}</strong></div><span data-live-flow="grid-label">Netz · ${Math.abs(flow.grid) <= 10 ? "neutral" : flow.grid > 0 ? "Bezug" : "Einspeisung"}</span></div>
+          <div class="flow-node grid entity-card" data-entity="${esc(this._sid("grid"))}"><div class="flow-ring"><ha-icon icon="mdi:transmission-tower"></ha-icon><strong data-live-flow="grid-value">${this._power(Math.abs(flow.grid))}</strong></div><span data-live-flow="grid-label">Netz · ${flow.gridDirection === "import" ? "Bezug" : "Einspeisung"}</span></div>
           <div class="flow-node pv entity-card" data-entity="${esc(this._sid("pv"))}"><div class="flow-ring"><ha-icon icon="mdi:solar-power-variant"></ha-icon><strong data-live-flow="pv-value">${this._power(flow.pv)}</strong></div><span>Solar</span></div>
           <div class="flow-node home entity-card" data-entity="${esc(this._sid("house"))}"><div class="flow-ring"><ha-icon icon="mdi:home-lightning-bolt-outline"></ha-icon><strong data-live-flow="home-value">${this._power(flow.home)}</strong></div><span>Haus</span></div>
           <div class="flow-node battery"><div class="flow-ring"><strong data-live-flow="battery-soc">${Math.round(flow.combinedSoc)} %</strong><ha-icon data-live-flow="battery-icon" icon="${flow.batteryIcon}"></ha-icon><b data-live-flow="battery-value">${this._power(Math.abs(flow.batteryPower))}</b></div><span data-live-flow="battery-label">Speicher · ${flow.batteryMode.label.toLowerCase()}</span></div>
           <svg class="flow-lines" viewBox="0 0 1000 500" preserveAspectRatio="none" aria-hidden="true">
-            <defs>
-              <marker id="flow-arrow-grid" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 Z" fill="#8f6bff"></path></marker>
-              <marker id="flow-arrow-pv" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 Z" fill="#ffbd45"></path></marker>
-              <marker id="flow-arrow-charge" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 Z" fill="#38d582"></path></marker>
-              <marker id="flow-arrow-discharge" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 Z" fill="#38d582"></path></marker>
-            </defs>
-            ${this._flowPath(Math.abs(flow.grid) > 10, flow.gridPath, "#8f6bff", "flow-arrow-grid", "grid")}
-            ${this._flowPath(flow.pv > 10, flow.pvPath, "#ffbd45", "flow-arrow-pv", "pv")}
-            ${this._flowPath(Math.abs(flow.batteryPower) > 10, flow.batteryPath, "#38d582", flow.batteryMode.tone === "charge" ? "flow-arrow-charge" : "flow-arrow-discharge", "battery")}
+            ${this._flowPath(Math.abs(flow.grid) > 10, flow.gridPath, "#8f6bff", "grid")}
+            ${this._flowPath(flow.pv > 10, flow.pvPath, "#ffbd45", "pv")}
+            ${this._flowPath(Math.abs(flow.batteryPower) > 10, flow.batteryPath, "#38d582", "battery")}
           </svg>
         </div>
       </section>`;
@@ -1045,13 +1054,14 @@ class SpeicherLadelogikPanel extends HTMLElement {
       @media(max-width:1350px){.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.summary-grid .energy-card{grid-row:span 2}.battery-upper{grid-template-columns:1fr}.battery-history .history-chart{height:190px}}
       @media(max-width:1050px){.summary-grid{grid-template-columns:1fr}.summary-grid .energy-card{grid-row:auto}.summary-card{min-height:0}.battery-upper{grid-template-columns:minmax(205px,.52fr) minmax(320px,1.48fr)}}
       @media(max-width:720px){.flow-canvas{min-height:320px}.window-label{align-items:flex-start;flex-direction:column;gap:3px}.ack-state{grid-template-columns:1fr}.number-input{width:94px}.summary-grid{gap:9px}.battery-upper{grid-template-columns:1fr}.history-chart{height:190px}.chart-empty{height:190px}.brand-copy strong{font-size:15px}.nav-item span{font-size:11px}.flow-node span{font-size:9px}}
-      .flow-canvas{display:block;min-height:260px;position:relative;overflow:hidden}.flow-node,.flow-core{position:absolute;transform:translateX(-50%);z-index:3}.flow-node.grid{left:16%;top:96px}.flow-node.pv{left:50%;top:0}.flow-core{left:50%;top:86px}.flow-node.battery{left:84%;top:96px;color:var(--accent)}.flow-lines{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible}.flow-route{fill:none;stroke:rgba(132,169,156,.2);stroke-width:.75;stroke-dasharray:7 8;vector-effect:non-scaling-stroke}.flow-route.active{stroke:var(--flow-color);stroke-width:1.05;stroke-dasharray:none;stroke-linecap:round;filter:drop-shadow(0 0 2px var(--flow-color))}.flow-node ha-icon{box-shadow:none}.flow-core ha-icon{box-shadow:0 0 18px rgba(82,184,255,.16)}
+      .flow-canvas{display:block;min-height:260px;position:relative;overflow:hidden}.flow-node,.flow-core{position:absolute;transform:translateX(-50%);z-index:3}.flow-node.grid{left:16%;top:96px}.flow-node.pv{left:50%;top:0}.flow-core{left:50%;top:86px}.flow-node.battery{left:84%;top:96px;color:var(--accent)}.flow-lines{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible}.flow-route,.flow-dots{fill:none;vector-effect:non-scaling-stroke}.flow-route{stroke:rgba(132,169,156,.2);stroke-width:.75;stroke-dasharray:7 8}.flow-route.active{stroke:var(--flow-color);stroke-width:1.05;stroke-dasharray:none;stroke-linecap:round;opacity:.62;filter:drop-shadow(0 0 2px var(--flow-color))}.flow-dots{stroke:transparent;stroke-width:4;stroke-linecap:round;stroke-dasharray:.1 16;pointer-events:none}.flow-dots.active{stroke:var(--flow-color);animation:flow-dots 1.35s linear infinite;filter:drop-shadow(0 0 4px var(--flow-color))}@keyframes flow-dots{to{stroke-dashoffset:-16.1}}.flow-node ha-icon{box-shadow:none}.flow-core ha-icon{box-shadow:0 0 18px rgba(82,184,255,.16)}
       .chart-shell{position:relative;min-width:0}.chart-hover-plane{fill:transparent;pointer-events:none}.chart-tooltip{position:absolute;z-index:6;min-width:155px;padding:9px 11px;border:1px solid rgba(144,177,164,.22);border-radius:9px;background:rgba(8,15,18,.96);box-shadow:0 8px 24px rgba(0,0,0,.38);opacity:0;visibility:hidden;pointer-events:none;transform:translateX(12px);transition:opacity .08s;color:var(--primary-text-color)}.chart-tooltip.visible{opacity:1;visibility:visible}.chart-tooltip.flip{transform:translateX(calc(-100% - 12px))}.chart-tooltip>b{display:block;margin-bottom:6px;font-size:11px;color:var(--muted)}.chart-tooltip>div{display:grid;grid-template-columns:9px 1fr auto;gap:7px;align-items:center;font-size:12px;padding:2px 0}.chart-tooltip i{width:8px;height:8px;border-radius:2px}.chart-tooltip strong{font-size:12px}.chart-legend .entity-card{cursor:pointer;padding:2px 4px;border-radius:5px}.drift-values{display:flex;gap:5px;flex-wrap:wrap}.drift-value{border:0;border-radius:10px;padding:3px 7px;cursor:pointer}.drift-value.good{color:#61e69a;background:rgba(56,213,130,.13)}.drift-value.warn{color:#ffd078;background:rgba(255,189,69,.14)}.drift-value.bad{color:#ff8a8a;background:rgba(255,107,107,.14)}.drift-value.neutral{color:var(--muted);background:rgba(130,150,145,.12)}.storage-slots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}.storage-slots>div{display:grid;grid-template-columns:auto auto;gap:3px 8px;padding:8px;border-radius:8px;background:rgba(110,135,125,.06)}.storage-slots span{justify-self:end;color:var(--accent)}.storage-slots small{grid-column:1/-1;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.entity-card{transition:border-color .15s,background .15s}.entity-card:hover{border-color:rgba(82,184,255,.3);background-color:rgba(82,184,255,.04)}
       @media(max-width:720px){.flow-canvas{min-height:250px}.flow-node.grid{left:14%;top:94px}.flow-node.pv{left:50%;top:0}.flow-core{left:50%;top:84px}.flow-node.battery{left:86%;top:94px}.storage-slots{grid-template-columns:1fr}.chart-tooltip{min-width:135px;padding:7px 9px}.chart-tooltip>div{font-size:11px}}
-      .flow-card .flow-canvas{min-height:430px}.flow-card .flow-node{position:absolute;transform:translate(-50%,-50%);gap:7px;z-index:3}.flow-card .flow-node.grid{left:12%;top:50%;color:#a98dff}.flow-card .flow-node.pv{left:50%;top:19%;color:#ffbd45;flex-direction:column-reverse}.flow-card .flow-node.home{left:88%;top:50%;color:#ff9a55}.flow-card .flow-node.battery{left:50%;top:81%;color:#38d582}.flow-card .flow-ring{width:116px;height:116px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;background:rgba(9,16,19,.92);border:3px solid currentColor;box-shadow:0 0 20px color-mix(in srgb,currentColor 24%,transparent)}.flow-card .flow-ring ha-icon{width:auto;height:auto;border:0;border-radius:0;background:transparent;color:currentColor;--mdc-icon-size:31px}.flow-card .flow-ring strong{font-size:18px;line-height:1}.flow-card .flow-ring b{font-size:13px;line-height:1}.flow-card .flow-node>span{font-size:12px;color:var(--muted);white-space:nowrap}.flow-card .flow-route{stroke-width:1.1}.flow-card .flow-route.active{stroke-width:1.35;filter:drop-shadow(0 0 3px var(--flow-color))}
+      .flow-card .flow-canvas{min-height:430px}.flow-card .flow-node{position:absolute;transform:translate(-50%,-50%);gap:7px;z-index:3}.flow-card .flow-node.grid{left:12%;top:50%;color:#a98dff}.flow-card .flow-node.pv{left:50%;top:19%;color:#ffbd45;flex-direction:column-reverse}.flow-card .flow-node.home{left:88%;top:50%;color:#ff9a55}.flow-card .flow-node.battery{left:50%;top:81%;color:#38d582}.flow-card .flow-ring{width:116px;height:116px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;background:rgba(9,16,19,.92);border:3px solid currentColor;box-shadow:0 0 20px color-mix(in srgb,currentColor 24%,transparent)}.flow-card .flow-ring ha-icon{width:auto;height:auto;border:0;border-radius:0;background:transparent;color:currentColor;--mdc-icon-size:31px}.flow-card .flow-ring strong{font-size:18px;line-height:1}.flow-card .flow-ring b{font-size:13px;line-height:1}.flow-card .flow-node>span{font-size:12px;color:var(--muted);white-space:nowrap}.flow-card .flow-route{stroke-width:1.1}.flow-card .flow-route.active{stroke-width:1.35;filter:drop-shadow(0 0 3px var(--flow-color))}.flow-card .flow-dots{stroke-width:4.2}
       @media(max-width:720px){.flow-card .flow-canvas{min-height:340px}.flow-card .flow-ring{width:82px;height:82px;border-width:2px}.flow-card .flow-ring ha-icon{--mdc-icon-size:23px}.flow-card .flow-ring strong{font-size:14px}.flow-card .flow-ring b{font-size:10px}.flow-card .flow-node>span{font-size:9px}.flow-card .flow-node.grid{left:14%}.flow-card .flow-node.pv{top:21%}.flow-card .flow-node.home{left:86%}.flow-card .flow-node.battery{top:79%}}
       .battery-pair{grid-template-columns:repeat(auto-fit,minmax(390px,1fr))}.comparison-grid{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}.control-columns.manual-columns{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}.action-groups{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}.storage-slots{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
       @media(max-width:720px){.battery-pair,.comparison-grid,.control-columns.manual-columns,.action-groups,.storage-slots{grid-template-columns:1fr}}
+      @media(prefers-reduced-motion:reduce){.flow-dots.active{animation-duration:3s}}
     `;
   }
 
@@ -1060,18 +1070,20 @@ class SpeicherLadelogikPanel extends HTMLElement {
     if (element && element.textContent !== value) element.textContent = value;
   }
 
-  _refreshFlowRoute(route, active, path, color, marker) {
-    const element = this.shadowRoot?.querySelector?.(`[data-flow-route="${route}"]`);
-    if (!element) return;
-    element.setAttribute("d", path);
-    element.setAttribute("class", `flow-route ${active ? "active" : "idle"}`);
-    if (active) {
-      element.style.setProperty("--flow-color", color);
-      element.setAttribute("marker-end", `url(#${marker})`);
-    } else {
-      element.style.removeProperty("--flow-color");
-      element.removeAttribute("marker-end");
-    }
+  _refreshFlowRoute(route, active, path, color) {
+    const group = this.shadowRoot?.querySelector?.(`[data-flow-route="${route}"]`);
+    if (!group) return;
+    const state = active ? "active" : "idle";
+    const nextGroupClass = `flow-route-group ${state}`;
+    if (group.getAttribute("class") !== nextGroupClass) group.setAttribute("class", nextGroupClass);
+    group.style.setProperty("--flow-color", color);
+    [["[data-flow-base]", "flow-route"], ["[data-flow-dots]", "flow-dots"]].forEach(([selector, className]) => {
+      const element = group.querySelector(selector);
+      if (!element) return;
+      if (element.getAttribute("d") !== path) element.setAttribute("d", path);
+      const nextClass = `${className} ${state}`;
+      if (element.getAttribute("class") !== nextClass) element.setAttribute("class", nextClass);
+    });
   }
 
   _refreshLive() {
@@ -1084,16 +1096,16 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const flow = this._flowData();
     this._setLiveText('[data-live-flow="pv-value"]', this._power(flow.pv));
     this._setLiveText('[data-live-flow="grid-value"]', this._power(Math.abs(flow.grid)));
-    this._setLiveText('[data-live-flow="grid-label"]', `Netz · ${Math.abs(flow.grid) <= 10 ? "neutral" : flow.grid > 0 ? "Bezug" : "Einspeisung"}`);
+    this._setLiveText('[data-live-flow="grid-label"]', `Netz · ${flow.gridDirection === "import" ? "Bezug" : "Einspeisung"}`);
     this._setLiveText('[data-live-flow="home-value"]', this._power(flow.home));
     this._setLiveText('[data-live-flow="battery-soc"]', `${Math.round(flow.combinedSoc)} %`);
     this._setLiveText('[data-live-flow="battery-value"]', this._power(Math.abs(flow.batteryPower)));
     this._setLiveText('[data-live-flow="battery-label"]', `Speicher · ${flow.batteryMode.label.toLowerCase()}`);
     const batteryIcon = this.shadowRoot.querySelector('[data-live-flow="battery-icon"]');
     batteryIcon?.setAttribute("icon", flow.batteryIcon);
-    this._refreshFlowRoute("grid", Math.abs(flow.grid) > 10, flow.gridPath, "#8f6bff", "flow-arrow-grid");
-    this._refreshFlowRoute("pv", flow.pv > 10, flow.pvPath, "#ffbd45", "flow-arrow-pv");
-    this._refreshFlowRoute("battery", Math.abs(flow.batteryPower) > 10, flow.batteryPath, "#38d582", flow.batteryMode.tone === "charge" ? "flow-arrow-charge" : "flow-arrow-discharge");
+    this._refreshFlowRoute("grid", Math.abs(flow.grid) > 10, flow.gridPath, "#8f6bff");
+    this._refreshFlowRoute("pv", flow.pv > 10, flow.pvPath, "#ffbd45");
+    this._refreshFlowRoute("battery", Math.abs(flow.batteryPower) > 10, flow.batteryPath, "#38d582");
 
     this._models().forEach((model) => {
       const suffix = model.toLowerCase();
@@ -1202,7 +1214,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 }
 
-const PANEL_ELEMENT = "speicher-ladelogik-panel-1-0-0-rc-11";
+const PANEL_ELEMENT = "speicher-ladelogik-panel-1-0-0-rc-12";
 
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);
