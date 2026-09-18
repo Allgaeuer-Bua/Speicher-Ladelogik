@@ -262,9 +262,9 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return watts < 0 ? "export" : "import";
   }
 
-  _flowPath(active, path, color, route) {
-    const state = active ? "active" : "idle";
-    return `<g data-flow-route="${route}" class="flow-route-group ${state}" style="--flow-color:${color}"><path data-flow-base d="${path}" class="flow-route ${state}"></path><path data-flow-dots d="${path}" class="flow-dots ${state}"></path></g>`;
+  _flowPath(moving, path, color, route) {
+    const dotState = moving ? "active" : "idle";
+    return `<g data-flow-route="${route}" class="flow-route-group active" style="--flow-color:${color}"><path data-flow-base d="${path}" class="flow-route active"></path><path data-flow-dots d="${path}" class="flow-dots ${dotState}"></path></g>`;
   }
 
   _historySourceIds() {
@@ -752,9 +752,9 @@ class SpeicherLadelogikPanel extends HTMLElement {
           <div class="flow-node home entity-card" data-entity="${esc(this._sid("house"))}"><div class="flow-ring"><ha-icon icon="mdi:home-lightning-bolt-outline"></ha-icon><strong data-live-flow="home-value">${this._power(flow.home)}</strong></div><span>Haus</span></div>
           <div class="flow-node battery"><div class="flow-ring"><strong data-live-flow="battery-soc">${Math.round(flow.combinedSoc)} %</strong><ha-icon data-live-flow="battery-icon" icon="${flow.batteryIcon}"></ha-icon><b data-live-flow="battery-value">${this._power(Math.abs(flow.batteryPower))}</b></div><span>Speicher</span></div>
           <svg class="flow-lines" viewBox="0 0 1000 500" preserveAspectRatio="none" aria-hidden="true">
-            ${this._flowPath(true, flow.gridPath, "#8f6bff", "grid")}
-            ${this._flowPath(true, flow.pvPath, "#ffbd45", "pv")}
-            ${this._flowPath(true, flow.batteryPath, "#38d582", "battery")}
+            ${this._flowPath(Math.abs(flow.grid) > 0, flow.gridPath, "#8f6bff", "grid")}
+            ${this._flowPath(flow.pv > 0, flow.pvPath, "#ffbd45", "pv")}
+            ${this._flowPath(Math.abs(flow.batteryPower) > 0, flow.batteryPath, "#38d582", "battery")}
           </svg>
         </div>
       </section>`;
@@ -1081,20 +1081,26 @@ class SpeicherLadelogikPanel extends HTMLElement {
     if (element && element.textContent !== value) element.textContent = value;
   }
 
-  _refreshFlowRoute(route, active, path, color) {
+  _refreshFlowRoute(route, moving, path, color) {
     const group = this.shadowRoot?.querySelector?.(`[data-flow-route="${route}"]`);
     if (!group) return;
-    const state = active ? "active" : "idle";
-    const nextGroupClass = `flow-route-group ${state}`;
-    if (group.getAttribute("class") !== nextGroupClass) group.setAttribute("class", nextGroupClass);
+    if (group.getAttribute("class") !== "flow-route-group active") {
+      group.setAttribute("class", "flow-route-group active");
+    }
     group.style.setProperty("--flow-color", color);
-    [["[data-flow-base]", "flow-route"], ["[data-flow-dots]", "flow-dots"]].forEach(([selector, className]) => {
-      const element = group.querySelector(selector);
-      if (!element) return;
-      if (element.getAttribute("d") !== path) element.setAttribute("d", path);
-      const nextClass = `${className} ${state}`;
-      if (element.getAttribute("class") !== nextClass) element.setAttribute("class", nextClass);
-    });
+    const base = group.querySelector("[data-flow-base]");
+    if (base) {
+      if (base.getAttribute("d") !== path) base.setAttribute("d", path);
+      if (base.getAttribute("class") !== "flow-route active") {
+        base.setAttribute("class", "flow-route active");
+      }
+    }
+    const dots = group.querySelector("[data-flow-dots]");
+    if (dots) {
+      if (dots.getAttribute("d") !== path) dots.setAttribute("d", path);
+      const nextClass = `flow-dots ${moving ? "active" : "idle"}`;
+      if (dots.getAttribute("class") !== nextClass) dots.setAttribute("class", nextClass);
+    }
   }
 
   _refreshLive() {
@@ -1112,9 +1118,9 @@ class SpeicherLadelogikPanel extends HTMLElement {
     this._setLiveText('[data-live-flow="battery-value"]', this._power(Math.abs(flow.batteryPower)));
     const batteryIcon = this.shadowRoot.querySelector('[data-live-flow="battery-icon"]');
     batteryIcon?.setAttribute("icon", flow.batteryIcon);
-    this._refreshFlowRoute("grid", true, flow.gridPath, "#8f6bff");
-    this._refreshFlowRoute("pv", true, flow.pvPath, "#ffbd45");
-    this._refreshFlowRoute("battery", true, flow.batteryPath, "#38d582");
+    this._refreshFlowRoute("grid", Math.abs(flow.grid) > 0, flow.gridPath, "#8f6bff");
+    this._refreshFlowRoute("pv", flow.pv > 0, flow.pvPath, "#ffbd45");
+    this._refreshFlowRoute("battery", Math.abs(flow.batteryPower) > 0, flow.batteryPath, "#38d582");
 
     this._models().forEach((model) => {
       const suffix = model.toLowerCase();
@@ -1223,7 +1229,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 }
 
-const PANEL_ELEMENT = "speicher-ladelogik-panel-1-0-0";
+const PANEL_ELEMENT = "speicher-ladelogik-panel-1-0-1";
 
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);

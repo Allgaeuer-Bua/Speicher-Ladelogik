@@ -3,6 +3,12 @@
 Intelligente Speicher-Ladesteuerung für Home Assistant mit unabhängig
 regelbaren Speichern und AstraMeter.
 
+## V1.0.1
+
+Die Energieflusslinien bleiben dauerhaft sichtbar. Die laufenden Punkte
+pausieren nun jedoch bei exakt 0 W, damit PV, Netz und Speicher keinen
+Energiefluss anzeigen, wenn tatsächlich keine Leistung fließt.
+
 ## V1.0
 
 V1.0 ersetzt die bisherigen YAML-Helfer und

@@ -228,6 +228,19 @@ test("grid flow direction follows the sign without hysteresis", () => {
   assert.equal(panel._gridDirection(1), "import");
 });
 
+test("zero power keeps routes illuminated but stops moving dots", () => {
+  const { panel } = createPanel();
+  panel._hass.states["sensor.pv_power"].state = "0";
+  panel._hass.states["sensor.grid_power"].state = "0";
+  panel._hass.states["sensor.venus_a_power"].state = "0";
+  panel._hass.states["sensor.venus_e_power"].state = "0";
+
+  const flow = panel._flowCard();
+  assert.equal((flow.match(/flow-route active/g) || []).length, 3);
+  assert.equal((flow.match(/flow-dots active/g) || []).length, 0);
+  assert.equal((flow.match(/flow-dots idle/g) || []).length, 3);
+});
+
 test("calibration offers a configurable power and per-storage window overview", () => {
   const { panel } = createPanel();
   const card = panel._calibrationCard();
@@ -239,9 +252,9 @@ test("calibration offers a configurable power and per-storage window overview", 
 });
 
 test("frontend element name matches the integration release version", () => {
-  assert.equal(panelElementName, "speicher-ladelogik-panel-1-0-0");
+  assert.equal(panelElementName, "speicher-ladelogik-panel-1-0-1");
   assert.equal(registry.get(panelElementName), Panel);
-  assert.equal(registry.has("speicher-ladelogik-panel-1-0-0-rc-12"), false);
+  assert.equal(registry.has("speicher-ladelogik-panel-1-0-0"), false);
 });
 
 test("charts render a combined hover tooltip and clickable sensor legends", () => {
