@@ -180,6 +180,10 @@ test("energy flow uses a four-node aggregate power-flow layout", () => {
   assert.match(flow, /Speicher ·/);
   assert.doesNotMatch(flow, /Venus A ·/);
   assert.doesNotMatch(flow, /animateMotion/);
+  const styles = panel._styles();
+  assert.match(styles, /flow-node\.pv\{left:50%;top:19%;[^}]*flex-direction:column-reverse/);
+  assert.match(styles, /flow-node\.battery\{left:50%;top:81%/);
+  assert.match(styles, /flow-node\.battery\{top:79%/);
 });
 
 test("charts render a combined hover tooltip and clickable sensor legends", () => {
