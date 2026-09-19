@@ -241,20 +241,44 @@ test("zero power keeps routes illuminated but stops moving dots", () => {
   assert.equal((flow.match(/flow-dots idle/g) || []).length, 3);
 });
 
-test("calibration offers a configurable power and per-storage window overview", () => {
+test("calibration status explains empty and active states", () => {
   const { panel } = createPanel();
-  const card = panel._calibrationCard();
+  panel._hass.states["sensor.speicher_ladelogik_kalibrierung"].attributes.batterie = "";
+  panel._hass.states["sensor.speicher_ladelogik_kalibrierung"].attributes.grund = "";
+  let card = panel._calibrationCard();
 
-  assert.match(card, /Kalibrierleistung/);
-  assert.match(card, /data-number="kalibrierleistung"/);
+  assert.match(card, /<span>Speicher<\/span><strong>Keiner<\/strong>/);
+  assert.match(card, /Kein Kalibrierauftrag aktiv/);
+  assert.match(card, /Aktuelle Phase: Bereit/);
+  assert.match(card, /Bisher in diesem Kalibrierlauf geladene AC-Energie/);
   assert.match(card, /4,5 h verfügbar · 2 h benötigt/);
   assert.match(card, /kein ausreichendes Fenster/);
+
+  panel._hass.states["sensor.speicher_ladelogik_kalibrierung"].state = "Kalibrierung A: charge";
+  panel._hass.states["sensor.speicher_ladelogik_kalibrierung"].attributes.batterie = "A";
+  panel._hass.states["sensor.speicher_ladelogik_kalibrierung"].attributes.grund = "Ladung mit 500 W";
+  card = panel._calibrationCard();
+  assert.match(card, /Venus A/);
+  assert.match(card, /Ladung mit 500 W/);
+  assert.match(card, /Aktuelle Phase: Kalibrierung A: Kalibrierladung/);
+});
+
+test("control settings explain the effect of planning thresholds", () => {
+  const { panel } = createPanel();
+  const reserves = panel._numberCard("Planungsreserven", "mdi:shield-sun-outline", "planung");
+  const classes = panel._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen");
+  const power = panel._numberCard("Ladeleistungen", "mdi:battery-charging", "leistung");
+  assert.match(reserves, /Was bedeuten diese Werte\?/);
+  assert.match(reserves, /Knappheits-Hysterese/);
+  assert.match(reserves, /1,25-mal der Restbedarf/);
+  assert.match(classes, /bevorzugten Ladebeginn/);
+  assert.match(power, /tatsächliche Verbrauch/);
 });
 
 test("frontend element name matches the integration release version", () => {
-  assert.equal(panelElementName, "speicher-ladelogik-panel-1-0-1");
+  assert.equal(panelElementName, "speicher-ladelogik-panel-1-0-2");
   assert.equal(registry.get(panelElementName), Panel);
-  assert.equal(registry.has("speicher-ladelogik-panel-1-0-0"), false);
+  assert.equal(registry.has("speicher-ladelogik-panel-1-0-1"), false);
 });
 
 test("charts render a combined hover tooltip and clickable sensor legends", () => {
