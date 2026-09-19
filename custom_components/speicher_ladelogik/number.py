@@ -36,6 +36,21 @@ NUMBERS = (
     SpeicherNumberDescription(key="manuell_laden_venus_e", name="Handbetrieb Laden Venus E", control_key="manuell_laden_e_w", minimum=0, maximum=2500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
     SpeicherNumberDescription(key="manuell_entladen_venus_e", name="Handbetrieb Entladen Venus E", control_key="manuell_entladen_e_w", minimum=0, maximum=2500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
     SpeicherNumberDescription(key="mindestreserve", name="Mindestreserve", control_key="mindestreserve", minimum=0, maximum=20, step=0.1, native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR),
+    SpeicherNumberDescription(
+        key="fruehes_ladeziel_venus_a", name="Frühes Ladeziel Venus A",
+        control_key="fruehes_ladeziel_a_soc", minimum=0, maximum=100,
+        step=1, native_unit_of_measurement=PERCENTAGE,
+    ),
+    SpeicherNumberDescription(
+        key="fruehes_ladeziel_venus_d", name="Frühes Ladeziel Venus D",
+        control_key="fruehes_ladeziel_d_soc", minimum=0, maximum=100,
+        step=1, native_unit_of_measurement=PERCENTAGE,
+    ),
+    SpeicherNumberDescription(
+        key="fruehes_ladeziel_venus_e", name="Frühes Ladeziel Venus E",
+        control_key="fruehes_ladeziel_e_soc", minimum=0, maximum=100,
+        step=1, native_unit_of_measurement=PERCENTAGE,
+    ),
     SpeicherNumberDescription(key="prognose_sicherheit", name="Prognosesicherheit", control_key="prognose_sicherheit", minimum=50, maximum=100, step=1, native_unit_of_measurement=PERCENTAGE),
     SpeicherNumberDescription(key="unplanbare_reserve", name="Unplanbare Reserve", control_key="unplanbare_reserve", minimum=0, maximum=20, step=0.1, native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR),
     SpeicherNumberDescription(key="ladewirkungsgrad", name="Planungswirkungsgrad", control_key="ladewirkungsgrad", minimum=50, maximum=100, step=1, native_unit_of_measurement=PERCENTAGE),
