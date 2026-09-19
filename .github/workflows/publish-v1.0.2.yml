@@ -1,0 +1,26 @@
+name: Publish v1.0.2
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-v1.0.2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: startsWith(github.event.head_commit.message, 'Publish V1.0.2 release')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create v1.0.2
+          --repo "${{ github.repository }}"
+          --target "37b8cd492f4ce6cf0b6aa67a5cb96082b99a542c"
+          --title "V1.0.2"
+          --notes "Steuerung verständlicher: Die Einstellungen für Ladeleistungen, Planungsreserven und Tagesklassen erhalten Erläuterungen direkt im Dashboard. Die Kalibrieranzeige erklärt Speicher, Status und geladene Energie und zeigt auch bei leerem Auftrag einen eindeutigen Zustand. Die Frontend-Tests wurden erweitert. Nach dem HACS-Update Home Assistant neu starten."
