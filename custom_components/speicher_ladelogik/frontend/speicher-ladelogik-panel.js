@@ -24,7 +24,7 @@ const PHASE_LABELS = {
 
 const NUMBER_GROUPS = {
   leistung: [
-    ["min_effiziente_leistung", "Mindestleistung", "Untergrenze beim normalen Fahrplanladen"],
+    ["min_effiziente_leistung", "Mindestwert für geplantes Laden", "Zielwert beim normalen Fahrplanladen; keine erzwungene Ladeleistung"],
   ],
   planung: [
     ["mindestreserve", "Mindestreserve", "Früh abzusichernde gespeicherte Energie"],
@@ -44,10 +44,11 @@ const NUMBER_GROUPS = {
 const NUMBER_HELP = {
   leistung: [
     ["Venus A / D / E", "Bevorzugte Obergrenze für das normale Laden je Gerät. Reicht das geplante PV-Fenster damit nicht aus, darf die Planung die Ladegrenze erhöhen."],
-    ["Mindestleistung", "Läuft eine reguläre Ladung mit mehr als 25 W an, hebt die Planung ihr Ziel nach Möglichkeit mindestens auf diesen Wert an. Der tatsächliche Verbrauch hängt weiterhin vom Gerät und der externen Regelung ab."],
+    ["Mindestwert für geplantes Laden", "Läuft eine reguläre Ladung mit mehr als 25 W an, hebt die Planung ihr Ziel nach Möglichkeit mindestens auf diesen Wert an. Der tatsächliche Verbrauch hängt weiterhin vom PV-Überschuss, vom Gerät und von der Regelung ab."],
   ],
   planung: [
-    ["Mindestreserve", "So viel gespeicherte Energie soll früh gesichert sein. Bei Unterschreitung wird vorhandener PV-Überschuss früher zum Laden freigegeben."],
+    ["Frühes Ladeziel je Speicher", "0 % deaktiviert das jeweilige Ziel. Oberhalb der unteren Gerätegrenze lädt zuerst jeder Speicher unter seinem Ziel, sobald mindestens 200 W PV-Überschuss verfügbar sind. Danach gilt der normale Fahrplan. Die untere SoC-Grenze des Geräts bleibt unverändert."],
+    ["Mindestreserve", "Gemeinsames bisheriges Ziel in kWh zusätzlich zu den SoC-Zielen je Speicher. So viel nutzbare Energie soll bei PV-Überschuss früh gesichert sein; 0 kWh deaktiviert es."],
     ["Wolkenreserve", "Dieser kWh-Wert wird vom für den restlichen Tag erwarteten speicherbaren PV-Überschuss abgezogen. Höher bedeutet vorsichtiger planen."],
     ["Prognosesicherheit", "Nur dieser Prozentsatz der 15-Minuten-PV-Prognose fließt in die Planung ein. 90 % bedeutet: 10 % der prognostizierten Energie werden nicht fest eingeplant."],
     ["Planungswirkungsgrad", "Schätzt Ladeverluste zwischen AC-Eingang und gespeicherter Energie. Bei 90 % werden aus 1 kWh AC rechnerisch 0,9 kWh im Speicher."],
@@ -376,6 +377,23 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return sampled;
   }
 
+  _chartSegments(points) {
+    // A straight line through hours without a measurement looks like a real
+    // power ramp. Keep unchanged values connected, but show changing values
+    // after a long pause as a new segment.
+    const segments = [];
+    for (const point of points) {
+      const current = segments.at(-1);
+      const previous = current?.at(-1);
+      if (!previous || (point.t - previous.t > 15 * 60_000 && Math.abs(point.v - previous.v) > 0.02)) {
+        segments.push([point]);
+      } else {
+        current.push(point);
+      }
+    }
+    return segments;
+  }
+
   _mergeSeries(seriesList, reducer) {
     const usable = seriesList.filter((series) => series.length);
     if (!usable.length) return [];
@@ -462,10 +480,11 @@ class SpeicherLadelogikPanel extends HTMLElement {
   _chart(datasets, { min = null, max = null, unit = "", fill = false, hours = 24 } = {}) {
     const start = this._historyRangeStart(hours);
     const end = Date.now();
-    const visible = datasets.map((dataset) => ({
-      ...dataset,
-      points: this._downsample(dataset.points.filter((point) => point.t >= start && point.t <= end)),
-    })).filter((dataset) => dataset.points.length);
+    const visible = datasets.map((dataset) => {
+      const segments = this._chartSegments(dataset.points.filter((point) => point.t >= start && point.t <= end));
+      const sampled = segments.map((points) => this._downsample(points, Math.max(4, Math.floor(240 / segments.length))));
+      return { ...dataset, segments: sampled, points: sampled.flat() };
+    }).filter((dataset) => dataset.points.length);
     if (!visible.length) {
       return `<div class="chart-empty">${this._historyLoading ? "Verlauf wird geladen …" : "Keine Verlaufsdaten verfügbar"}</div>`;
     }
@@ -502,9 +521,10 @@ class SpeicherLadelogikPanel extends HTMLElement {
       return `<line x1="${left}" y1="${position}" x2="${right}" y2="${position}" class="chart-grid-line"></line><text x="2" y="${position + 4}" class="chart-axis">${esc(label)}${esc(unit)}</text>`;
     }).join("");
     const lines = visible.map((dataset) => {
-      const path = dataset.points.map((point, index) => `${index ? "L" : "M"}${x(point.t).toFixed(1)},${y(point.v).toFixed(1)}`).join(" ");
+      const paths = dataset.segments.map((segment) => segment.map((point, index) => `${index ? "L" : "M"}${x(point.t).toFixed(1)},${y(point.v).toFixed(1)}`).join(" "));
+      const path = paths.join(" ");
       const area = fill && visible.length === 1
-        ? `<path d="M${x(dataset.points[0].t).toFixed(1)},${bottom} ${path.replace(/^M/, "L")} L${x(dataset.points.at(-1).t).toFixed(1)},${bottom} Z" fill="${dataset.color}" opacity=".13"></path>`
+        ? dataset.segments.map((segment, index) => `<path d="M${x(segment[0].t).toFixed(1)},${bottom} ${paths[index].replace(/^M/, "L")} L${x(segment.at(-1).t).toFixed(1)},${bottom} Z" fill="${dataset.color}" opacity=".13"></path>`).join("")
         : "";
       return `${area}<path d="${path}" fill="none" stroke="${dataset.color}" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>`;
     }).join("");
@@ -633,6 +653,14 @@ class SpeicherLadelogikPanel extends HTMLElement {
       hour: "2-digit",
       minute: "2-digit",
     });
+  }
+
+  _lastCalibration(model) {
+    const stamp = this._num(this._attr("kalibrierung", `kalibrierung_letzter_erfolg_${model.toLowerCase()}_ts`), NaN);
+    if (!Number.isFinite(stamp) || stamp <= 0) return "Noch keine erfolgreiche Kalibrierung bekannt";
+    const days = Math.max(0, Math.floor((Date.now() / 1000 - stamp) / 86400));
+    const age = days === 0 ? "heute" : days === 1 ? "vor 1 Tag" : `vor ${days} Tagen`;
+    return `${age} · ${new Date(stamp * 1000).toLocaleDateString("de-DE")}`;
   }
 
   _isOn(key) {
@@ -791,9 +819,9 @@ class SpeicherLadelogikPanel extends HTMLElement {
         ${this._cardTitle("mdi:timeline-clock-outline", "Tagesplanung", this._badge(stateLabel, "accent"))}
         <div class="decision"><strong>${esc(this._attr("planung", "normaler_fahrplan_status", state?.state || "—"))}</strong><p>${esc(reason)}</p></div>
         <div class="metric-pairs">
-          ${this._metric("Prognose heute", this._energy(this._attr("planung", "prognose_heute_erwartet_kwh")), "mdi:weather-sunny")}
+          ${this._metric("Restprognose heute", this._energy(this._attr("planung", "prognose_rest_erwartet_kwh")), "mdi:weather-sunny")}
           ${this._metric("Prognose morgen", this._energy(this._attr("planung", "prognose_morgen_kwh")), "mdi:weather-sunset-up")}
-          ${this._metric("Restbedarf", this._energy(this._attr("planung", "restbedarf_kwh")), "mdi:battery-arrow-up")}
+          ${this._metric("Restbedarf Speicherfüllung", this._energy(this._attr("planung", "restbedarf_kwh")), "mdi:battery-arrow-up")}
           ${this._metric("Sollleistung", this._power(this._attr("planung", "soll_ladeleistung_gesamt_w")), "mdi:flash")}
         </div>
         <div class="window-label"><span>Ladefenster</span><small>Zeitraum für die geplante PV-Ladung</small></div>
@@ -906,7 +934,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       <div class="peak-inline">
         <div class="peak-inline-title"><span><ha-icon icon="mdi:chart-bell-curve"></ha-icon>Mittagsspitzenkappung</span>${this._badge(active ? "Aktiv" : "Aus", active ? "good" : "neutral")}</div>
         <div class="peak-layout">
-          ${this._metric("Einspeiseziel", this._power(this._attr("planung", "einspeiseziel_w")), "mdi:transmission-tower-export")}
+          ${this._metric("Geplante Einspeisung zur PV-Spitze", this._power(this._attr("planung", "einspeiseziel_w")), "mdi:transmission-tower-export")}
           ${this._metric("Spitzenfenster", `${this._time(this._attr("planung", "spitzenfenster_start_ts"))}–${this._time(this._attr("planung", "spitzenfenster_ende_ts"))}`, "mdi:clock-outline")}
           ${this._metric("Speicher voll", this._time(this._attr("planung", "spitzenplan_voll_ts")), "mdi:battery-check-outline")}
           ${this._metric("Planbar", planable ? "Ja" : "Derzeit nein", planable ? "mdi:check-circle-outline" : "mdi:information-outline")}
@@ -957,7 +985,10 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const entity = this._state(key);
     if (!entity) return "";
     const unit = entity.attributes?.unit_of_measurement || "";
-    return `<label class="number-row"><ha-icon icon="${unit === "W" ? "mdi:flash" : unit === "%" ? "mdi:percent-outline" : "mdi:tune"}"></ha-icon><div><strong>${esc(title)}</strong><span>${esc(description)}</span></div><div class="number-input"><input type="number" data-number="${esc(key)}" value="${esc(entity.state)}" min="${esc(entity.attributes?.min)}" max="${esc(entity.attributes?.max)}" step="${esc(entity.attributes?.step)}"><span>${esc(unit)}</span></div></label>`;
+    const integerStep = Number(entity.attributes?.step) >= 1;
+    const raw = this._num(entity.state, NaN);
+    const value = Number.isFinite(raw) && integerStep ? String(Math.round(raw)) : entity.state;
+    return `<label class="number-row"><ha-icon icon="${unit === "W" ? "mdi:flash" : unit === "%" ? "mdi:percent-outline" : "mdi:tune"}"></ha-icon><div><strong>${esc(title)}</strong><span>${esc(description)}</span></div><div class="number-input"><input type="number" data-number="${esc(key)}" value="${esc(value)}" min="${esc(entity.attributes?.min)}" max="${esc(entity.attributes?.max)}" step="${esc(entity.attributes?.step)}"><span>${esc(unit)}</span></div></label>`;
   }
 
   _numberCard(title, icon, group) {
@@ -970,7 +1001,13 @@ class SpeicherLadelogikPanel extends HTMLElement {
         ]),
         ...NUMBER_GROUPS.leistung,
       ]
-      : NUMBER_GROUPS[group];
+      : group === "planung"
+        ? [...this._models().map((model) => [
+          `fruehes_ladeziel_venus_${model.toLowerCase()}`,
+          `Venus ${model}: Frühes Ladeziel`,
+          "SoC vor dem Zurückhalten für die Mittagsspitze; 0 % = aus",
+        ]), ...NUMBER_GROUPS.planung]
+        : NUMBER_GROUPS[group];
     const explanations = NUMBER_HELP[group]
       .map(([label, description]) => `<div><strong>${esc(label)}</strong><span>${esc(description)}</span></div>`)
       .join("");
@@ -1013,7 +1050,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
         <div class="cal-state"><div><span>Speicher</span><strong>${esc(batteryName)}</strong><small>Gerät des aktuellen Kalibrierauftrags</small></div><div><span>Status</span><strong>${esc(statusText)}</strong><small>Aktuelle Phase: ${esc(phase)}</small></div><div><span>Energie</span><strong>${this._energy(this._attr("kalibrierung", "energie_ac_kwh"))}</strong><small>Bisher in diesem Kalibrierlauf geladene AC-Energie</small></div></div>
         <div class="control-list calibration-setting">${this._numberRow(["kalibrierleistung", "Kalibrierleistung", "Leistung für die vollständige Kalibrierladung"])}</div>
         <div class="cal-window-grid">
-          ${this._models().map((model) => `<div class="cal-window-storage"><b>Venus ${model}</b>${this._calibrationWindow(model, "heute", "Heute")}${this._calibrationWindow(model, "morgen", "Morgen")}</div>`).join("")}
+          ${this._models().map((model) => `<div class="cal-window-storage"><b>Venus ${model}</b><small>Letzte Kalibrierung: ${esc(this._lastCalibration(model))}</small>${this._calibrationWindow(model, "heute", "Heute")}${this._calibrationWindow(model, "morgen", "Morgen")}</div>`).join("")}
         </div>
         <div class="action-groups">
           ${this._models().map((model) => {
@@ -1073,7 +1110,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return `
       :host{display:block;min-height:100%;background:var(--primary-background-color,#0b1013);color:var(--primary-text-color,#edf5f1);font-family:var(--ha-font-family,Roboto,sans-serif);--accent:#38d582;--accent2:#52b8ff;--warn:#ffbd45;--bad:#ff6b6b;--card:var(--ha-card-background,var(--card-background-color,#12191d));--line:rgba(127,155,145,.17);--muted:var(--secondary-text-color,#8faaa0)}*{box-sizing:border-box}button,input{font:inherit}header{min-height:70px;display:flex;align-items:center;padding:10px 22px;gap:12px;background:var(--app-header-background-color,#0d1316);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}.brand-mark{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;background:linear-gradient(135deg,#69ec9f,#25b96e);color:#06120b}.brand-mark ha-icon{--mdc-icon-size:24px}.brand-copy{display:flex;flex-direction:column;min-width:190px}.brand-copy strong{font-size:16px}.brand-copy span{font-size:11px;color:var(--muted);margin-top:2px}nav{display:flex;align-self:stretch;margin-left:18px}.nav-item{border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);padding:0 18px;display:flex;align-items:center;gap:8px;cursor:pointer}.nav-item ha-icon{--mdc-icon-size:19px}.nav-item:hover{color:var(--primary-text-color)}.nav-item.active{color:var(--accent);border-color:var(--accent)}.live-pill{margin-left:auto;padding:5px 9px;border-radius:12px;border:1px solid rgba(56,213,130,.3);font-size:11px;color:var(--accent)}.live-pill span{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent);margin-right:5px}.grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:14px;padding:14px;max-width:1800px;margin:0 auto}.span-full{grid-column:1/-1}.span-7{grid-column:span 7}.span-6{grid-column:span 6}.span-5{grid-column:span 5}.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:0 10px 28px rgba(0,0,0,.08);min-width:0}.card-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:15px;text-transform:uppercase;letter-spacing:.075em;color:var(--muted);font-size:10px;font-weight:700}.card-title>span{display:flex;align-items:center;gap:7px}.card-title ha-icon{--mdc-icon-size:15px}.badge{display:inline-flex;align-items:center;padding:4px 8px;border-radius:20px;background:rgba(130,150,145,.14);color:var(--muted);font-size:10px;text-transform:none;letter-spacing:0;white-space:nowrap}.badge.good{color:#61e69a;background:rgba(56,213,130,.13);border:1px solid rgba(56,213,130,.18)}.badge.bad{color:#ff8a8a;background:rgba(255,107,107,.12)}.badge.warn{color:#ffd078;background:rgba(255,189,69,.12)}.badge.accent{color:#81ccff;background:rgba(82,184,255,.12)}.system-grid{display:grid;grid-template-columns:190px 1fr;gap:28px;align-items:center}.soc-ring{--p:calc(var(--soc)*1%);width:152px;height:152px;border-radius:50%;display:grid;place-items:center;margin:auto;background:conic-gradient(var(--accent) var(--p),rgba(100,130,120,.15) 0);filter:drop-shadow(0 0 13px rgba(56,213,130,.22));position:relative}.soc-ring:before{content:"";position:absolute;inset:10px;border-radius:50%;background:var(--card);box-shadow:inset 0 0 28px rgba(56,213,130,.08)}.soc-ring>div{position:relative;text-align:center;display:flex;flex-direction:column}.soc-ring strong{font-size:36px;line-height:1}.soc-ring small{font-size:16px}.soc-ring span{color:var(--muted);font-size:10px;margin-top:8px;text-transform:uppercase}.status-table{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px}.status-line{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);font-size:12px}.status-line>span{color:var(--muted)}.flow-canvas{min-height:310px;position:relative;display:grid;grid-template-columns:1fr 1.1fr 1fr;grid-template-rows:1fr 1fr;align-items:center;justify-items:center;overflow:hidden}.flow-node,.flow-core{z-index:2;text-align:center;display:flex;flex-direction:column;align-items:center;gap:4px}.flow-node ha-icon{width:46px;height:46px;--mdc-icon-size:24px;border-radius:14px;display:grid;place-items:center;background:rgba(100,130,120,.12);color:var(--muted)}.flow-node strong{font-size:17px}.flow-node span,.flow-core span{font-size:10px;color:var(--muted)}.flow-node.pv{grid-area:1/2;color:var(--warn)}.flow-node.pv ha-icon{color:var(--warn);background:rgba(255,189,69,.12)}.flow-node.grid{grid-area:1/1;color:#ff9a55}.flow-node.grid ha-icon{color:#ff9a55}.flow-node.batt-a{grid-area:2/1;color:var(--accent)}.flow-node.batt-e{grid-area:2/3;color:var(--accent)}.flow-core{grid-area:1/3}.flow-core ha-icon{width:64px;height:64px;--mdc-icon-size:32px;border-radius:50%;display:grid;place-items:center;background:rgba(82,184,255,.1);color:var(--accent2);border:1px solid rgba(82,184,255,.2)}.flow-core strong{font-size:18px}.line{position:absolute;height:2px;background:linear-gradient(90deg,transparent,var(--accent2),transparent);opacity:.35;transform-origin:left center}.l1{width:34%;left:18%;top:25%}.l2{width:31%;left:52%;top:25%}.l3{width:38%;left:20%;top:63%;transform:rotate(-23deg)}.l4{width:34%;left:53%;top:50%;transform:rotate(35deg)}.line:after{content:"";position:absolute;width:6px;height:6px;background:var(--accent);border-radius:50%;top:-2px;animation:flow 2.4s linear infinite;box-shadow:0 0 8px var(--accent)}@keyframes flow{from{left:0}to{left:100%}}.decision{padding:13px;border-radius:10px;background:rgba(82,184,255,.07);border-left:3px solid var(--accent2);margin-bottom:12px}.decision strong{font-size:15px}.decision p{font-size:11px;line-height:1.45;color:var(--muted);margin:5px 0 0}.metric-pairs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{display:grid;grid-template-columns:22px 1fr;gap:2px 7px;padding:9px;border-radius:9px;background:rgba(110,135,125,.07)}.metric ha-icon{grid-row:1/3;align-self:center;color:var(--muted);--mdc-icon-size:18px}.metric span{font-size:9px;color:var(--muted)}.metric strong{font-size:12px}.window-row{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;margin-top:13px;color:var(--muted);font-size:10px}.progress{height:5px;background:rgba(120,150,140,.15);border-radius:8px;overflow:hidden}.progress i{display:block;height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));border-radius:8px}.slot-note{font-size:10px;color:var(--muted);display:flex;align-items:center;gap:6px;margin-top:11px}.slot-note ha-icon{--mdc-icon-size:14px}.battery-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.battery-main{display:grid;grid-template-columns:92px 1fr;gap:18px;align-items:center}.battery-gauge{width:66px;height:116px;border:3px solid rgba(115,145,135,.28);border-radius:10px;position:relative;overflow:hidden;margin:auto}.battery-gauge:before{content:"";position:absolute;width:26px;height:6px;background:rgba(115,145,135,.35);left:17px;top:-8px;border-radius:3px}.battery-gauge>div{position:absolute;bottom:0;width:100%;background:linear-gradient(0deg,#23b969,#65e89b);box-shadow:0 0 18px rgba(56,213,130,.35)}.battery-gauge>span{position:absolute;inset:0;display:grid;place-items:center;font-weight:700;text-shadow:0 1px 3px #000}.battery-now{display:grid;grid-template-columns:12px 1fr;gap:4px 6px}.battery-now .mode-dot{width:8px;height:8px;border-radius:50%;align-self:center;background:var(--muted)}.mode-dot.charge{background:var(--accent);box-shadow:0 0 8px var(--accent)}.mode-dot.discharge{background:#b493ff}.battery-now strong{font-size:13px}.battery-now b{grid-column:2;font-size:25px}.battery-now small{grid-column:2;color:var(--muted)}.soc-scale{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:8px;margin:10px 0;font-size:9px;color:var(--muted)}.soc-scale i{height:3px;background:rgba(120,150,140,.18);position:relative}.soc-scale b{position:absolute;width:7px;height:7px;border-radius:50%;background:var(--accent);top:-2px}.compact{margin-top:10px}.detail-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}.detail{padding:10px;background:rgba(110,135,125,.06);border-radius:8px;display:flex;flex-direction:column;gap:4px}.detail span{font-size:9px;color:var(--muted)}.detail strong{font-size:12px}.peak-layout{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.comparison-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.comparison{padding:13px;border-radius:10px;background:rgba(110,135,125,.06)}.comparison>div{display:flex;align-items:center;justify-content:space-between}.comparison p{color:var(--muted);font-size:11px;margin:8px 0 0}.mode-select{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.mode-select button{padding:15px;border-radius:11px;background:rgba(110,135,125,.06);border:1px solid var(--line);color:var(--primary-text-color);display:grid;grid-template-columns:28px 1fr;gap:2px 7px;text-align:left;cursor:pointer}.mode-select button ha-icon{grid-row:1/3;align-self:center;color:var(--muted)}.mode-select button span{font-size:10px;color:var(--muted)}.mode-select button.active{border-color:var(--accent);background:rgba(56,213,130,.08)}.mode-select button.active ha-icon{color:var(--accent)}.control-columns{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.control-columns.two{grid-template-columns:repeat(2,minmax(0,1fr))}.control-list{display:flex;flex-direction:column}.control-row,.number-row{display:grid;grid-template-columns:28px 1fr auto;gap:9px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line)}.control-row>ha-icon,.number-row>ha-icon{color:var(--muted);--mdc-icon-size:19px}.control-row>div,.number-row>div{display:flex;flex-direction:column}.control-row strong,.number-row strong{font-size:12px}.control-row span,.number-row span{font-size:9px;color:var(--muted);margin-top:3px}.toggle{width:38px;height:21px;border:0;border-radius:15px;background:#46534f;padding:3px;cursor:pointer}.toggle i{display:block;width:15px;height:15px;border-radius:50%;background:#fff;transition:.2s}.toggle.on{background:var(--accent)}.toggle.on i{transform:translateX(17px)}.number-input{flex-direction:row!important;align-items:center;background:rgba(100,130,120,.08);border:1px solid var(--line);border-radius:7px;padding:0 7px}.number-input input{width:74px;border:0;background:transparent;color:var(--primary-text-color);padding:7px 2px;text-align:right;outline:0}.number-input span{margin:0 0 0 4px}.cal-state{display:grid;grid-template-columns:150px 1fr 150px;gap:10px}.cal-state>div{display:flex;flex-direction:column;gap:4px;padding:11px;background:rgba(110,135,125,.06);border-radius:9px}.cal-state span{font-size:9px;color:var(--muted)}.cal-state strong{font-size:12px;overflow-wrap:anywhere}.cal-state small{font-size:10px;line-height:1.4;color:var(--muted)}.action-groups{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:14px}.action-groups>div{display:flex;gap:8px;align-items:center;padding:12px;border:1px solid var(--line);border-radius:10px}.action-groups>div>strong{margin-right:auto}.action-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(56,213,130,.28);border-radius:8px;background:rgba(56,213,130,.1);color:var(--primary-text-color);padding:8px 10px;cursor:pointer;font-size:11px}.action-btn:hover{background:rgba(56,213,130,.18)}.action-btn ha-icon{--mdc-icon-size:16px;color:var(--accent)}.action-btn.subtle{border-color:var(--line);background:rgba(110,135,125,.06)}.action-btn.danger{border-color:rgba(255,107,107,.28);background:rgba(255,107,107,.08)}.action-btn.danger ha-icon{color:var(--bad)}.danger-actions{margin-top:12px;text-align:right}.diag-line{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);font-size:12px}.diag-line span{color:var(--muted)}.diag-line strong.ok{color:var(--accent)}.message-list>div{display:flex;gap:5px;padding:8px 0;border-bottom:1px solid var(--line);font-size:11px}.message-list ha-icon{--mdc-icon-size:15px;color:var(--muted)}.empty{display:flex;align-items:center;gap:7px;color:var(--accent);font-size:11px}.entity-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.entity-link{display:flex;flex-direction:column;text-align:left;border:1px solid var(--line);border-radius:8px;background:rgba(110,135,125,.05);color:var(--primary-text-color);padding:8px;cursor:pointer;overflow:hidden}.entity-link span{font-size:9px;color:var(--muted)}.entity-link strong{font-size:10px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;margin-top:3px}.ack-row{text-align:right;margin-top:12px}.entity-card{cursor:pointer}
       .setting-help{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}.setting-help summary{cursor:pointer;color:var(--accent);font-size:12px;font-weight:600;list-style-position:inside}.setting-help>div{display:grid;gap:10px;margin-top:12px}.setting-help>div>div{display:flex;flex-direction:column;gap:3px;padding-left:11px;border-left:2px solid var(--line)}.setting-help strong{font-size:12px}.setting-help span{font-size:11px;line-height:1.45;color:var(--muted)}
-       .calibration-setting{margin-top:12px;padding:0 11px;border:1px solid var(--line);border-radius:10px;background:rgba(110,135,125,.04)}.cal-window-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:10px;margin-top:12px}.cal-window-storage{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:11px;border:1px solid var(--line);border-radius:10px;background:rgba(110,135,125,.04)}.cal-window-storage>b{grid-column:1/-1;font-size:12px}.cal-window{display:flex;flex-direction:column;gap:3px;padding:9px;border-left:3px solid var(--warn);border-radius:8px;background:rgba(110,135,125,.07)}.cal-window.good{border-color:var(--accent)}.cal-window strong{font-size:11px}.cal-window span{font-size:12px}.cal-window small{font-size:10px;color:var(--muted)}
+       .calibration-setting{margin-top:12px;padding:0 11px;border:1px solid var(--line);border-radius:10px;background:rgba(110,135,125,.04)}.cal-window-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:10px;margin-top:12px}.cal-window-storage{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:11px;border:1px solid var(--line);border-radius:10px;background:rgba(110,135,125,.04)}.cal-window-storage>b{grid-column:1/-1;font-size:12px}.cal-window-storage>small{grid-column:1/-1;font-size:10px;color:var(--muted)}.cal-window{display:flex;flex-direction:column;gap:3px;padding:9px;border-left:3px solid var(--warn);border-radius:8px;background:rgba(110,135,125,.07)}.cal-window.good{border-color:var(--accent)}.cal-window strong{font-size:11px}.cal-window span{font-size:12px}.cal-window small{font-size:10px;color:var(--muted)}
       @media(max-width:1050px){.span-7,.span-5{grid-column:1/-1}.control-columns{grid-template-columns:1fr 1fr}.control-columns .control-card:last-child{grid-column:1/-1}.peak-layout{grid-template-columns:repeat(2,1fr)}.action-groups>div{flex-wrap:wrap}.entity-grid{grid-template-columns:repeat(2,1fr)}}
       @media(max-width:720px){header{padding:8px 10px;flex-wrap:wrap}.brand-copy{min-width:0}.brand-copy strong{font-size:14px}.live-pill{display:none}nav{order:3;width:calc(100% + 20px);margin:4px -10px -8px;overflow-x:auto;height:49px}.nav-item{flex:1;min-width:76px;padding:0 8px;justify-content:center}.nav-item span{font-size:10px}.grid{padding:9px;gap:9px}.card{padding:13px;border-radius:11px}.system-grid{grid-template-columns:1fr}.status-table{grid-template-columns:1fr}.soc-ring{width:128px;height:128px}.battery-pair,.control-columns,.control-columns.two,.comparison-grid,.action-groups{grid-template-columns:1fr}.control-columns .control-card:last-child{grid-column:auto}.flow-canvas{min-height:270px}.battery-main{grid-template-columns:76px 1fr}.detail-grid,.entity-grid{grid-template-columns:repeat(2,1fr)}.cal-state{grid-template-columns:1fr}.mode-select{grid-template-columns:1fr}.mode-select button{grid-template-columns:28px 1fr}.peak-layout{grid-template-columns:1fr}.action-groups>div{align-items:stretch}.action-groups>div>strong{width:100%}.metric-pairs{grid-template-columns:1fr 1fr}}
       @media(max-width:720px){.cal-window-grid,.cal-window-storage{grid-template-columns:1fr}.cal-window-storage>b{grid-column:auto}}
@@ -1256,7 +1293,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 }
 
-const PANEL_ELEMENT = "speicher-ladelogik-panel-1-0-2";
+const PANEL_ELEMENT = "speicher-ladelogik-panel-1-0-3";
 
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);

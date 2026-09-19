@@ -11,7 +11,7 @@ oder Speichern. Sie verwendet vorhandene Home-Assistant-Entitäten. Dadurch
 können Messwerte aus unterschiedlichen Integrationen und von verschiedenen
 Anbietern verwendet werden, sofern Bedeutung, Einheit und Vorzeichen passen.
 
-> **Aktuelle Version:** 1.0.2  
+> **Version im Quellcode:** 1.0.3
 > **Erforderliche Home-Assistant-Version:** 2026.9.1 oder neuer
 
 ## Wofür ist die Integration gedacht?
@@ -96,6 +96,12 @@ bei Venus A/D die vorhandenen Pack-Sensoren.
 - frei einstellbare bevorzugte Ladeleistung und Nennkapazität
 - Mittagsspitzenkappung mit planbarem Einspeiseziel
 - Berücksichtigung von Prognosegüte, Reserve und verfügbarem Tagesfenster
+- optionales frühes SoC-Ladeziel je Speicher (0 % deaktiviert): Bei mindestens
+  200 W aktuellem PV-Überschuss werden Speicher unter ihrem Ziel zuerst
+  geladen; anschließend gilt der normale Fahrplan. Die gemeinsame
+  Mindestreserve in kWh bleibt zusätzlich einstellbar und kann auf 0 gesetzt
+  werden. Beide Einstellungen ändern keine Gerätegrenzen und erzwingen keinen
+  Netzbezug.
 - stabile Leistungsgrenzen ohne unnötige Wiederholung identischer Schreibwerte
 - keine künstliche Reduzierung allein aufgrund eines SoC oberhalb von 90 %
 
@@ -120,6 +126,7 @@ bei Venus A/D die vorhandenen Pack-Sensoren.
 - Entladevorbereitung durch den natürlichen Hausverbrauch
 - Schutz vor gegenseitigem Laden oder Entladen mehrerer Speicher
 - automatische Wiederherstellung der vorherigen Leistungsgrenzen
+- Anzeige des letzten erfolgreichen Kalibrierzeitpunkts je Speicher
 
 ### Überwachung und Benachrichtigungen
 
@@ -153,6 +160,11 @@ Es enthält vier Ansichten:
 Messwerte und Diagrammlegenden sind anklickbar und öffnen die zugehörige
 Home-Assistant-Entität. Das mitgelieferte YAML-Dashboard im Verzeichnis
 [`dashboards/`](dashboards/) bleibt als Alternative verfügbar.
+
+Die Tagesplanung zeigt die noch erwartete PV-Erzeugung als **Restprognose
+heute**. Die Einspeiseleistung bei der Mittagsspitze ist ein Planungswert und
+keine feste Grenze am Netzanschluss. Verlaufsdiagramme verbinden keine
+unterschiedlichen Messwerte über längere Datenlücken hinweg.
 
 ## Installation über HACS
 

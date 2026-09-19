@@ -19,6 +19,22 @@ DELIBERATE_ZERO_STATUSES = {
 }
 
 
+def early_soc_candidates(
+    caps: dict[str, float],
+    batteries: dict[str, dict[str, Any]],
+    goals: dict[str, float],
+) -> list[str]:
+    """Select eligible batteries still below their optional early SoC target."""
+    return [
+        key
+        for key, cap in caps.items()
+        if cap > 0
+        and goals.get(key, 0) > batteries[key]["floor"]
+        and batteries[key]["lowest_soc"] is not None
+        and batteries[key]["lowest_soc"] < min(goals[key], batteries[key]["goal"])
+    ]
+
+
 def calibration_available_surplus(
     live_surplus_w: float,
     actual_charge_w: float | None,

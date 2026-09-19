@@ -20,6 +20,23 @@ target_latch = STABILITY.target_latch
 peer_discharge_release = STABILITY.peer_discharge_release
 peer_grid_support = STABILITY.peer_grid_support
 quarter_hour_window = STABILITY.quarter_hour_window
+early_soc_candidates = STABILITY.early_soc_candidates
+
+
+def test_early_soc_goals_only_select_eligible_storages_below_their_goal() -> None:
+    batteries = {
+        "A": {"floor": 12, "goal": 100, "lowest_soc": 35},
+        "D": {"floor": 12, "goal": 100, "lowest_soc": 15},
+        "E": {"floor": 11, "goal": 100, "lowest_soc": 60},
+    }
+    caps = {"A": 1500, "D": 0, "E": 2500}
+    goals = {"A": 40, "D": 40, "E": 0}
+
+    assert early_soc_candidates(caps, batteries, goals) == ["A"]
+    batteries["A"]["lowest_soc"] = 40
+    assert early_soc_candidates(caps, batteries, goals) == []
+    goals["E"] = 50
+    assert early_soc_candidates(caps, batteries, goals) == []
 
 
 def test_calibration_surplus_restores_its_own_draw() -> None:

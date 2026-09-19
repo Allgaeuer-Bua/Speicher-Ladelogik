@@ -170,6 +170,56 @@ test("overview replaces duplicate battery cards with daily history cards", () =>
   assert.match(panel._header(), />Speicher</);
 });
 
+test("planning uses the remaining forecast and labels the battery fill need", () => {
+  const { panel } = createPanel();
+  panel._panel.config.entities.planung = "sensor.planung";
+  panel._hass.states["sensor.planung"] = {
+    state: "Bereit",
+    attributes: { prognose_rest_erwartet_kwh: 12.5, prognose_heute_erwartet_kwh: 42.5, restbedarf_kwh: 3.2 },
+  };
+  const card = panel._planningCard();
+  assert.match(card, /Restprognose heute/);
+  assert.match(card, /12,5 kWh/);
+  assert.doesNotMatch(card, /42,5 kWh/);
+  assert.match(card, /Restbedarf Speicherfüllung/);
+  assert.match(card, /Geplante Einspeisung zur PV-Spitze/);
+});
+
+test("number fields show whole steps as integers and retain fractional reserves", () => {
+  const { panel } = createPanel();
+  panel._hass.states["number.speicher_ladelogik_kalibrierleistung"].state = "750.0";
+  panel._hass.states["number.speicher_ladelogik_mindestreserve"].attributes = {
+    step: 0.1, unit_of_measurement: "kWh",
+  };
+  assert.match(panel._numberRow(["kalibrierleistung", "Ladeleistung", ""]), /value="750"/);
+  assert.match(panel._numberRow(["mindestreserve", "Mindestreserve", ""]), /value="2"/);
+  panel._hass.states["number.speicher_ladelogik_mindestreserve"].state = "2.5";
+  assert.match(panel._numberRow(["mindestreserve", "Mindestreserve", ""]), /value="2\.5"/);
+});
+
+test("charts do not draw a slope across a long change without readings", () => {
+  const { panel } = createPanel();
+  const now = Date.now();
+  assert.deepEqual(panel._chartSegments([
+    { t: now - 4_000_000, v: 0.1 },
+    { t: now - 3_000_000, v: -0.5 },
+    { t: now - 2_999_000, v: -0.4 },
+  ]).map((segment) => segment.length), [1, 2]);
+  assert.equal(panel._chartSegments([
+    { t: now - 4_000_000, v: 0.1 },
+    { t: now - 3_000_000, v: 0.1 },
+  ]).length, 1);
+});
+
+test("calibration shows the last success per storage", () => {
+  const { panel } = createPanel();
+  const last = Date.now() / 1000 - 2 * 86400;
+  panel._hass.states["sensor.speicher_ladelogik_kalibrierung"].attributes.kalibrierung_letzter_erfolg_a_ts = last;
+  const card = panel._calibrationCard();
+  assert.match(card, /Letzte Kalibrierung: vor 2 Tagen/);
+  assert.match(card, /Noch keine erfolgreiche Kalibrierung bekannt/);
+});
+
 test("daily battery energy separates charging and discharging signs", () => {
   const { panel } = createPanel();
   const now = Date.now();
@@ -276,7 +326,7 @@ test("control settings explain the effect of planning thresholds", () => {
 });
 
 test("frontend element name matches the integration release version", () => {
-  assert.equal(panelElementName, "speicher-ladelogik-panel-1-0-2");
+  assert.equal(panelElementName, "speicher-ladelogik-panel-1-0-3");
   assert.equal(registry.get(panelElementName), Panel);
   assert.equal(registry.has("speicher-ladelogik-panel-1-0-1"), false);
 });

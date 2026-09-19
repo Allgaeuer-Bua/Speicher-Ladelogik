@@ -247,6 +247,7 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "effizienzmodus",
                 "sollwertstrategie",
                 "prognose_heute_erwartet_kwh",
+                "prognose_rest_erwartet_kwh",
                 "prognose_morgen_kwh",
                 "tagesklasse",
                 "ladefenster_start_ts",

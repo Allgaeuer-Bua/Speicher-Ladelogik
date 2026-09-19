@@ -11,6 +11,7 @@ from homeassistant.util import dt as dt_util
 from . import persistence
 from .stability import (
     calibration_available_surplus,
+    early_soc_candidates,
     peer_discharge_release,
     peer_grid_support,
     quarter_hour_window,
@@ -28,7 +29,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
 
     output = {}
 
-    VERSION = "1.0.2"
+    VERSION = "1.0.3"
     NOW = float(data.get("now", time.time()))
     DAY0 = float(data.get("day0", 0))
     DAY1 = float(data.get("day1", 0))
@@ -708,6 +709,10 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     safety = setting("prognose_sicherheit", 90, 50, 100) / 100
     extra = setting("unplanbare_reserve", 1, 0, 4)
     reserve = setting("mindestreserve", 2, 0, 5)
+    early_soc_goals = {
+        key: setting("fruehes_ladeziel_" + key.lower() + "_soc", 0, 0, 100)
+        for key in BATTERY_KEYS
+    }
     weak = setting("schwacher_tag", 25, 5, 50)
     middle = max(weak + 1, setting("mittlerer_tag", 50, 20, 100))
     strong = max(middle + 1, setting("starker_tag", 85, 50, 200))
@@ -936,6 +941,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     raw_total = sum([row["wh"] for row in today["rows"]]) / 1000
     raw_rest = max(0, raw_total - past_wh / 1000)
     expected_total = (actual_today if daily_ok else past_wh / 1000) + raw_rest * day_factor
+    expected_rest = raw_rest * day_factor
     if expected_total <= weak:
         category = "schwach"
         preferred = DAY0
@@ -1227,6 +1233,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     normal_stored = sum([bats[key]["stored"] for key in BATTERY_KEYS if caps[key] > 0])
     normal_target = sum([bats[key]["target"] for key in BATTERY_KEYS if caps[key] > 0])
     normal_reserve = reserve * normal_target / max(0.001, target_energy)
+    early_soc_keys = early_soc_candidates(caps, bats, early_soc_goals)
     need = sum(needs.values())
     max_total = sum(caps.values())
 
@@ -1317,7 +1324,21 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         status = "Ziel erreicht" if all([bats[key]["target_met"] for key in BATTERY_KEYS]) else "Speicher einzeln gesperrt / vorgemerkt"
         reason = "Kein Restbedarf in den aktuell für den Fahrplan freigegebenen Speichern"
     elif pv_chance:
-        if not today["ok"]:
+        if early_soc_keys:
+            # Charge batteries below their own early goal before deferring
+            # energy to the noon window. Other batteries resume the ordinary
+            # schedule as soon as every early goal is reached.
+            caps = {
+                key: hard_caps[key] if key in early_soc_keys else 0
+                for key in BATTERY_KEYS
+            }
+            max_total = sum(caps.values())
+            start = min(start, NOW)
+            total = max_total
+            status = "Frühes SoC-Ziel"
+            reason = "PV-Überschuss zuerst für Venus " + "/".join(early_soc_keys)
+            efficiency_mode = "Frühes SoC-Ziel je Speicher"
+        elif not today["ok"]:
             caps = hard_caps
             max_total = sum(caps.values())
             efficiency_mode = "Prognose-Fallback"
@@ -1327,6 +1348,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         elif scarce or normal_stored < min(normal_reserve, normal_target):
             caps = hard_caps
             max_total = sum(caps.values())
+            start = min(start, NOW)
             efficiency_mode = "Reserve sichern; Ladeziel hat Vorrang"
             total = max_total
             status = "Sichern"
@@ -1401,11 +1423,20 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     peak_setting_unchanged = (
         prior_peak_enabled is None or flag(prior_peak_enabled) == peak_enabled
     )
+    prior_early_goals = prior_attributes.get("fruehe_soc_ziele_prozent")
+    prior_early_keys = prior_attributes.get("fruehes_soc_ziel_offen")
+    early_goals_unchanged = (
+        not isinstance(prior_early_goals, dict)
+        or all(number(prior_early_goals.get(key), 0) == goal
+               for key, goal in early_soc_goals.items())
+    )
     decision_slot_locked = (
         prior_slot_start_ts is not None
         and int(prior_slot_start_ts) == slot_start_ts
         and prior_automatic
         and peak_setting_unchanged
+        and early_goals_unchanged
+        and (not isinstance(prior_early_keys, list) or prior_early_keys == early_soc_keys)
     )
     within_charge_window = start <= NOW < end
     for key in BATTERY_KEYS:
@@ -1685,6 +1716,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "letzter_datenfehler_ts": last_data_error_ts,
         "prognose_intervalle_ok": today["ok"], "prognose_morgen_intervalle_ok": tomorrow["ok"],
         "prognose_heute_roh_kwh": round(raw_total, 3), "prognose_heute_erwartet_kwh": round(expected_total, 3),
+        "prognose_rest_erwartet_kwh": round(expected_rest, 3),
         "prognose_bis_jetzt_kwh": round(past_wh / 1000, 3), "pv_real_bis_jetzt_kwh": actual_today if daily_ok else None,
         "pv_real_bis_jetzt_roh": raw(DAILY), "pv_real_bis_jetzt_einheit": "kWh",
         "pv_real_tageswert_plausibel": daily_ok, "prognose_jetzt_w": round(now_forecast),
@@ -1913,6 +1945,8 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     plan["spitzenplan_voll_ts"] = peak["finish"]
     plan["kalibrier_reserviert_w"] = cal_draw
     plan["normaler_restbedarf_kwh"] = round(need, 4)
+    plan["fruehe_soc_ziele_prozent"] = early_soc_goals
+    plan["fruehes_soc_ziel_offen"] = early_soc_keys
     for key in BATTERY_KEYS:
         name = key.lower()
         plan["daten_gueltig_venus_" + name] = bats[key]["usable_data"] and not reaction[key]["blocked"]
