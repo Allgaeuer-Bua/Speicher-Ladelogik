@@ -7,7 +7,9 @@
         "description": "Datenquellen auswählen. Nach der ersten Einrichtung beginnt die Integration sicher im Modus Beobachten.",
         "data": {
           "name": "Name",
-          "enabled_models": "Vorhandene Speicher (1–3 Modelle auswählen)",
+          "storage_1_model": "Speicher 1 – Modell",
+          "storage_2_model": "Speicher 2 – Modell (optional)",
+          "storage_3_model": "Speicher 3 – Modell (optional)",
           "pv_ac": "Aktuelle PV-AC-Leistung",
           "mppt_sensors": "MPPT-Leistungssensoren",
           "grid_power": "Leistung am Netzanschlusspunkt",
@@ -16,6 +18,38 @@
           "pv_daily_energy": "Heutige PV-Produktion",
           "forecast_sensors": "15-Minuten-Prognosesensoren heute und morgen",
           "mobile_notify_service": "Optionaler Handy-Benachrichtigungsdienst (z. B. notify.mobile_app_mein_geraet)"
+        }
+      },
+      "storage": {
+        "title": "Speicher {storage}: Venus {model}",
+        "description": "Datenquellen und Stellglieder dieser eigenständigen Speicherinstanz auswählen. Bei Venus A und D alle vorhandenen Module auswählen (maximal 6).",
+        "data": {
+          "storage_name": "Anzeigename",
+          "soc": "SoC",
+          "ac_power": "AC-Leistung",
+          "dc_power": "DC-Batterieleistung",
+          "charge_limit": "Maximale Ladeleistung",
+          "discharge_limit": "Maximale Entladeleistung",
+          "auto_target": "AstraMeter Auto Target",
+          "active": "AstraMeter Active",
+          "charge_override": "Optionaler Nicht-laden-Helfer",
+          "max_soc": "Obere SoC-Gerätegrenze",
+          "min_soc": "Untere SoC-Gerätegrenze",
+          "pack_soc": "Modul-SoC-Sensoren (1–6)",
+          "max_cell_voltage": "Maximale Zellspannung",
+          "max_cell_temp": "Maximale Zelltemperatur",
+          "min_cell_temp": "Minimale Zelltemperatur",
+          "drift": "Zelldrift-Sensoren",
+          "mppt_sensors": "Optionale MPPT-Leistungssensoren (maximal 4)"
+        }
+      },
+      "reconfigure": {
+        "title": "Speicherinstanzen ändern",
+        "description": "Bis zu drei Geräte auswählen. Dasselbe Venus-Modell darf mehrfach verwendet werden.",
+        "data": {
+          "storage_1_model": "Speicher 1 – Modell",
+          "storage_2_model": "Speicher 2 – Modell (optional)",
+          "storage_3_model": "Speicher 3 – Modell (optional)"
         }
       },
       "venus_a": {
@@ -84,7 +118,8 @@
       }
     },
     "abort": {
-      "already_configured": "Speicher-Ladelogik ist bereits eingerichtet."
+      "already_configured": "Speicher-Ladelogik ist bereits eingerichtet.",
+      "reconfigure_successful": "Speicherinstanzen wurden aktualisiert."
     }
   },
   "options": {

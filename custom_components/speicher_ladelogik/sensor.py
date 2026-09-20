@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -188,6 +189,12 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
     ) -> None:
         super().__init__(coordinator, description.key)
         self.entity_description = description
+        for slot in coordinator.enabled_models:
+            if f"venus_{slot.lower()}" in description.key:
+                self._attr_name = description.name.replace(
+                    f"Venus {slot}", coordinator.storage_name(slot)
+                )
+                break
 
     @property
     def native_value(self):
@@ -347,7 +354,7 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                     attributes[key] = source.get(key)
                 drift_fields = (
                     (f"drift_{name}_p1_mv", f"drift_{name}_p2_mv")
-                    if model in {"A", "D"}
+                    if self.coordinator.storage_has_packs(model)
                     else (f"drift_{name}_mv",)
                 )
                 for key in drift_fields:

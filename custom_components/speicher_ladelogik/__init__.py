@@ -6,9 +6,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_state_change_event
 
-from .const import CONF_ENABLED_MODELS, PLATFORMS
+from .const import CONF_ENABLED_MODELS, CONF_STORAGE_INSTANCES, PLATFORMS
 from .coordinator import SpeicherLadelogikCoordinator
 from .panel import async_register_panel, async_unregister_panel
+from .storage import legacy_instances
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -31,11 +32,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Migrate the original A/E entry to the selectable model layout."""
+    """Migrate model-keyed entries to the V1.1 instance layout."""
     if entry.version < 2:
         data = dict(entry.data)
         data.setdefault(CONF_ENABLED_MODELS, ["A", "E"])
         hass.config_entries.async_update_entry(entry, data=data, version=2)
+    if entry.version < 3:
+        data = dict(entry.data)
+        data.setdefault(CONF_STORAGE_INSTANCES, legacy_instances(data))
+        hass.config_entries.async_update_entry(entry, data=data, version=3)
     return True
 
 

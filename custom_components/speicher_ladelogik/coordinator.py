@@ -18,47 +18,34 @@ from .compat import legacy_entity_id
 from .const import (
     COMMON_KEYS,
     CONF_A_AC_POWER,
-    CONF_A_DC_POWER,
     CONF_A_ACTIVE,
     CONF_A_AUTO_TARGET,
     CONF_A_CHARGE_LIMIT,
     CONF_A_CHARGE_OVERRIDE,
     CONF_A_DISCHARGE_LIMIT,
-    CONF_A_MIN_SOC,
-    CONF_A_PACK_SOC,
     CONF_A_SOC,
     CONF_D_AC_POWER,
-    CONF_D_DC_POWER,
     CONF_D_ACTIVE,
     CONF_D_AUTO_TARGET,
     CONF_D_CHARGE_LIMIT,
     CONF_D_CHARGE_OVERRIDE,
     CONF_D_DISCHARGE_LIMIT,
-    CONF_D_MIN_SOC,
-    CONF_D_PACK_SOC,
     CONF_D_SOC,
-    CONF_ENABLED_MODELS,
     CONF_E_AC_POWER,
-    CONF_E_DC_POWER,
     CONF_E_ACTIVE,
     CONF_E_AUTO_TARGET,
     CONF_E_CHARGE_LIMIT,
     CONF_E_CHARGE_OVERRIDE,
     CONF_E_DISCHARGE_LIMIT,
     CONF_E_SOC,
-    DEFAULTS,
-    CONF_MPPT_SENSORS,
+    CONF_ENABLED_MODELS,
     CONF_MOBILE_NOTIFY_SERVICE,
+    CONF_MPPT_SENSORS,
     CONF_PV_AC,
+    DEFAULTS,
     DOMAIN,
-    REQUIRED_A_KEYS,
     REQUIRED_COMMON_KEYS,
-    REQUIRED_D_KEYS,
-    REQUIRED_E_KEYS,
     UPDATE_INTERVAL_SECONDS,
-    VENUS_A_KEYS,
-    VENUS_D_KEYS,
-    VENUS_E_KEYS,
     VERSION,
 )
 from .control import (
@@ -73,6 +60,15 @@ from .control import (
 from .helpers import as_number, conversion_metrics, is_usable_state, power_in_watts
 from .planner_adapter import calculate
 from .runtime import CONTROL_DEFAULTS, HELPER_TO_CONTROL
+from .storage import (
+    MODEL_DEFAULT_MODULES,
+    MODEL_MAXIMUM_W,
+    MODEL_PREFERRED_W,
+    SLOT_FIELDS,
+    SLOT_KEYS,
+    nominal_capacity,
+    normalize_config,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -111,20 +107,20 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.entry = entry
         # Overlay defaults so entries created by an earlier beta gain new,
         # non-required source mappings without forcing a fresh setup.
-        self.config = {**DEFAULTS, **entry.data, **entry.options}
-        if CONF_A_MIN_SOC not in entry.data:
-            self.config.pop(CONF_A_MIN_SOC, None)
-        if CONF_D_MIN_SOC not in entry.data:
-            self.config.pop(CONF_D_MIN_SOC, None)
+        raw_config = {**DEFAULTS, **entry.data, **entry.options}
+        self.config, self.storage_instances = normalize_config(raw_config)
         self._last_plan: dict[str, Any] | None = None
         self._stored_stability: dict[str, Any] = {}
         self._control: dict[str, Any] = dict(CONTROL_DEFAULTS)
-        for model, config_key in (("A", CONF_A_PACK_SOC), ("D", CONF_D_PACK_SOC)):
-            configured_packs = entry.data.get(config_key)
-            if isinstance(configured_packs, list) and configured_packs:
-                self._control[f"venus_{model.lower()}_packs"] = float(
-                    min(8, len(configured_packs))
-                )
+        for slot, instance in zip(SLOT_KEYS, self.storage_instances, strict=False):
+            name = slot.lower()
+            model = str(instance["model"])
+            modules = int(instance.get("modules", MODEL_DEFAULT_MODULES.get(model, 1)))
+            self._control[f"bevorzugte_ladeleistung_{name}_w"] = MODEL_PREFERRED_W[model]
+            self._control[f"nennkapazitaet_{name}_kwh"] = nominal_capacity(model, modules)
+            self._control[f"manuell_entladen_{name}_w"] = MODEL_MAXIMUM_W[model]
+            if model in MODEL_DEFAULT_MODULES:
+                self._control[f"venus_{name}_packs"] = float(modules)
         self._state_loaded = False
         self._write_lock = asyncio.Lock()
         self._pending_request = "tick"
@@ -143,21 +139,46 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def enabled_models(self) -> tuple[str, ...]:
-        """Return configured storage models in stable dashboard order."""
+        """Return configured internal storage slots in stable order."""
         selected = self.config.get(CONF_ENABLED_MODELS, ["A", "E"])
         if not isinstance(selected, list):
             selected = ["A", "E"]
         return tuple(key for key in ("A", "D", "E") if key in selected)
 
+    def storage_model(self, slot: str) -> str:
+        """Return the physical Venus model assigned to an internal slot."""
+        return str(self.config.get("slot_models", {}).get(slot, slot))
+
+    def storage_name(self, slot: str) -> str:
+        """Return the configured display name for an internal slot."""
+        return str(
+            self.config.get("slot_names", {}).get(
+                slot, f"Venus {self.storage_model(slot)}"
+            )
+        )
+
+    def storage_has_packs(self, slot: str) -> bool:
+        """Return whether the physical model exposes battery packs."""
+        return self.storage_model(slot) in {"A", "D"}
+
     @property
     def source_entities(self) -> list[str]:
         """Return every entity selected in the config flow once."""
         entities: list[str] = []
-        enabled_prefixes = {model.lower() + "_" for model in self.enabled_models}
+        storage_keys = {
+            value for fields in SLOT_FIELDS.values() for value in fields.values()
+        }
+        enabled_storage_keys = {
+            value
+            for slot in self.enabled_models
+            for value in SLOT_FIELDS[slot].values()
+        }
         for key, value in self.config.items():
             if key == CONF_MOBILE_NOTIFY_SERVICE:
                 continue
-            if key[:2] in {"a_", "d_", "e_"} and key[:2] not in enabled_prefixes:
+            if key in storage_keys and key not in enabled_storage_keys:
+                continue
+            if key in {"slot_models", "slot_names", "slot_ids"}:
                 continue
             candidates = value if isinstance(value, list) else [value]
             for candidate in candidates:
@@ -179,6 +200,31 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def control(self) -> dict[str, Any]:
         """Return a copy of persistent native integration controls."""
         return dict(self._control)
+
+    def _sync_model_controls(self) -> None:
+        """Keep module-derived capacities and model power bounds consistent."""
+        for slot in self.enabled_models:
+            name = slot.lower()
+            model = self.storage_model(slot)
+            maximum = MODEL_MAXIMUM_W[model]
+            for field in (
+                f"bevorzugte_ladeleistung_{name}_w",
+                f"manuell_laden_{name}_w",
+                f"manuell_entladen_{name}_w",
+            ):
+                self._control[field] = max(
+                    0.0,
+                    min(maximum, float(self._control.get(field, 0))),
+                )
+            if model in MODEL_DEFAULT_MODULES:
+                modules = max(
+                    1,
+                    min(6, int(float(self._control.get(f"venus_{name}_packs", 2)))),
+                )
+                self._control[f"venus_{name}_packs"] = float(modules)
+                self._control[f"nennkapazitaet_{name}_kwh"] = nominal_capacity(
+                    model, modules
+                )
 
     async def async_set_mode(self, mode: str) -> None:
         """Set the native operating mode after validating active control."""
@@ -220,6 +266,8 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if key not in CONTROL_DEFAULTS or key == "mode":
             raise HomeAssistantError("Unbekannte Einstellung")
         self._control[key] = value
+        if key in {"venus_a_packs", "venus_d_packs", "venus_e_packs"}:
+            self._sync_model_controls()
         self._schedule_state_save()
         if key in {"manuell_a_aktiv", "manuell_d_aktiv", "manuell_e_aktiv"}:
             await self._async_update_manual_notification()
@@ -303,6 +351,7 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     break
             self._control["mode"] = "Beobachten"
             self._control["migrated_from_legacy"] = True
+        self._sync_model_controls()
         self._state_loaded = True
         self._last_plan = self._stored_stability or None
         self._schedule_state_save()
@@ -389,15 +438,10 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _collect_data(self, request: str = "tick") -> dict[str, Any]:
         sources: dict[str, list[dict[str, Any]]] = {}
-        model_keys = {
-            "A": VENUS_A_KEYS,
-            "D": VENUS_D_KEYS,
-            "E": VENUS_E_KEYS,
-        }
         configured_source_keys = [
             key
-            for model in self.enabled_models
-            for key in model_keys[model]
+            for slot in self.enabled_models
+            for key in SLOT_FIELDS[slot].values()
         ]
         for key in (*COMMON_KEYS, *configured_source_keys):
             sources[key] = self._snapshots_for_key(key)
@@ -440,18 +484,29 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._key_available(key) for key in REQUIRED_COMMON_KEYS
         ) and (pv_ac_w is not None or mppt_sum_w is not None)
         required_by_model = {
-            "A": REQUIRED_A_KEYS,
-            "D": REQUIRED_D_KEYS,
-            "E": REQUIRED_E_KEYS,
+            slot: tuple(
+                SLOT_FIELDS[slot][field]
+                for field in (
+                    "soc",
+                    "ac_power",
+                    "charge_limit",
+                    "discharge_limit",
+                    "auto_target",
+                    "active",
+                )
+            )
+            for slot in self.enabled_models
         }
         ready = {
             model: all(self._key_available(key) for key in required_by_model[model])
             for model in self.enabled_models
         }
         efficiency_keys = {
-            "A": (CONF_A_AC_POWER, CONF_A_DC_POWER),
-            "D": (CONF_D_AC_POWER, CONF_D_DC_POWER),
-            "E": (CONF_E_AC_POWER, CONF_E_DC_POWER),
+            slot: (
+                SLOT_FIELDS[slot]["ac_power"],
+                SLOT_FIELDS[slot]["dc_power"],
+            )
+            for slot in self.enabled_models
         }
         efficiencies = {
             model: self._efficiency(*efficiency_keys[model])
@@ -852,7 +907,7 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_notification(
             "speicher_ladelogik_manuell",
             "Speicher-Ladelogik – Handbetrieb aktiv",
-            "Handbetrieb ist für Venus " + "/".join(active)
+            "Handbetrieb ist für " + "/".join(self.storage_name(slot) for slot in active)
             + " dauerhaft aktiv. Der jeweils andere Speicher läuft weiter im Fahrplan. "
             "Bitte nach dem Einsatz wieder ausschalten.",
         )
@@ -873,8 +928,8 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_notification(
             "speicher_ladelogik_kalibrierung_faellig",
             "Speicher-Ladelogik – Kalibrierung fällig",
-            "Seit der letzten erfolgreichen Kalibrierung von Venus "
-            + "/".join(due)
+            "Seit der letzten erfolgreichen Kalibrierung von "
+            + "/".join(self.storage_name(slot) for slot in due)
             + " sind mindestens 30 Tage vergangen. Es wird kein Auftrag automatisch gestartet.",
         )
 
@@ -1020,12 +1075,14 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     str(output["notify"]),
                 )
             if output.get("reaction_newly_blocked"):
-                batteries = "/".join(output["reaction_newly_blocked"])
+                batteries = "/".join(
+                    self.storage_name(slot)
+                    for slot in output["reaction_newly_blocked"]
+                )
                 await self._async_notification(
                     "speicher_ladelogik_ladereaktion",
                     "Speicher-Ladelogik – Ladeleistung nicht bestätigt",
-                    "Venus "
-                    + batteries
+                    batteries
                     + " hat nach der Ladefreigabe keine frische "
                     "AC-Rückmeldung geliefert.",
                 )
@@ -1047,7 +1104,7 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "speicher_ladelogik_schreibfehler",
                     "Speicher-Ladelogik – Grenzwert nicht bestätigt",
                     (self._last_write_error or "Unbekannter Schreibfehler")
-                    + ("\n\nGesperrt bis zur Quittierung: Venus " + "/".join(blocked)
+                    + ("\n\nGesperrt bis zur Quittierung: " + "/".join(self.storage_name(slot) for slot in blocked)
                        if blocked else ""),
                 )
             elif results:

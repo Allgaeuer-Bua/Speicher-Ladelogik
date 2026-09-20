@@ -1,0 +1,25 @@
+name: Publish v1.1.0
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-v1.1.0.yml
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create v1.1.0
+          --repo "${{ github.repository }}"
+          --target "${{ github.sha }}"
+          --title "V1.1.0"
+          --notes "Bis zu drei unabhängige Speicherinstanzen unterstützen jetzt auch mehrere Venus A, D oder E desselben Typs. Venus A und D verwenden 1–6 Module mit automatisch berechneter Nennkapazität. Kalibrierfenster nutzen ab dem ersten erfolgreichen Lauf die gemessene AC-Energie; die Referenzen betragen 3,77 kWh für Venus A mit zwei Modulen und 5,15 kWh für Venus E. Der pauschale Aufschlag von 0,25 kWh entfällt. Bei weiterhin ausreichendem realem PV-Überschuss wird ein laufendes Kalibrierfenster verlängert. Bestehende V1.0-Konfigurationen werden automatisch migriert. Nach dem HACS-Update Home Assistant neu starten."

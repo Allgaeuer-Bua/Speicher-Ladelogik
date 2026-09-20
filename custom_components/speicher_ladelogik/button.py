@@ -49,6 +49,12 @@ class SpeicherActionButton(SpeicherLadelogikEntity, ButtonEntity):
     def __init__(self, coordinator: SpeicherLadelogikCoordinator, description: SpeicherButtonDescription) -> None:
         super().__init__(coordinator, description.key)
         self.entity_description = description
+        parts = description.key.split("_")
+        if len(parts) > 2 and parts[2].upper() in coordinator.enabled_models:
+            slot = parts[2].upper()
+            self._attr_name = description.name.replace(
+                f"Venus {slot}", coordinator.storage_name(slot)
+            )
 
     async def async_press(self) -> None:
         await self.coordinator.async_request_action(self.entity_description.request)

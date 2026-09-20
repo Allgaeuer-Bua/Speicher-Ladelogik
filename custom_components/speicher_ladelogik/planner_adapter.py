@@ -11,18 +11,14 @@ from homeassistant.util import dt as dt_util
 from .compat import get_state_with_legacy_fallback
 from .const import (
     CONF_A_CHARGE_OVERRIDE,
-    CONF_A_PACK_DRIFT,
-    CONF_A_PACK_SOC,
     CONF_D_CHARGE_OVERRIDE,
-    CONF_D_PACK_DRIFT,
-    CONF_D_PACK_SOC,
     CONF_E_CHARGE_OVERRIDE,
-    CONF_E_CELL_DRIFT,
     CONF_ENABLED_MODELS,
     DEFAULTS,
 )
 from .planner import calculate_plan
 from .runtime import PlannerState, planner_states
+from .storage import SLOT_FIELDS
 
 LEGACY_OVERRIDE_ENTITIES = {
     CONF_A_CHARGE_OVERRIDE: "input_boolean.venus_a_nicht_laden",
@@ -116,6 +112,16 @@ def calculate(
         mapping,
         planner_states(control) if control is not None else None,
     )
+    slot_models = config.get("slot_models", {})
+
+    def _entities(slot: str, field: str) -> list[str]:
+        value = config.get(SLOT_FIELDS[slot].get(field, ""), [])
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, str)]
+        return []
+
     result = calculate_plan(
         proxy,
         {
@@ -129,16 +135,15 @@ def calculate(
             "deadline": _local_timestamp(today, 15),
             "prior_plan": prior_plan,
             "battery_keys": config.get(CONF_ENABLED_MODELS, ["A", "E"]),
+            "slot_models": slot_models,
+            "slot_names": config.get("slot_names", {}),
             "pack_entities": {
-                "A": config.get(CONF_A_PACK_SOC, []),
-                "D": config.get(CONF_D_PACK_SOC, []),
+                slot: _entities(slot, "pack_soc")
+                for slot in ("A", "D", "E")
+                if slot_models.get(slot, slot) in {"A", "D"}
             },
             "drift_entities": {
-                "A": config.get(CONF_A_PACK_DRIFT, []),
-                "D": config.get(CONF_D_PACK_DRIFT, []),
-                "E": [config.get(CONF_E_CELL_DRIFT)]
-                if config.get(CONF_E_CELL_DRIFT)
-                else [],
+                slot: _entities(slot, "drift") for slot in ("A", "D", "E")
             },
         },
     )

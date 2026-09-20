@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from homeassistant.components.number import NumberEntity, NumberEntityDescription, NumberMode
+from homeassistant.components.number import (
+    NumberEntity,
+    NumberEntityDescription,
+    NumberMode,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant
@@ -61,16 +65,30 @@ NUMBERS = (
     SpeicherNumberDescription(key="knappheitsreserve", name="Knappheitsreserve", control_key="knappheitsreserve", minimum=100, maximum=200, step=1, native_unit_of_measurement=PERCENTAGE),
     SpeicherNumberDescription(key="min_effiziente_leistung", name="Minimale effiziente Ladeleistung", control_key="min_effiziente_leistung", minimum=0, maximum=5000, step=50, native_unit_of_measurement=UnitOfPower.WATT),
     SpeicherNumberDescription(key="kalibrierleistung", name="Kalibrierleistung", control_key="kalibrierleistung_w", minimum=400, maximum=1500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
-    SpeicherNumberDescription(key="venus_a_packs", name="Anzahl Packs Venus A", control_key="venus_a_packs", minimum=1, maximum=8, step=1),
-    SpeicherNumberDescription(key="venus_d_packs", name="Anzahl Packs Venus D", control_key="venus_d_packs", minimum=1, maximum=8, step=1),
+    SpeicherNumberDescription(key="venus_a_packs", name="Anzahl Module Speicher 1", control_key="venus_a_packs", minimum=1, maximum=6, step=1),
+    SpeicherNumberDescription(key="venus_d_packs", name="Anzahl Module Speicher 2", control_key="venus_d_packs", minimum=1, maximum=6, step=1),
+    SpeicherNumberDescription(key="venus_e_packs", name="Anzahl Module Speicher 3", control_key="venus_e_packs", minimum=1, maximum=6, step=1),
 )
 
 
-def _enabled(description: SpeicherNumberDescription, models: tuple[str, ...]) -> bool:
-    """Hide controls belonging to storage models that are not configured."""
-    for model in ("A", "D", "E"):
-        if f"venus_{model.lower()}" in description.key:
-            return model in models
+def _slot(description: SpeicherNumberDescription) -> str | None:
+    for slot in ("A", "D", "E"):
+        if f"venus_{slot.lower()}" in description.key or description.key == f"venus_{slot.lower()}_packs":
+            return slot
+    return None
+
+
+def _enabled(description: SpeicherNumberDescription, coordinator: SpeicherLadelogikCoordinator) -> bool:
+    """Hide controls that do not apply to a configured storage slot."""
+    slot = _slot(description)
+    if slot is None:
+        return True
+    if slot not in coordinator.enabled_models:
+        return False
+    if description.key.endswith("_packs"):
+        return coordinator.storage_has_packs(slot)
+    if description.key.startswith("nennkapazitaet_"):
+        return not coordinator.storage_has_packs(slot)
     return True
 
 
@@ -79,7 +97,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     async_add_entities(
         SpeicherControlNumber(coordinator, description)
         for description in NUMBERS
-        if _enabled(description, coordinator.enabled_models)
+        if _enabled(description, coordinator)
     )
 
 
@@ -93,6 +111,14 @@ class SpeicherControlNumber(SpeicherLadelogikEntity, NumberEntity):
         self._attr_native_min_value = description.minimum
         self._attr_native_max_value = description.maximum
         self._attr_native_step = description.step
+        slot = _slot(description)
+        if slot is not None:
+            self._attr_name = description.name.replace(
+                f"Venus {slot}", coordinator.storage_name(slot)
+            ).replace(f"Speicher {('A', 'D', 'E').index(slot) + 1}", coordinator.storage_name(slot))
+            if description.native_unit_of_measurement == UnitOfPower.WATT:
+                maximum = 1500 if coordinator.storage_model(slot) == "A" else 2500
+                self._attr_native_max_value = maximum
 
     @property
     def native_value(self) -> float:
