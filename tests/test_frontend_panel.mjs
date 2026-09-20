@@ -326,7 +326,7 @@ test("control settings explain the effect of planning thresholds", () => {
 });
 
 test("frontend element name matches the integration release version", () => {
-  assert.equal(panelElementName, "speicher-ladelogik-panel-1-0-3");
+  assert.equal(panelElementName, "speicher-ladelogik-panel-1-1-0");
   assert.equal(registry.get(panelElementName), Panel);
   assert.equal(registry.has("speicher-ladelogik-panel-1-0-1"), false);
 });
@@ -410,4 +410,20 @@ test("A and D show only their configured MPPT sensors", () => {
   assert.match(panel._mpptDetails("d"), /MPPT 1/);
   assert.match(panel._mpptDetails("d"), /812,35 W/);
   assert.equal(panel._mpptDetails("a"), "");
+});
+
+test("duplicate physical models keep independent slot labels", () => {
+  const { panel } = createPanel();
+  panel._panel.config.models = ["A", "D", "E"];
+  panel._panel.config.storage_models = { A: "E", D: "E", E: "E" };
+  panel._panel.config.storage_labels = {
+    A: "Keller E 1",
+    D: "Garage E 2",
+    E: "Werkstatt E 3",
+  };
+
+  assert.equal(panel._storageModel("D"), "E");
+  assert.equal(panel._storageLabel("A"), "Keller E 1");
+  assert.match(panel._storageSlot("D", "d"), /Garage E 2/);
+  assert.match(panel._batteryCard("E"), /Werkstatt E 3/);
 });

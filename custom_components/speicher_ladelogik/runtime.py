@@ -8,7 +8,6 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
-
 CONTROL_DEFAULTS: dict[str, Any] = {
     "mode": "Beobachten",
     "mittagsspitzen": True,
@@ -43,6 +42,7 @@ CONTROL_DEFAULTS: dict[str, Any] = {
     "kalibrierleistung_w": 500.0,
     "venus_a_packs": 2.0,
     "venus_d_packs": 2.0,
+    "venus_e_packs": 1.0,
     "kalibrierung_a_freigegeben": False,
     "kalibrierung_e_freigegeben": False,
     "kalibrierung_d_freigegeben": False,
@@ -111,6 +111,7 @@ HELPER_TO_CONTROL: dict[str, str] = {
     "input_number.speicher_ladelogik_kalibrierleistung_w": "kalibrierleistung_w",
     "input_number.speicher_ladelogik_venus_a_packs": "venus_a_packs",
     "input_number.speicher_ladelogik_venus_d_packs": "venus_d_packs",
+    "input_number.speicher_ladelogik_venus_e_packs": "venus_e_packs",
     "input_number.speicher_ladelogik_schreibfehler_a": "schreibfehler_a",
     "input_number.speicher_ladelogik_schreibfehler_e": "schreibfehler_e",
     "input_number.speicher_ladelogik_schreibfehler_d": "schreibfehler_d",

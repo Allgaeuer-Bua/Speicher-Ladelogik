@@ -42,6 +42,11 @@ class SpeicherControlSwitch(SpeicherLadelogikEntity, SwitchEntity):
     def __init__(self, coordinator: SpeicherLadelogikCoordinator, description: SpeicherSwitchDescription) -> None:
         super().__init__(coordinator, description.key)
         self.entity_description = description
+        slot = description.key.rsplit("_", 1)[-1].upper()
+        if slot in coordinator.enabled_models:
+            self._attr_name = description.name.replace(
+                f"Venus {slot}", coordinator.storage_name(slot)
+            )
 
     @property
     def is_on(self) -> bool:

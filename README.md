@@ -11,7 +11,7 @@ oder Speichern. Sie verwendet vorhandene Home-Assistant-Entitäten. Dadurch
 können Messwerte aus unterschiedlichen Integrationen und von verschiedenen
 Anbietern verwendet werden, sofern Bedeutung, Einheit und Vorzeichen passen.
 
-> **Version im Quellcode:** 1.0.3
+> **Version im Quellcode:** 1.1.0
 > **Erforderliche Home-Assistant-Version:** 2026.9.1 oder neuer
 
 ## Wofür ist die Integration gedacht?
@@ -32,17 +32,18 @@ Messwertschwankungen führen dadurch nicht ständig zu neuen Schaltentscheidunge
 
 ## Unterstützte Speicher
 
-Es können ein bis drei Speicher eingerichtet werden – jeweils maximal ein
-Gerät der folgenden Modelle:
+Es können ein bis drei eigenständige Speicher eingerichtet werden. Das Modell
+kann für jeden Speicher frei gewählt werden; dadurch sind auch zwei oder drei
+Geräte desselben Typs möglich.
 
 | Modell | Besonderheiten |
 | --- | --- |
-| Venus A | Pack-SoC und Pack-Zelldrift, bis zu vier optionale MPPT-Sensoren |
-| Venus D | Pack-SoC und Pack-Zelldrift, bis zu vier optionale MPPT-Sensoren |
+| Venus A | 1–6 Module zu je 2,08 kWh (max. 12,48 kWh), Pack-SoC und Pack-Zelldrift, bis zu vier optionale MPPT-Sensoren |
+| Venus D | 1–6 Module zu je 2,56 kWh (max. 15,36 kWh), Pack-SoC und Pack-Zelldrift, bis zu vier optionale MPPT-Sensoren |
 | Venus E | Zellspannungsdifferenz und Gerätedaten ohne Pack-Auswahl |
 
 Nicht eingerichtete Modelle erscheinen weder in der Planung noch im Dashboard.
-Jeder Speicher besitzt eigene Leistungsgrenzen, Kapazität, Fahrplanfreigabe,
+Jede Speicherinstanz besitzt eigene Leistungsgrenzen, Kapazität, Fahrplanfreigabe,
 Handsteuerung, Kalibrierung und Fehlerbehandlung.
 
 ## Was wird benötigt?
@@ -127,6 +128,14 @@ bei Venus A/D die vorhandenen Pack-Sensoren.
 - Schutz vor gegenseitigem Laden oder Entladen mehrerer Speicher
 - automatische Wiederherstellung der vorherigen Leistungsgrenzen
 - Anzeige des letzten erfolgreichen Kalibrierzeitpunkts je Speicher
+- erste erfolgreiche Kalibrierung wird sofort für die nächste Fensterplanung
+  verwendet
+- reale AC-Referenzenergie inklusive Wandlerverlusten: 3,77 kWh für Venus A
+  mit zwei Modulen und 5,15 kWh für Venus E
+- kein zusätzlicher pauschaler Energieaufschlag; nur das Zeitfenster wird auf
+  volle 15 Minuten aufgerundet
+- ein abgelaufenes Prognosefenster wird bei weiterhin ausreichendem realem
+  PV-Überschuss automatisch verlängert
 
 ### Überwachung und Benachrichtigungen
 

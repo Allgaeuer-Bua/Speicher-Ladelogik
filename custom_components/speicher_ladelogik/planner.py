@@ -18,6 +18,10 @@ from .stability import (
     stable_charge_limit,
     target_latch,
 )
+from .storage import (
+    MODEL_REFERENCE_AC_KWH,
+    MODEL_REFERENCE_AC_PER_MODULE_KWH,
+)
 
 
 def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
@@ -29,7 +33,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
 
     output = {}
 
-    VERSION = "1.0.3"
+    VERSION = "1.1.0"
     NOW = float(data.get("now", time.time()))
     DAY0 = float(data.get("day0", 0))
     DAY1 = float(data.get("day1", 0))
@@ -58,9 +62,10 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "E": "input_number.speicher_ladelogik_manuell_entladen_e_w",
     }
 
-    # Entity mapping: change only here if an entity was renamed in HA.
-    # A uses Viper; E uses LilyGo. No forced-power/control-mode entities are used.
-    BATTERIES = {
+    # The proven planner keeps three compact internal slots. Since V1.1 their
+    # physical model is independent from the slot, so A/A/E or D/D/D setups
+    # use the same planning and persistence paths as the former A/D/E setup.
+    SLOT_ENTITIES = {
         "A": {
             "soc": "sensor.marstek_venus_a_soc_batterie",
             "power": "sensor.marstek_venus_a_ac_leistung",
@@ -75,10 +80,6 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             "tmax": "sensor.marstek_venus_a_maximale_zellentemperatur",
             "tmin": "sensor.marstek_venus_a_minimale_zellentemperatur",
             "usable": "input_number.venus_a_verfugbare_kapazitat",
-            # Raw Viper sensor: negative AC power = charge, positive = discharge.
-            "charge_sign": -1,
-            "usable_default": 3.6608, "floor": 12, "maximum": 1500,
-            "tail": 500, "measured_ac": 3.94, "preferred": 1100,
         },
         "E": {
             "soc": "sensor.marstek_venus_e_soc",
@@ -94,10 +95,6 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             "tmax": "sensor.marstek_venus_e_max_zelltemperatur",
             "tmin": "sensor.marstek_venus_e_min_zelltemperatur",
             "usable": "input_number.venus_e_verfugbare_kapazitat",
-            # LilyGo: negative AC power = charge, positive = discharge.
-            "charge_sign": -1,
-            "usable_default": 4.5568, "floor": 11, "maximum": 2500,
-            "tail": 1100, "measured_ac": 5.35, "preferred": 1300,
         },
         "D": {
             "soc": "sensor.marstek_venus_d_soc",
@@ -113,10 +110,44 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             "tmax": "sensor.marstek_venus_d_maximale_zellentemperatur",
             "tmin": "sensor.marstek_venus_d_minimale_zellentemperatur",
             "usable": "input_number.venus_d_verfugbare_kapazitat",
-            "charge_sign": -1,
-            "usable_default": 4.4, "floor": 12, "maximum": 2500,
-            "tail": 1100, "measured_ac": 5.0, "preferred": 1300,
         },
+    }
+    MODEL_SPECS = {
+        # AC reference values include conversion losses. A is measured with
+        # two 2.08-kWh modules; D keeps the prior empirical 5.0-kWh value for
+        # two 2.56-kWh modules until its first successful calibration.
+        "A": {
+            "charge_sign": -1, "usable_default": 3.6608, "floor": 12,
+            "maximum": 1500, "tail": 500,
+            "reference_ac_per_module": MODEL_REFERENCE_AC_PER_MODULE_KWH["A"],
+            "preferred": 1100, "has_packs": True, "module_kwh": 2.08,
+        },
+        "D": {
+            "charge_sign": -1, "usable_default": 4.5056, "floor": 12,
+            "maximum": 2500, "tail": 1100,
+            "reference_ac_per_module": MODEL_REFERENCE_AC_PER_MODULE_KWH["D"],
+            "preferred": 1300, "has_packs": True, "module_kwh": 2.56,
+        },
+        "E": {
+            "charge_sign": -1, "usable_default": 4.5568, "floor": 11,
+            "maximum": 2500, "tail": 1100,
+            "reference_ac": MODEL_REFERENCE_AC_KWH["E"],
+            "preferred": 1300, "has_packs": False, "module_kwh": None,
+        },
+    }
+    SLOT_MODELS = {
+        key: str(data.get("slot_models", {}).get(key, key))
+        for key in ("A", "D", "E")
+    }
+    SLOT_NAMES = {
+        key: str(
+            data.get("slot_names", {}).get(key, f"Venus {SLOT_MODELS[key]}")
+        )
+        for key in ("A", "D", "E")
+    }
+    BATTERIES = {
+        key: {**SLOT_ENTITIES[key], **MODEL_SPECS[SLOT_MODELS[key]], "model": SLOT_MODELS[key]}
+        for key in ("A", "D", "E")
     }
 
     PACKS = {
@@ -473,7 +504,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             transition(s, "error", "state_corrupt")
         elif p != "restore" and (request == "cancel" or not context["automatic"] or not context["armed"][key]):
             transition(s, "restore", "cancelled")
-        elif p != "restore" and key in {"A", "D"} and s["z"] != context["pack_count"]:
+        elif p != "restore" and BATTERIES[key]["has_packs"] and s["z"] != context["pack_count"]:
             transition(s, "restore", "pack_changed")
         elif p not in ["requested", "restore"] and request == "start":
             transition(s, "restore", "restart")
@@ -489,7 +520,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 pause_session(s, "data_pause")
         elif p == "paused":
             resume = s["u"] or "requested"
-            if resume in ["charge", "rest"] and NOW >= s["x"] + 1800:
+            if resume in ["charge", "rest"] and s["x"] + 1800 <= NOW:
                 transition(s, "restore", "retry_window")
             elif resume not in ["charge", "rest"] or calibration_surplus >= calibration_power + 100:
                 transition(s, resume, "resumed")
@@ -530,10 +561,10 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 s["h"] = 1
             if context["batteries"][key]["cal_empty_ready"]:
                 transition(s, "wait", "waiting_pv")
-            elif s["s"] and NOW >= s["s"]:
+            elif s["s"] and s["s"] <= NOW:
                 transition(s, "restore", "retry_empty")
         elif p == "wait":
-            if NOW >= s["s"] and s["n"] <= DAY0:
+            if s["s"] <= NOW and s["n"] <= DAY0:
                 preview = context["today"][key]
                 if preview["ok"] and context["live_surplus"] >= calibration_power + 100:
                     if context["batteries"][key]["cal_empty_ready"]:
@@ -592,7 +623,16 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                                 pause_session(s, "under_400w")
                     else:
                         s["l"] = 0
-                if s["p"] == "charge" and (NOW >= s["x"] + 1800 or NOW - s["t"] > 50400):
+                if s["p"] == "charge" and s["x"] + 1800 <= NOW:
+                    # The forecast window starts a calibration. It must not
+                    # stop a nearly full battery while measured PV surplus is
+                    # still sufficient, so extend it in quarter-hour steps.
+                    if calibration_surplus >= calibration_min_power:
+                        s["x"] = int(NOW + 900)
+                        s["r"] = "window_extended_live_surplus"
+                    else:
+                        transition(s, "restore", "retry_window")
+                if s["p"] == "charge" and NOW - s["t"] > 64800:
                     transition(s, "restore", "retry_window")
         elif p == "rest":
             bat = context["batteries"][key]
@@ -618,7 +658,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 result["retry"] = s["r"] in ["retry_empty", "retry_window", "restart", "interrupted_full"]
                 phase = "done" if result["finish"] else ("incomplete" if result["retry"] else "cancelled")
                 transition(s, phase, s["r"])
-                result["notify"] = "Kalibrierung Venus " + key + ": " + s["r"]
+                result["notify"] = "Kalibrierung " + SLOT_NAMES[key] + ": " + s["r"]
         elif s["p"] == "drain":
             temporary_release, import_since, clear_since, grid_reason = peer_grid_support(
                 phase=s["p"],
@@ -717,8 +757,8 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     middle = max(weak + 1, setting("mittlerer_tag", 50, 20, 100))
     strong = max(middle + 1, setting("starker_tag", 85, 50, 200))
     pack_counts = {
-        key: int(setting("venus_" + key.lower() + "_packs", 2, 1, 8))
-        for key in BATTERY_KEYS if key in {"A", "D"}
+        key: int(setting("venus_" + key.lower() + "_packs", 2, 1, 6))
+        for key in BATTERY_KEYS if BATTERIES[key]["has_packs"]
     }
     mode = raw("input_select.speicher_ladelogik_betriebsart")
     automatic = mode == "Automatik" and raw("input_boolean.speicher_ladelogik_aktiv") == "on"
@@ -804,7 +844,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                           else "nicht verfuegbar")))
         power = power_usable
         if power_fresh is None and power_usable is not None:
-            warnings.append("Venus " + key + ": AC-Leistung verzögert; letzter Wert wird kurz weiterverwendet")
+            warnings.append(SLOT_NAMES[key] + ": AC-Leistung verzögert; letzter Wert wird kurz weiterverwendet")
         floor = number(raw(cfg["bottom"]), cfg["floor"])
         top = number(raw(cfg["top"]), 100)
         limits_ok = (
@@ -816,21 +856,28 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             errors.append(key + ": Gerätegrenzen ungültig")
             floor = cfg["floor"]
             top = 100
+        model_nominal = (
+            cfg["module_kwh"] * pack_counts.get(key, 1)
+            if cfg["module_kwh"] is not None
+            else cfg["usable_default"] / (1 - cfg["floor"] / 100)
+        )
         nominal = setting(
             "nennkapazitaet_" + key.lower() + "_kwh",
-            cfg["usable_default"] / (1 - cfg["floor"] / 100),
+            model_nominal,
             0.1,
             30,
         )
+        if cfg["module_kwh"] is not None:
+            nominal = model_nominal
         usable = nominal * (1 - floor / 100)
         capacity_ok = 0 < usable < 20
         if not capacity_ok:
             errors.append(key + ": Kapazität ungültig")
-            nominal = cfg["usable_default"] / (1 - cfg["floor"] / 100)
+            nominal = model_nominal
             usable = nominal * (1 - floor / 100)
         pack_count = pack_counts.get(key, 1)
         packs = []
-        if key in {"A", "D"}:
+        if cfg["has_packs"]:
             for entity in PACKS[key][:pack_count]:
                 value = measurement(entity, "soc")
                 if value is None:
@@ -1008,16 +1055,27 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         cfg = BATTERIES[key]
         model = learning["models"][key]
         learned_ac = 0
-        if (number(model.get("count"), 0) >= 3
+        if (number(model.get("count"), 0) >= 1
                 and abs(number(model.get("usable_reference"), 0) - bats[key]["usable"]) < 0.01):
             learned_ac = number(model.get("ac_kwh"), 0)
 
-        calibration_energy = max(
-            cfg["measured_ac"], bats[key]["usable"] / eta, learned_ac
-        ) + 0.25
+        if learned_ac > 0:
+            # A measured AC value already contains inverter and battery losses.
+            calibration_energy = learned_ac
+            calibration_energy_source = "gelernt"
+        elif cfg.get("reference_ac_per_module") is not None:
+            calibration_energy = cfg["reference_ac_per_module"] * pack_counts.get(key, 1)
+            calibration_energy_source = "Modellreferenz"
+        else:
+            calibration_energy = number(cfg.get("reference_ac"), bats[key]["usable"] / eta)
+            calibration_energy_source = "Modellreferenz"
         hours = calibration_energy / (calibration_power / 1000)
         previews_today[key] = continuous_window(today["rows"], NOW, hours, load, min(day_factor, short_factor) * safety)
         previews_tomorrow[key] = continuous_window(tomorrow["rows"], DAY1, hours, load, safety)
+        previews_today[key]["energy_kwh"] = round(calibration_energy, 4)
+        previews_today[key]["energy_source"] = calibration_energy_source
+        previews_tomorrow[key]["energy_kwh"] = round(calibration_energy, 4)
+        previews_tomorrow[key]["energy_source"] = calibration_energy_source
         # Keine Altersgrenze fuer die Zelltemperatur -- der LilyGo-
         # Sensor meldet nur bei tatsaechlicher Wertaenderung und kann bei einer
         # Kalibrier-Vormerkung fuer den naechsten Tag 24h+ ohne neue Meldung
@@ -1028,19 +1086,19 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         vmax = measurement(cfg["vmax"], "voltage")
         problems = []
         if not bats[key]["owns"]:
-            problems.append("Venus " + key + ": Auto Target/Active oder manuelle Sperre prüfen")
+            problems.append(SLOT_NAMES[key] + ": Auto Target/Active oder manuelle Sperre prüfen")
         if not bats[key]["usable_data"]:
-            problems.append("Venus " + key + ": eigene SoC-/Ladegrenzendaten ungültig")
+            problems.append(SLOT_NAMES[key] + ": eigene SoC-/Ladegrenzendaten ungültig")
         if bats[key]["power_for_cal"] is None:
-            problems.append("Venus " + key + ": eigene AC-Leistung für Kalibrierung nicht frisch")
+            problems.append(SLOT_NAMES[key] + ": eigene AC-Leistung für Kalibrierung nicht frisch")
         if tmin is None or tmax is None or not 5 <= tmin <= tmax <= 40:
-            problems.append("Venus " + key + ": Temperaturfenster 5–40 °C nicht bestätigt")
+            problems.append(SLOT_NAMES[key] + ": Temperaturfenster 5–40 °C nicht bestätigt")
         if vmax is None or not 2.5 <= vmax < 3.60:
-            problems.append("Venus " + key + ": Zellspannung fehlt oder ausserhalb des Kalibrierfensters")
+            problems.append(SLOT_NAMES[key] + ": Zellspannung fehlt oder ausserhalb des Kalibrierfensters")
         if number(raw(cfg["top"])) != 100:
-            problems.append("Venus " + key + ": oberes SoC-Limit muss 100 % sein")
+            problems.append(SLOT_NAMES[key] + ": oberes SoC-Limit muss 100 % sein")
         if number(raw(cfg["bottom"]), cfg["floor"]) != 12:
-            problems.append("Venus " + key + ": unteres SoC-Limit muss für die Kalibrierung 12 % sein")
+            problems.append(SLOT_NAMES[key] + ": unteres SoC-Limit muss für die Kalibrierung 12 % sein")
         if not writable(cfg["discharge"], 0) or not writable(
             cfg["charge"], calibration_power
         ):
@@ -1052,7 +1110,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 + "-W-Ladegrenze fehlt"
             )
         if failure_counts[key] >= 3:
-            problems.append("Venus " + key + ": drei Schreibfehler; Quittierung erforderlich")
+            problems.append(SLOT_NAMES[key] + ": drei Schreibfehler; Quittierung erforderlich")
         cal_safe[key] = not problems
         cal_critical[key] = ((tmin is not None and tmax is not None and not 5 <= tmin <= tmax <= 40)
                              or (vmax is not None and not 2.5 <= vmax < 3.60))
@@ -1108,19 +1166,19 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         key = request_map[REQUEST]
         not_before = int(DAY1 if REQUEST.endswith("tomorrow") else DAY0)
         if not automatic or not cal_armed[key]:
-            queue_notify = "Vormerkung erfordert Automatik und die Kalibrierfreigabe für Venus " + key + "."
+            queue_notify = "Vormerkung erfordert Automatik und die Kalibrierfreigabe für " + SLOT_NAMES[key] + "."
         elif session["p"] in ACTIVE_PHASES and session["b"] == key:
             if session["p"] == "requested":
                 session["n"] = not_before
                 session["s"] = 0
                 session["x"] = 0
-                queue_notify = "Termin für Venus " + key + " aktualisiert."
+                queue_notify = "Termin für " + SLOT_NAMES[key] + " aktualisiert."
             else:
-                queue_notify = "Venus " + key + " wird bereits vorbereitet oder kalibriert."
+                queue_notify = SLOT_NAMES[key] + " wird bereits vorbereitet oder kalibriert."
         else:
             depends = session["b"] if session["p"] in ACTIVE_PHASES else "-"
             queue[key] = {"n": not_before, "t": int(NOW), "d": depends}
-            queue_notify = "Venus " + key + (" für morgen vorgemerkt." if REQUEST.endswith("tomorrow") else " für das nächste geeignete Fenster vorgemerkt.")
+            queue_notify = SLOT_NAMES[key] + (" für morgen vorgemerkt." if REQUEST.endswith("tomorrow") else " für das nächste geeignete Fenster vorgemerkt.")
     if REQUEST == "cancel":
         queue = {}
     elif REQUEST.startswith("cancel_") and REQUEST[-1:].upper() in BATTERY_KEYS:
@@ -1354,14 +1412,14 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             status = "Sichern"
             reason = "Knappheit oder Mindestreserve; vorhandenen Ueberschuss sichern"
         else:
-            if peak_enabled and not early and NOW < min(end, DEADLINE) - 1800:
+            if peak_enabled and not early and min(end, DEADLINE) - 1800 > NOW:
                 peak = peak_plan(normal_rows, end - 1800, simulation_bats, caps, load, eta, preferred)
             if peak["ok"]:
-                total = min(max(0, normal_live - peak["target"]), max(0, current_normal_surplus - peak["target"])) if NOW >= preferred else 0
+                total = min(max(0, normal_live - peak["target"]), max(0, current_normal_surplus - peak["target"])) if preferred <= NOW else 0
                 start = peak["start"] if peak["start"] is not None else preferred
                 status = "Mittagsspitzen reduzieren" if total >= 50 else "Platz für Mittagsspitze halten"
                 reason = "Ladung auf die höchsten prognostizierten Überschüsse konzentriert; Ladeziel und Endphase eingeplant"
-            elif NOW >= start:
+            elif start <= NOW:
                 quota_wh = need / eta * 1000
                 total = current_opportunity * min(1, quota_wh / max(1, window_wh))
                 if early:
@@ -1370,8 +1428,8 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                     total = max_total
                 if total > 25:
                     total = max(total, min(max_total, setting("min_effiziente_leistung", 800, 0, 1500)))
-                status = "Vorladen" if early and NOW < preferred else "Fahrplanladen"
-                reason = "Spätere Ertragsfenster reichen nicht; Ladebeginn vorgezogen" if early and NOW < preferred else "Laden nach verbleibenden Viertelstunden-Überschüssen"
+                status = "Vorladen" if early and preferred > NOW else "Fahrplanladen"
+                reason = "Spätere Ertragsfenster reichen nicht; Ladebeginn vorgezogen" if early and preferred > NOW else "Laden nach verbleibenden Viertelstunden-Überschüssen"
             else:
                 status = "Zurückhalten"
                 reason = "Spätere PV-Fenster decken Restbedarf einschließlich Lade-Endphase"
@@ -1543,7 +1601,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         reaction[key] = {"requested_since": since, "confirmed": confirmed,
                          "blocked": blocked, "status": status_text}
         if key in reaction_newly_blocked:
-            message = "Venus " + key + ": Ladeleistung nach Freigabe nicht bestätigt (Hinweis)"
+            message = SLOT_NAMES[key] + ": Ladeleistung nach Freigabe nicht bestätigt (Hinweis)"
             if message not in warnings:
                 warnings.append(message)
 
@@ -1633,9 +1691,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                         hardware_commands.append({"entity": BATTERIES[key]["discharge"], "value": value,
                                                   "battery": key, "restore": False})
                 if (not key_restoring and writable(BATTERIES[key]["charge"], limits[key])
-                        and write_needed(current_caps[key], limits[key])):
-                    hardware_commands.append({"entity": BATTERIES[key]["charge"], "value": limits[key], "battery": key, "restore": False})
-                elif (key_restoring and all([field.startswith("D") for field in restoring_fields])
+                        and write_needed(current_caps[key], limits[key])) or (key_restoring and all([field.startswith("D") for field in restoring_fields])
                         and writable(BATTERIES[key]["charge"], limits[key])
                         and write_needed(current_caps[key], limits[key])):
                     hardware_commands.append({"entity": BATTERIES[key]["charge"], "value": limits[key], "battery": key, "restore": False})
@@ -1930,7 +1986,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             "input_boolean.speicher_ladelogik_kalibrierung_" + key_cal.lower() + "_laden_sperren",
         ]
     output["reset_after_calibration"] = reset_after_calibration
-    output["notify"] = ("Kalibrierung Venus " + session["b"] + ": " + cal_reason) if cal["notify"] else queue_notify
+    output["notify"] = ("Kalibrierung " + SLOT_NAMES.get(session["b"], session["b"]) + ": " + cal_reason) if cal["notify"] else queue_notify
     output["ack"] = REQUEST == "ack"
 
     plan["daten_gueltig_gemeinsam"] = live_valid
@@ -2035,11 +2091,11 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         start_soc = number(active.get("soc")) if has_start else None
         reference = number(active.get("usable_reference"), 0)
         sample_eta = number(active.get("eta"), eta)
-        normalized_ac = sample * (100 - bats[key]["floor"]) / max(1, 100 - start_soc) if start_soc is not None else 0
+        measured_ac = sample
         sample_ok = (cal["finish"] and not session["i"] and has_start
                      and start_soc is not None and 0 <= start_soc <= 15
                      and abs(reference - bats[key]["usable"]) < 0.01
-                     and 0.6 * reference <= normalized_ac * sample_eta <= 1.4 * reference)
+                     and 0.6 * reference <= measured_ac * sample_eta <= 1.4 * reference)
         record = {"battery": key, "start": start_stamp, "end": NOW,
                   "duration_h": round((NOW - start_stamp) / 3600, 3) if has_start else None,
                   "result": session["p"], "reason": cal_reason, "ac_kwh": round(sample, 4),
@@ -2051,8 +2107,8 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             old_count = int(number(old.get("count"), 0))
             if abs(number(old.get("usable_reference"), 0) - reference) >= 0.01:
                 old_count = 0
-            average = (0.75 * number(old.get("ac_kwh"), normalized_ac) + 0.25 * normalized_ac
-                       if old_count else normalized_ac)
+            average = (0.75 * number(old.get("ac_kwh"), measured_ac) + 0.25 * measured_ac
+                       if old_count else measured_ac)
             learning["models"][key] = {"count": min(10000, old_count + 1), "ac_kwh": round(average, 4),
                 "usable_estimate_kwh": round(average * sample_eta, 4), "eta_assumed": sample_eta,
                 "usable_reference": reference, "updated_ts": NOW}

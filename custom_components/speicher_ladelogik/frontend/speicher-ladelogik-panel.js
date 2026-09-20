@@ -138,6 +138,15 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return models.length ? models : ["A", "E"];
   }
 
+  _storageLabel(slot) {
+    return this._config().storage_labels?.[slot]
+      || `Venus ${this._config().storage_models?.[slot] || slot}`;
+  }
+
+  _storageModel(slot) {
+    return this._config().storage_models?.[slot] || slot;
+  }
+
   _eid(key) {
     return this._config().entities?.[key] || null;
   }
@@ -719,7 +728,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const calibrationState = this._state("kalibrierung")?.state || "—";
     const calibrationBattery = this._attr("kalibrierung", "batterie", null);
     const calibration = calibrationBattery && !["Bereit", "—"].includes(calibrationState)
-      ? `Venus ${calibrationBattery}: ${calibrationState}` : calibrationState;
+      ? `${this._storageLabel(calibrationBattery)}: ${calibrationState}` : calibrationState;
     const peak = this._isOn("mittagsspitzen");
     return `
       <section class="card system-card span-full">
@@ -843,7 +852,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const start = this._time(this._attr("planung", "fahrplan_slot_start_ts"));
     const end = this._time(this._attr("planung", "fahrplan_slot_ende_ts"));
     const reason = this._attr("planung", `fahrplan_slot_grund_venus_${suffix}`, "—");
-    return `<div><strong>Venus ${letter}</strong><span>${active ? `${start}–${end} geplant` : "aktuell pausiert"}</span><small>${esc(reason)}</small></div>`;
+    return `<div><strong>${esc(this._storageLabel(letter))}</strong><span>${active ? `${start}–${end} geplant` : "aktuell pausiert"}</span><small>${esc(reason)}</small></div>`;
   }
 
   _batteryCard(letter, full = false) {
@@ -861,7 +870,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const energy = this._batteryEnergy(suffix);
     return `
       <section class="card battery-card ${full ? "battery-full" : ""}">
-        ${this._cardTitle("mdi:battery-high", `Venus ${letter}`, this._badge(valid ? "Daten bereit" : "Daten fehlen", valid ? "good" : "bad"))}
+        ${this._cardTitle("mdi:battery-high", this._storageLabel(letter), this._badge(valid ? "Daten bereit" : "Daten fehlen", valid ? "good" : "bad"))}
         <div class="${full ? "battery-upper" : ""}">
           <div class="battery-current">
             <div class="battery-main">
@@ -887,7 +896,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   _batteryDetails(letter) {
     const s = letter.toLowerCase();
     const packStates = this._sourceStates(`pack_soc_${s}`);
-    if (!packStates.length && s === "e" && this._source("soc_e")) packStates.push(this._source("soc_e"));
+    if (!packStates.length && this._storageModel(letter) === "E" && this._source(`soc_${s}`)) packStates.push(this._source(`soc_${s}`));
     const driftStates = this._sourceStates(`drift_${s}`);
     const packs = packStates.map((entity) => this._measurement(entity, "%"));
     const drifts = driftStates.map((entity) => ({
@@ -907,7 +916,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
         ${this._driftDetail(drifts)}
         ${this._detail("Zielstatus", latch ? "Geräteziel erreicht" : "Ladebedarf vorhanden")}
         ${this._detail("Messwert", this._attr("planung", `ac_leistung_venus_${s}_status`, "—"))}
-        ${["a", "d"].includes(s) ? this._mpptDetails(s) : ""}
+        ${["A", "D"].includes(this._storageModel(letter)) ? this._mpptDetails(s) : ""}
       </div>`;
   }
 
@@ -962,7 +971,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   _comparison(letter, suffix) {
     const active = Boolean(this._attr("planung", `fahrplan_slot_aktiv_venus_${suffix}`, false));
     const reason = this._attr("planung", `fahrplan_slot_grund_venus_${suffix}`, "—");
-    return `<div class="comparison"><div><strong>Venus ${letter}</strong>${this._badge(active ? "Ladeslot" : "Pausenslot", active ? "good" : "neutral")}</div><p>${esc(reason)}</p></div>`;
+    return `<div class="comparison"><div><strong>${esc(this._storageLabel(letter))}</strong>${this._badge(active ? "Ladeslot" : "Pausenslot", active ? "good" : "neutral")}</div><p>${esc(reason)}</p></div>`;
   }
 
   _modeControl() {
@@ -996,7 +1005,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       ? [
         ...this._models().map((model) => [
           `bevorzugte_ladeleistung_venus_${model.toLowerCase()}`,
-          `Venus ${model}`,
+          this._storageLabel(model),
           "Bevorzugte Ladeleistung",
         ]),
         ...NUMBER_GROUPS.leistung,
@@ -1004,7 +1013,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       : group === "planung"
         ? [...this._models().map((model) => [
           `fruehes_ladeziel_venus_${model.toLowerCase()}`,
-          `Venus ${model}: Frühes Ladeziel`,
+          `${this._storageLabel(model)}: Frühes Ladeziel`,
           "SoC vor dem Zurückhalten für die Mittagsspitze; 0 % = aus",
         ]), ...NUMBER_GROUPS.planung]
         : NUMBER_GROUPS[group];
@@ -1016,7 +1025,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _manualCard(letter) {
     const s = letter.toLowerCase();
-    return `<section class="card control-card">${this._cardTitle("mdi:hand-back-right-outline", `Handbetrieb Venus ${letter}`, this._badge(this._isOn(`handbetrieb_venus_${s}`) ? "Aktiv" : "Automatik", this._isOn(`handbetrieb_venus_${s}`) ? "warn" : "good"))}<div class="control-list">${this._toggleRow(`handbetrieb_venus_${s}`, "Handbetrieb", "Dauerhafte manuelle Registerwerte", "mdi:hand-back-right-outline")}${this._numberRow([`manuell_laden_venus_${s}`, "Ladeleistung", "Manuelle Ladegrenze"])}${this._numberRow([`manuell_entladen_venus_${s}`, "Entladeleistung", "Manuelle Entladegrenze"])}</div></section>`;
+    return `<section class="card control-card">${this._cardTitle("mdi:hand-back-right-outline", `Handbetrieb ${this._storageLabel(letter)}`, this._badge(this._isOn(`handbetrieb_venus_${s}`) ? "Aktiv" : "Automatik", this._isOn(`handbetrieb_venus_${s}`) ? "warn" : "good"))}<div class="control-list">${this._toggleRow(`handbetrieb_venus_${s}`, "Handbetrieb", "Dauerhafte manuelle Registerwerte", "mdi:hand-back-right-outline")}${this._numberRow([`manuell_laden_venus_${s}`, "Ladeleistung", "Manuelle Ladegrenze"])}${this._numberRow([`manuell_entladen_venus_${s}`, "Entladeleistung", "Manuelle Entladegrenze"])}</div></section>`;
   }
 
   _actionButton(key, icon, label, tone = "") {
@@ -1033,13 +1042,17 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const hours = (value) => Number.isFinite(value)
       ? `${value.toLocaleString("de-DE", { maximumFractionDigits: 2 })} h`
       : "—";
-    return `<div class="cal-window ${preview.ok ? "good" : "warn"}"><strong>${esc(title)}</strong><span>${esc(range)}</span><small>${hours(available)} verfügbar · ${hours(required)} benötigt</small></div>`;
+    const energy = this._num(preview.energy_kwh, NaN);
+    const basis = Number.isFinite(energy)
+      ? `${energy.toLocaleString("de-DE", { maximumFractionDigits: 3 })} kWh · ${preview.energy_source || "Referenz"}`
+      : "";
+    return `<div class="cal-window ${preview.ok ? "good" : "warn"}"><strong>${esc(title)}</strong><span>${esc(range)}</span><small>${hours(available)} verfügbar · ${hours(required)} benötigt</small>${basis ? `<small>${esc(basis)}</small>` : ""}</div>`;
   }
 
   _calibrationCard() {
     const cal = this._state("kalibrierung");
     const battery = this._attr("kalibrierung", "batterie", "");
-    const batteryName = ["A", "D", "E"].includes(String(battery)) ? `Venus ${battery}` : "Keiner";
+    const batteryName = ["A", "D", "E"].includes(String(battery)) ? this._storageLabel(String(battery)) : "Keiner";
     const phase = this._statusLabel(cal?.state || "Bereit");
     const reason = String(this._attr("kalibrierung", "grund", "") || "").trim();
     const statusText = reason && reason !== "—"
@@ -1050,12 +1063,12 @@ class SpeicherLadelogikPanel extends HTMLElement {
         <div class="cal-state"><div><span>Speicher</span><strong>${esc(batteryName)}</strong><small>Gerät des aktuellen Kalibrierauftrags</small></div><div><span>Status</span><strong>${esc(statusText)}</strong><small>Aktuelle Phase: ${esc(phase)}</small></div><div><span>Energie</span><strong>${this._energy(this._attr("kalibrierung", "energie_ac_kwh"))}</strong><small>Bisher in diesem Kalibrierlauf geladene AC-Energie</small></div></div>
         <div class="control-list calibration-setting">${this._numberRow(["kalibrierleistung", "Kalibrierleistung", "Leistung für die vollständige Kalibrierladung"])}</div>
         <div class="cal-window-grid">
-          ${this._models().map((model) => `<div class="cal-window-storage"><b>Venus ${model}</b><small>Letzte Kalibrierung: ${esc(this._lastCalibration(model))}</small>${this._calibrationWindow(model, "heute", "Heute")}${this._calibrationWindow(model, "morgen", "Morgen")}</div>`).join("")}
+          ${this._models().map((model) => `<div class="cal-window-storage"><b>${esc(this._storageLabel(model))}</b><small>Letzte Kalibrierung: ${esc(this._lastCalibration(model))}</small>${this._calibrationWindow(model, "heute", "Heute")}${this._calibrationWindow(model, "morgen", "Morgen")}</div>`).join("")}
         </div>
         <div class="action-groups">
           ${this._models().map((model) => {
             const suffix = model.toLowerCase();
-            return `<div><strong>Venus ${model}</strong>${this._actionButton(`kalibrierung_venus_${suffix}_anfordern`, "mdi:play", "Heute")}${this._actionButton(`kalibrierung_venus_${suffix}_morgen`, "mdi:calendar-arrow-right", "Morgen")}${this._actionButton(`kalibrierung_venus_${suffix}_entfernen`, "mdi:playlist-remove", "Vormerkung löschen", "subtle")}</div>`;
+            return `<div><strong>${esc(this._storageLabel(model))}</strong>${this._actionButton(`kalibrierung_venus_${suffix}_anfordern`, "mdi:play", "Heute")}${this._actionButton(`kalibrierung_venus_${suffix}_morgen`, "mdi:calendar-arrow-right", "Morgen")}${this._actionButton(`kalibrierung_venus_${suffix}_entfernen`, "mdi:playlist-remove", "Vormerkung löschen", "subtle")}</div>`;
           }).join("")}
         </div>
         <div class="danger-actions">${this._actionButton("kalibrierung_abbrechen", "mdi:cancel", "Laufende Kalibrierung abbrechen", "danger")}</div>
@@ -1069,7 +1082,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   _formatWriteResult(item) {
     if (typeof item === "string") return item;
     if (!item || typeof item !== "object") return String(item ?? "—");
-    const battery = item.battery ? `Venus ${item.battery}` : "Register";
+    const battery = item.battery ? this._storageLabel(item.battery) : "Register";
     const entityId = String(item.entity || "");
     const register = entityId.includes("entlade")
       ? "Entladeleistung"
@@ -1088,7 +1101,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const dataErrors = this._attr("planung", "datenfehler_aktuell", []) || [];
     return `
       <main class="grid diagnostics-view">
-        <section class="card span-6">${this._cardTitle("mdi:database-check-outline", "Datenquellen")}${this._diagLine("Gemeinsame Daten", this._state("daten_gemeinsam")?.state)}${this._models().map((model) => this._diagLine(`Venus ${model}`, this._state(`daten_venus_${model.toLowerCase()}`)?.state)).join("")}${this._diagLine("Verfügbare Quellen", `${this._attr("status", "quellen_verfuegbar", 0)} / ${this._attr("status", "quellen_gesamt", 0)}`)}</section>
+        <section class="card span-6">${this._cardTitle("mdi:database-check-outline", "Datenquellen")}${this._diagLine("Gemeinsame Daten", this._state("daten_gemeinsam")?.state)}${this._models().map((model) => this._diagLine(this._storageLabel(model), this._state(`daten_venus_${model.toLowerCase()}`)?.state)).join("")}${this._diagLine("Verfügbare Quellen", `${this._attr("status", "quellen_verfuegbar", 0)} / ${this._attr("status", "quellen_gesamt", 0)}`)}</section>
         <section class="card span-6">${this._cardTitle("mdi:timeline-check-outline", "Planung", this._badge(this._attr("status", "planung_aktiv", false) ? "Bereit" : "Fehler", this._attr("status", "planung_aktiv", false) ? "good" : "bad"))}${this._diagLine("Planungsstatus", this._attr("status", "planung_aktiv", false) ? "Aktiv" : "Aus")}${this._diagLine("Planungsfehler", this._attr("status", "planungsfehler", "Keiner") || "Keiner")}${this._diagLine("Letzter Schreibzugriff", this._dateTime(this._attr("status", "letzter_schreibzugriff_ts")))}${this._diagLine("Letzter Schreibfehler", this._attr("status", "letzter_schreibfehler", "Keiner") || "Keiner")}</section>
         ${this._listCard("Aktuelle Hinweise", "mdi:alert-circle-outline", [...warnings, ...dataErrors], "Keine aktuellen Warnungen", "span-6")}
         ${this._listCard("Fehlende Entitäten", "mdi:database-remove-outline", missing, "Keine Entität fehlt", "span-6")}
@@ -1286,14 +1299,14 @@ class SpeicherLadelogikPanel extends HTMLElement {
         morgen: "für morgen vormerken",
         entfernen: "aus der Vormerkung entfernen",
       }[calibrationMatch[2]];
-      labels[key] = `Kalibrierung Venus ${model} ${action}?`;
+      labels[key] = `Kalibrierung ${this._storageLabel(model)} ${action}?`;
     }
     if (labels[key] && !window.confirm(labels[key])) return;
     await this._hass.callService("button", "press", { entity_id: entityId });
   }
 }
 
-const PANEL_ELEMENT = "speicher-ladelogik-panel-1-0-3";
+const PANEL_ELEMENT = "speicher-ladelogik-panel-1-1-0";
 
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);

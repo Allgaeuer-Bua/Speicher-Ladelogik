@@ -39,7 +39,6 @@ from .const import (
     CONF_E_MIN_CELL_TEMP,
     CONF_E_MIN_SOC,
     CONF_E_SOC,
-    CONF_ENABLED_MODELS,
     CONF_GRID_POWER,
     CONF_HOUSE_POWER,
     CONF_MPPT_SENSORS,
@@ -48,6 +47,7 @@ from .const import (
     NAME,
     VERSION,
 )
+from .storage import normalize_config
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -119,6 +119,7 @@ PANEL_ENTITIES: Final = {
     "kalibrierleistung": ("number", "kalibrierleistung"),
     "venus_a_packs": ("number", "venus_a_packs"),
     "venus_d_packs": ("number", "venus_d_packs"),
+    "venus_e_packs": ("number", "venus_e_packs"),
     "kalibrierung_venus_a_anfordern": (
         "button",
         "kalibrierung_venus_a_anfordern",
@@ -192,6 +193,8 @@ SOURCE_ENTITIES: Final = {
     "cell_temp_max_e": CONF_E_MAX_CELL_TEMP,
     "cell_temp_min_e": CONF_E_MIN_CELL_TEMP,
     "drift_e": CONF_E_CELL_DRIFT,
+    "pack_soc_e": "e_pack_soc",
+    "mppt_e": "e_mppt_sensors",
 }
 
 
@@ -211,9 +214,10 @@ def panel_entity_config(entry: ConfigEntry, entity_registry) -> dict[str, str]:
 
 def panel_source_config(entry: ConfigEntry) -> dict[str, str | list[str]]:
     """Return configured physical source entities used by the visualisation."""
+    config, _instances = normalize_config(dict(entry.data))
     sources: dict[str, str | list[str]] = {}
     for key, config_key in SOURCE_ENTITIES.items():
-        value = entry.data.get(config_key)
+        value = config.get(config_key)
         if isinstance(value, str) and value:
             sources[key] = value
         elif isinstance(value, list):
@@ -252,17 +256,17 @@ async def async_register_panel(hass: HomeAssistant, entry: ConfigEntry) -> None:
             cache_bust = VERSION
 
         registry = er.async_get(hass)
+        normalized, instances = normalize_config(dict(entry.data))
+        slots = ["A", "D", "E"][: len(instances)]
         panel_config = {
             "domain": DOMAIN,
             "title": NAME,
             "version": VERSION,
             "entities": panel_entity_config(entry, registry),
             "sources": panel_source_config(entry),
-            "models": [
-                model
-                for model in ("A", "D", "E")
-                if model in entry.data.get(CONF_ENABLED_MODELS, ["A", "E"])
-            ],
+            "models": slots,
+            "storage_labels": normalized.get("slot_names", {}),
+            "storage_models": normalized.get("slot_models", {}),
         }
 
         try:

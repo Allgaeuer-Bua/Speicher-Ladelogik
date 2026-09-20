@@ -8,7 +8,7 @@ from homeassistant.const import Platform
 
 DOMAIN: Final = "speicher_ladelogik"
 NAME: Final = "Speicher-Ladelogik"
-VERSION: Final = "1.0.3"
+VERSION: Final = "1.1.0"
 
 PLATFORMS: Final = [
     Platform.SENSOR,
@@ -29,6 +29,7 @@ CONF_PV_DAILY_ENERGY: Final = "pv_daily_energy"
 CONF_FORECAST_SENSORS: Final = "forecast_sensors"
 CONF_MOBILE_NOTIFY_SERVICE: Final = "mobile_notify_service"
 CONF_ENABLED_MODELS: Final = "enabled_models"
+CONF_STORAGE_INSTANCES: Final = "storage_instances"
 
 CONF_A_SOC: Final = "a_soc"
 CONF_A_AC_POWER: Final = "a_ac_power"
