@@ -11,9 +11,11 @@ const PHASE_LABELS = {
   idle: "Bereit",
   requested: "Auftrag vorgemerkt",
   drain: "Entladen auf 13 %",
+  empty_rest: "Untere Ruhephase",
   wait: "Warten auf PV-Fenster",
   charge: "Kalibrierladung",
-  rest: "Ruheprüfung",
+  rest: "Obere Ruhephase",
+  full_rest: "Obere Ruhephase",
   paused: "Pausiert",
   restore: "Grenzwerte wiederherstellen",
   done: "Erfolgreich beendet",
@@ -1055,12 +1057,16 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const batteryName = ["A", "D", "E"].includes(String(battery)) ? this._storageLabel(String(battery)) : "Keiner";
     const phase = this._statusLabel(cal?.state || "Bereit");
     const reason = String(this._attr("kalibrierung", "grund", "") || "").trim();
+    const restSeconds = this._num(this._attr("kalibrierung", "ruhe_verbleibend_s"), 0);
+    const restHint = restSeconds > 0
+      ? ` · noch ca. ${Math.ceil(restSeconds / 60)} min`
+      : "";
     const statusText = reason && reason !== "—"
       ? reason : phase === "Bereit" ? "Kein Kalibrierauftrag aktiv" : phase;
     return `
       <section class="card span-full calibration-card">
         ${this._cardTitle("mdi:battery-sync-outline", "Kalibrierung", this._badge(cal?.state || "—", cal?.state === "Bereit" ? "good" : "warn"))}
-        <div class="cal-state"><div><span>Speicher</span><strong>${esc(batteryName)}</strong><small>Gerät des aktuellen Kalibrierauftrags</small></div><div><span>Status</span><strong>${esc(statusText)}</strong><small>Aktuelle Phase: ${esc(phase)}</small></div><div><span>Energie</span><strong>${this._energy(this._attr("kalibrierung", "energie_ac_kwh"))}</strong><small>Bisher in diesem Kalibrierlauf geladene AC-Energie</small></div></div>
+        <div class="cal-state"><div><span>Speicher</span><strong>${esc(batteryName)}</strong><small>Gerät des aktuellen Kalibrierauftrags</small></div><div><span>Status</span><strong>${esc(statusText)}</strong><small>Aktuelle Phase: ${esc(phase)}${esc(restHint)}</small></div><div><span>Energie</span><strong>${this._energy(this._attr("kalibrierung", "energie_ac_kwh"))}</strong><small>Bisher in diesem Kalibrierlauf geladene AC-Energie</small></div></div>
         <div class="control-list calibration-setting">${this._numberRow(["kalibrierleistung", "Kalibrierleistung", "Leistung für die vollständige Kalibrierladung"])}</div>
         <div class="cal-window-grid">
           ${this._models().map((model) => `<div class="cal-window-storage"><b>${esc(this._storageLabel(model))}</b><small>Letzte Kalibrierung: ${esc(this._lastCalibration(model))}</small>${this._calibrationWindow(model, "heute", "Heute")}${this._calibrationWindow(model, "morgen", "Morgen")}</div>`).join("")}
@@ -1306,7 +1312,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 }
 
-const PANEL_ELEMENT = "speicher-ladelogik-panel-1-1-0";
+const PANEL_ELEMENT = "speicher-ladelogik-panel-1-1-1-beta-1";
 
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);

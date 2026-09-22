@@ -311,6 +311,11 @@ test("calibration status explains empty and active states", () => {
   assert.match(card, /Venus A/);
   assert.match(card, /Ladung mit 500 W/);
   assert.match(card, /Aktuelle Phase: Kalibrierung A: Kalibrierladung/);
+
+  panel._hass.states["sensor.speicher_ladelogik_kalibrierung"].state = "Kalibrierung A: full_rest";
+  panel._hass.states["sensor.speicher_ladelogik_kalibrierung"].attributes.ruhe_verbleibend_s = 3599;
+  card = panel._calibrationCard();
+  assert.match(card, /Aktuelle Phase: Kalibrierung A: Obere Ruhephase · noch ca. 60 min/);
 });
 
 test("control settings explain the effect of planning thresholds", () => {
@@ -326,7 +331,7 @@ test("control settings explain the effect of planning thresholds", () => {
 });
 
 test("frontend element name matches the integration release version", () => {
-  assert.equal(panelElementName, "speicher-ladelogik-panel-1-1-0");
+  assert.equal(panelElementName, "speicher-ladelogik-panel-1-1-1-beta-1");
   assert.equal(registry.get(panelElementName), Panel);
   assert.equal(registry.has("speicher-ladelogik-panel-1-0-1"), false);
 });

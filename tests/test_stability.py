@@ -16,6 +16,7 @@ SPEC.loader.exec_module(STABILITY)
 
 stable_charge_limit = STABILITY.stable_charge_limit
 calibration_available_surplus = STABILITY.calibration_available_surplus
+calibration_required_seconds = STABILITY.calibration_required_seconds
 target_latch = STABILITY.target_latch
 peer_discharge_release = STABILITY.peer_discharge_release
 peer_grid_support = STABILITY.peer_grid_support
@@ -45,6 +46,11 @@ def test_calibration_surplus_restores_its_own_draw() -> None:
 
 def test_calibration_surplus_does_not_help_before_start() -> None:
     assert calibration_available_surplus(120, 480, running=False) == 120
+
+
+def test_calibration_duration_is_not_rounded_to_forecast_slots() -> None:
+    assert calibration_required_seconds(3.77 / 0.5) == 27_144
+    assert calibration_required_seconds(3.77 / 0.5) < 7.75 * 3600
 
 
 def test_target_is_latched_at_device_goal() -> None:

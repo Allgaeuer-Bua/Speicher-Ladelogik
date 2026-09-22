@@ -27,9 +27,11 @@ VALID_PHASES = {
     "idle",
     "requested",
     "drain",
+    "empty_rest",
     "wait",
     "charge",
     "rest",
+    "full_rest",
     "paused",
     "restore",
     "incomplete",
@@ -38,7 +40,16 @@ VALID_PHASES = {
     "error",
 }
 
-VALID_RESUME_PHASES = {"", "requested", "drain", "wait", "charge", "rest"}
+VALID_RESUME_PHASES = {
+    "",
+    "requested",
+    "drain",
+    "empty_rest",
+    "wait",
+    "charge",
+    "rest",
+    "full_rest",
+}
 
 
 def _number(value: Any, default: float | None = None) -> float | None:

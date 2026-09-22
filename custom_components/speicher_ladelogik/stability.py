@@ -191,3 +191,8 @@ def stable_charge_limit(
     if previous > 0:
         return previous, True, "Bei kurzer Überschusspause beibehalten"
     return 0, False, "Keine Ladephase aktiv"
+
+
+def calibration_required_seconds(required_hours: float) -> int:
+    """Return the exact whole-second charging requirement for a PV window."""
+    return max(1, int(required_hours * 3600 + 0.5))

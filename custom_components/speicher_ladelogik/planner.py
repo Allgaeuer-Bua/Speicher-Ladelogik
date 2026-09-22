@@ -11,6 +11,7 @@ from homeassistant.util import dt as dt_util
 from . import persistence
 from .stability import (
     calibration_available_surplus,
+    calibration_required_seconds,
     early_soc_candidates,
     peer_discharge_release,
     peer_grid_support,
@@ -33,7 +34,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
 
     output = {}
 
-    VERSION = "1.1.0"
+    VERSION = "1.1.1-beta.1"
     NOW = float(data.get("now", time.time()))
     DAY0 = float(data.get("day0", 0))
     DAY1 = float(data.get("day1", 0))
@@ -185,13 +186,28 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     BACKUP_ID = "input_text.speicher_ladelogik_sicherung"
     CAL_BACKUP_ID = "input_text.speicher_ladelogik_kalibrierung_sicherung"
     QUEUE_ID = "input_text.speicher_ladelogik_kalibrierung_vormerkungen"
-    ACTIVE_PHASES = ["requested", "drain", "wait", "charge", "rest", "paused", "restore"]
+    EMPTY_REST_SECONDS = 90 * 60
+    FULL_REST_SECONDS = 90 * 60
+    REST_TIMEOUT_GRACE_SECONDS = 30 * 60
+    ACTIVE_PHASES = [
+        "requested",
+        "drain",
+        "empty_rest",
+        "wait",
+        "charge",
+        "rest",
+        "full_rest",
+        "paused",
+        "restore",
+    ]
     PHASE_LABELS = {
         "requested": "Auftrag vorgemerkt",
         "drain": "Entladen auf 13 %",
+        "empty_rest": "Untere Ruhephase",
         "wait": "Wartet auf PV-Fenster",
         "charge": "Kalibrierladung",
-        "rest": "Ruheprüfung",
+        "rest": "Obere Ruhephase",
+        "full_rest": "Obere Ruhephase",
         "paused": "Pausiert – Auftrag bleibt erhalten",
         "restore": "Grenzwerte wiederherstellen",
     }
@@ -411,7 +427,11 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
 
 
     def continuous_window(rows, after, required_hours, load, factor):
-        required = int((required_hours * 3600 + 899) // 900) * 900
+        # The forecast itself is provided in 15-minute buckets, but the
+        # measured energy requirement is exact. Rounding 7.54 h up to 7.75 h
+        # blocked an otherwise sufficient Venus-A window by only a few
+        # minutes. Keep the display rounded, never the hard start gate.
+        required = calibration_required_seconds(required_hours)
         beginning = None
         longest = 0
         match = None
@@ -433,7 +453,8 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             previous_end = end
         return {"ok": match is not None, "start": match["start"] if match else None,
                 "end": match["end"] if match else None,
-                "longest_h": round(longest / 3600, 2), "required_h": required / 3600}
+                "longest_h": round(longest / 3600, 2),
+                "required_h": round(required / 3600, 2)}
 
 
     read_session = persistence.read_session
@@ -466,7 +487,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
 
     def pause_session(session, reason):
         session["u"] = session["p"]
-        if session["p"] in ["charge", "rest"]:
+        if session["p"] == "charge":
             session["i"] = 1
         transition(session, "paused", reason)
 
@@ -474,6 +495,11 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     def calibration_step(session, context):
         s = session.copy()
         p = s["p"]
+        # Compatibility for sessions written by v1.1.0 while an upper rest
+        # check was active.
+        if p == "rest":
+            p = "full_rest"
+            s["p"] = p
         result = {"session": s, "charge": {}, "discharge": {}, "finish": False,
                   "notify": "", "release": False, "retry": False,
                   "peer_grid_release": False, "peer_grid_reason": ""}
@@ -520,17 +546,17 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 pause_session(s, "data_pause")
         elif p == "paused":
             resume = s["u"] or "requested"
-            if resume in ["charge", "rest"] and s["x"] + 1800 <= NOW:
+            if resume == "charge" and s["x"] + 1800 <= NOW:
                 transition(s, "restore", "retry_window")
-            elif resume not in ["charge", "rest"] or calibration_surplus >= calibration_power + 100:
+            elif resume != "charge" or calibration_surplus >= calibration_power + 100:
                 transition(s, resume, "resumed")
                 s["u"] = ""
                 s["q"] = int(NOW)
                 s["v"] = 0
         elif p == "requested":
             bat = context["batteries"][key]
-            today_ok = s["n"] <= DAY0 and bat["cal_empty_ready"] and context["today"][key]["ok"]
-            preview = context["today"][key] if today_ok else context["tomorrow"][key]
+            use_today = s["n"] <= DAY0
+            preview = context["today"][key] if use_today else context["tomorrow"][key]
             if preview["ok"] and preview["start"] >= s["n"]:
                 s["s"] = int(preview["start"])
                 s["x"] = int(preview["end"])
@@ -540,15 +566,27 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             if not context["safe"][key]:
                 s["r"] = "waiting_data"
             elif bat["cal_empty_ready"]:
-                transition(s, "wait", "waiting_pv")
+                transition(s, "empty_rest", "empty_resting")
             else:
                 # Der Tastendruck ist die ausdrückliche Benutzerfreigabe für
                 # die Vorbereitung. Uhrzeit, momentane PV-Leistung und ein
                 # bereits sicher prognostiziertes Ladefenster verzögern das
                 # Entladen daher nicht.
                 transition(s, "drain", "natural_discharge")
-                s["r"] = "no_window"
+                if not preview["ok"]:
+                    s["r"] = "no_window"
         elif p == "drain":
+            preview = (
+                context["today"][key]
+                if s["n"] <= DAY0
+                else context["tomorrow"][key]
+            )
+            if preview["ok"] and preview["start"] >= s["n"]:
+                s["s"] = int(preview["start"])
+                s["x"] = int(preview["end"])
+            else:
+                s["s"] = 0
+                s["x"] = 0
             released, _release_reason = peer_discharge_release(
                 phase=p,
                 target_soc=context["batteries"][key]["soc"],
@@ -560,33 +598,54 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 # before the later charge-confirmation use of the same field.
                 s["h"] = 1
             if context["batteries"][key]["cal_empty_ready"]:
-                transition(s, "wait", "waiting_pv")
-            elif s["s"] and s["s"] <= NOW:
-                transition(s, "restore", "retry_empty")
+                transition(s, "empty_rest", "empty_resting")
+            elif s["n"] <= DAY0 and not preview["ok"]:
+                transition(s, "restore", "retry_window")
+        elif p == "empty_rest":
+            bat = context["batteries"][key]
+            if not bat["cal_empty_ready"]:
+                transition(s, "drain", "natural_discharge")
+            elif NOW - s["t"] >= EMPTY_REST_SECONDS:
+                preview = (
+                    context["today"][key]
+                    if s["n"] <= DAY0
+                    else context["tomorrow"][key]
+                )
+                if preview["ok"] and preview["start"] >= s["n"]:
+                    s["s"] = int(preview["start"])
+                    s["x"] = int(preview["end"])
+                    transition(s, "wait", "waiting_pv")
+                else:
+                    transition(s, "restore", "retry_window")
         elif p == "wait":
-            if s["s"] <= NOW and s["n"] <= DAY0:
-                preview = context["today"][key]
-                if preview["ok"] and context["live_surplus"] >= calibration_power + 100:
-                    if context["batteries"][key]["cal_empty_ready"]:
-                        transition(s, "charge", "charging")
-                        s["s"] = int(preview["start"])
-                        s["x"] = int(preview["end"])
-                        s["q"] = int(NOW)
-                        s["v"] = 0
-                        s["w"] = 0
-                        s["h"] = 0
-                        s["i"] = 0
-                    else:
-                        transition(s, "restore", "retry_empty")
-                elif not preview["ok"]:
-                    preview = context["tomorrow"][key]
-                    if preview["ok"]:
-                        s["n"] = int(DAY1)
-                        s["s"] = int(preview["start"])
-                        s["x"] = int(preview["end"])
-                        s["r"] = "scheduled"
-                    else:
-                        transition(s, "restore", "retry_window")
+            preview = (
+                context["today"][key]
+                if s["n"] <= DAY0
+                else context["tomorrow"][key]
+            )
+            if preview["ok"] and preview["start"] >= s["n"]:
+                s["s"] = int(preview["start"])
+                s["x"] = int(preview["end"])
+            elif s["n"] <= DAY0:
+                transition(s, "restore", "retry_window")
+            if (
+                s["p"] == "wait"
+                and s["s"] <= NOW
+                and s["n"] <= DAY0
+                and preview["ok"]
+                and context["live_surplus"] >= calibration_power + 100
+            ):
+                if context["batteries"][key]["cal_empty_ready"]:
+                    transition(s, "charge", "charging")
+                    s["s"] = int(preview["start"])
+                    s["x"] = int(preview["end"])
+                    s["q"] = int(NOW)
+                    s["v"] = 0
+                    s["w"] = 0
+                    s["h"] = 0
+                    s["i"] = 0
+                else:
+                    transition(s, "restore", "retry_empty")
         elif p == "charge":
             bat = context["batteries"][key]
             power = charging_power(key, bat["power"])
@@ -608,7 +667,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 if bat["all_full"] and s["h"]:
                     s["f"] = s["f"] or int(NOW)
                     if NOW - s["f"] >= 60:
-                        transition(s, "rest", "resting")
+                        transition(s, "full_rest", "full_resting")
                 else:
                     s["f"] = 0
                 if s["p"] == "charge":
@@ -634,19 +693,20 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                         transition(s, "restore", "retry_window")
                 if s["p"] == "charge" and NOW - s["t"] > 64800:
                     transition(s, "restore", "retry_window")
-        elif p == "rest":
+        elif p == "full_rest":
             bat = context["batteries"][key]
             report_after_rest = (bat["power_reported_ts"] is not None
                                  and bat["power_reported_ts"] >= s["t"] - 1)
-            if not bat["all_full"]:
+            if bat["lowest_soc"] < 98 or bat["soc"] < 98:
                 transition(s, "restore", "full_unconfirmed")
             elif report_after_rest and bat["power"] is not None and abs(bat["power"]) <= 50:
                 s["f"] = s["f"] or int(NOW)
-                if NOW - s["f"] >= 60:
+                if NOW - s["f"] >= FULL_REST_SECONDS:
                     transition(s, "restore", "interrupted_full" if s["i"] else "success")
             else:
                 s["f"] = 0
-            if s["p"] == "rest" and NOW - s["t"] > 600:
+            if (s["p"] == "full_rest"
+                    and NOW - s["t"] > FULL_REST_SECONDS + REST_TIMEOUT_GRACE_SECONDS):
                 transition(s, "restore", "rest_timeout")
         if s["p"] == "restore":
             result["release"] = True
@@ -688,11 +748,9 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                     )
         elif s["p"] == "wait":
             result["charge"][key] = 0
-            # Nach Erreichen von 13 % bleibt die zuvor gesicherte Entladegrenze
-            # stehen. Das BMS stoppt an seiner unteren Gerätegrenze (12 %).
-            if context["backup"] is not None and context["backup"]["D" + key] >= 0:
-                result["discharge"][key] = context["backup"]["D" + key]
-        elif s["p"] in ["rest", "paused"]:
+            # Nach der unteren Ruhephase bis zum Ladebeginn ruhig halten.
+            result["discharge"][key] = 0
+        elif s["p"] in ["empty_rest", "full_rest", "paused"]:
             result["charge"][key] = 0
             result["discharge"][key] = 0
         elif s["p"] == "charge":
@@ -1260,7 +1318,11 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         if changed:
             save_backup = encode_backup(backup)
 
-    if session["p"] in ["drain", "wait", "charge", "rest", "paused"] and records_ok:
+    if (
+        session["p"]
+        in ["drain", "empty_rest", "wait", "charge", "rest", "full_rest", "paused"]
+        and records_ok
+    ):
         if cal_backup is None:
             cal_backup = {
                 **{key: -1 for key in BATTERY_KEYS},
@@ -1281,7 +1343,16 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     for key in BATTERY_KEYS:
         pending = key in queue or (session["p"] in ACTIVE_PHASES and session["b"] == key)
         held[key] = pending and raw("input_boolean.speicher_ladelogik_kalibrierung_" + key.lower() + "_laden_sperren") == "on"
-    cal_active = session["b"] if session["p"] in ["drain", "wait", "charge", "rest", "paused", "restore"] else ""
+    cal_active = session["b"] if session["p"] in [
+        "drain",
+        "empty_rest",
+        "wait",
+        "charge",
+        "rest",
+        "full_rest",
+        "paused",
+        "restore",
+    ] else ""
     caps = {key: bats[key]["cap"] if bats[key]["owns"] and bats[key]["usable_data"] and failure_counts[key] < 3
             and not reaction_blocked_prior[key] and not bats[key]["target_met"]
             and key != cal_active and not held[key] else 0 for key in BATTERY_KEYS}
@@ -1628,7 +1699,15 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         order.insert(0, session["b"])
     for key in order:
         permitted = records_ok and bats[key]["owns"] and failure_counts[key] < 3 and backup is not None and backup[key] >= 0
-        active_own = session["p"] in ["drain", "wait", "charge", "rest", "paused"] and session["b"] == key
+        active_own = session["p"] in [
+            "drain",
+            "empty_rest",
+            "wait",
+            "charge",
+            "rest",
+            "full_rest",
+            "paused",
+        ] and session["b"] == key
         restoring_fields = []
         if cal_backup is not None:
             for field in ["D" + key, key]:
@@ -1716,8 +1795,10 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "waiting_pv": "Leer vorbereitet; wartet auf vorgesehenes PV-Fenster",
         "natural_discharge": "Vorbereitung durch Hausverbrauch; keine erzwungene Einspeisung",
         "charging": str(calibration_power) + "-W-Limit; tatsächliche Ladeleistung wird überwacht",
-        "resting": "Alle erwarteten SoCs bei 100 %; Ruhephase",
-        "success": "100 % und Ruhe bestätigt; eigene Grenzwerte zurückgegeben",
+        "empty_resting": "13 % erreicht; 90 Minuten untere Ruhephase",
+        "resting": "Alle erwarteten SoCs bei 100 %; obere Ruhephase",
+        "full_resting": "100 % bestätigt; 90 Minuten obere Ruhephase für das BMS",
+        "success": "100 % und 90 Minuten obere Ruhephase bestätigt; eigene Grenzwerte zurückgegeben",
         "cancelled": "Vom Benutzer, Betriebsmodus oder eigener Freigabe beendet",
         "restart": "Neustart: vorheriger Lauf zurückgegeben; neuer Versuch vorgemerkt",
         "data_pause": "Pausiert: erforderliche eigene Daten oder Steuerung ungültig",
@@ -1743,7 +1824,16 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     cal_reason = reasons.get(session["r"], session["r"])
     if session["p"] in ["requested", "paused"] and session["b"] in cal_errors and cal_errors[session["b"]]:
         cal_reason = cal_reason + ": " + "; ".join(cal_errors[session["b"]])
-    if session["p"] in ["drain", "wait", "charge", "rest", "paused", "restore"]:
+    if session["p"] in [
+        "drain",
+        "empty_rest",
+        "wait",
+        "charge",
+        "rest",
+        "full_rest",
+        "paused",
+        "restore",
+    ]:
         status = "Kalibrierung " + session["b"] + ": " + session["p"]
         reason = cal_reason
     if all([failure_counts[key] >= 3 for key in BATTERY_KEYS]):
@@ -1924,6 +2014,15 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "leistung_w": calibration_power,
         "energie_ac_kwh": round(session["w"] / 1000, 3), "start_ts": session["s"] or None,
         "ende_ts": session["x"] or None,
+        "ruhedauer_unten_min": EMPTY_REST_SECONDS // 60,
+        "ruhedauer_oben_min": FULL_REST_SECONDS // 60,
+        "ruhe_verbleibend_s": (
+            max(0, EMPTY_REST_SECONDS - (NOW - session["t"]))
+            if session["p"] == "empty_rest"
+            else max(0, FULL_REST_SECONDS - (NOW - (session["f"] or NOW)))
+            if session["p"] in ["rest", "full_rest"]
+            else 0
+        ),
         "peer_entladesperre_freigegeben": bool(
             session["p"] == "drain" and (session["h"] or session["v"])
         ),
@@ -1973,7 +2072,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     output["clear_backup"] = clear_backup
     output["save_cal_backup"] = save_cal_backup
     output["clear_cal_backup"] = clear_cal_backup
-    output["capture_drift"] = original_phase == "rest" and session["r"] == "success"
+    output["capture_drift"] = original_phase in ["rest", "full_rest"] and session["r"] == "success"
     output["commands"] = hardware_commands
     output["execute"] = can_execute
     output["finish"] = cal["finish"]

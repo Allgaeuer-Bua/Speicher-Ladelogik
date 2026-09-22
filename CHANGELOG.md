@@ -1,5 +1,18 @@
 # Änderungsverlauf
 
+## 1.1.1-beta.1
+
+- Vorabversion zum Praxistest; kein Merge in den stabilen `main`-Branch.
+- Ein heute ausreichendes Kalibrierfenster wird unabhängig davon erkannt, ob
+  der Speicher bereits 13 % erreicht hat, und während der Vorbereitung neu
+  bewertet.
+- Die benötigte Ladedauer wird sekundengenau statt auf den nächsten
+  15-Minuten-Schritt aufgerundet geprüft.
+- Testablauf nach Marstek-Empfehlung: bis 13 % entladen, 90 Minuten untere
+  Ruhephase, mit der eingestellten Kalibrierleistung laden und anschließend
+  90 Minuten obere Ruhephase. In beiden Ruhephasen sind Laden und Entladen
+  gesperrt.
+
 ## 1.1.0
 
 - Bis zu drei unabhängige Speicherinstanzen; Modelle A, D und E dürfen mehrfach

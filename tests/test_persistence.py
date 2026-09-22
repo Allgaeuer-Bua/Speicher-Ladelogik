@@ -38,6 +38,15 @@ def test_reads_current_session() -> None:
     assert session["r"] == "natural"
 
 
+def test_round_trips_new_calibration_rest_phases() -> None:
+    for phase in ("empty_rest", "full_rest"):
+        session = PERSISTENCE.read_session("")
+        session.update({"p": phase, "b": "A", "t": 10, "r": "resting"})
+        restored = PERSISTENCE.read_session(PERSISTENCE.encode_session(session))
+        assert restored["p"] == phase
+        assert restored["b"] == "A"
+
+
 def test_rejects_corrupt_session() -> None:
     session = PERSISTENCE.read_session("v3|broken")
     assert session["p"] == "error"
