@@ -1,5 +1,21 @@
 # Änderungsverlauf
 
+## 1.1.1-beta.2
+
+- Verlaufsdiagramme werden als durchgehende Linien dargestellt; der doppelte
+  Leistungsgraph auf der Übersicht entfällt.
+- Die Speicheransicht zeigt die tatsächliche Lade- und Entladegrenze getrennt.
+- Die Steuerungsseite beginnt mit Kalibrierung und Handbetrieb.
+- Bevorzugte, maximale automatische Lade- und maximale automatische
+  Entladeleistung sind je Speicher getrennt einstellbar.
+- Reicht die bevorzugte Ladeleistung nicht, wird die kleinste passende
+  50-W-Zwischenstufe geplant, statt unmittelbar auf das Gerätemaximum zu gehen.
+- Die Mindestreserve ist je Speicher einstellbar und kann einzelne Geräte beim
+  frühen Sichern priorisieren.
+- Das Mittagsfenster orientiert sich am lokalen Sonnenhöchststand. Vor- und
+  Nachlauf sind getrennt einstellbar; Standard sind zwei Stunden vorher und
+  vier Stunden nachher.
+
 ## 1.1.1-beta.1
 
 - Vorabversion zum Praxistest; kein Merge in den stabilen `main`-Branch.

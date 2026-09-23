@@ -11,7 +11,7 @@ oder Speichern. Sie verwendet vorhandene Home-Assistant-Entitäten. Dadurch
 können Messwerte aus unterschiedlichen Integrationen und von verschiedenen
 Anbietern verwendet werden, sofern Bedeutung, Einheit und Vorzeichen passen.
 
-> **Version im Quellcode:** 1.1.1-beta.1 (Vorabversion zum Praxistest)
+> **Version im Quellcode:** 1.1.1-beta.2 (Vorabversion zum Praxistest)
 > **Erforderliche Home-Assistant-Version:** 2026.9.1 oder neuer
 
 ## Wofür ist die Integration gedacht?
@@ -94,15 +94,19 @@ bei Venus A/D die vorhandenen Pack-Sensoren.
 - Fahrplan aus PV-Prognose, realem Ertrag, Hauslast und Netzbilanz
 - PV-AC-Messung mit MPPT- und Bilanz-Fallback
 - getrennte Planung für jeden konfigurierten Speicher
-- frei einstellbare bevorzugte Ladeleistung und Nennkapazität
-- Mittagsspitzenkappung mit planbarem Einspeiseziel
+- bevorzugte sowie maximale automatische Ladeleistung je Speicher
+- maximale automatische Entladeleistung je Speicher
+- dynamisch erforderliche Zwischenstufen in 50-W-Schritten
+- Mittagsspitzenkappung mit einem einstellbaren Fenster relativ zum lokalen
+  Sonnenhöchststand
 - Berücksichtigung von Prognosegüte, Reserve und verfügbarem Tagesfenster
 - optionales frühes SoC-Ladeziel je Speicher (0 % deaktiviert): Bei mindestens
   200 W aktuellem PV-Überschuss werden Speicher unter ihrem Ziel zuerst
-  geladen; anschließend gilt der normale Fahrplan. Die gemeinsame
-  Mindestreserve in kWh bleibt zusätzlich einstellbar und kann auf 0 gesetzt
-  werden. Beide Einstellungen ändern keine Gerätegrenzen und erzwingen keinen
-  Netzbezug.
+  geladen; anschließend gilt der normale Fahrplan. Die Mindestreserve in kWh
+  ist für jeden Speicher einzeln einstellbar und kann auf 0 gesetzt werden.
+  So lässt sich gezielt priorisieren, welcher Speicher früh Energie sichern
+  soll. Beide Einstellungen ändern keine SoC-Gerätegrenzen und erzwingen
+  keinen Netzbezug.
 - stabile Leistungsgrenzen ohne unnötige Wiederholung identischer Schreibwerte
 - keine künstliche Reduzierung allein aufgrund eines SoC oberhalb von 90 %
 
@@ -172,8 +176,9 @@ Home-Assistant-Entität. Das mitgelieferte YAML-Dashboard im Verzeichnis
 
 Die Tagesplanung zeigt die noch erwartete PV-Erzeugung als **Restprognose
 heute**. Die Einspeiseleistung bei der Mittagsspitze ist ein Planungswert und
-keine feste Grenze am Netzanschluss. Verlaufsdiagramme verbinden keine
-unterschiedlichen Messwerte über längere Datenlücken hinweg.
+keine feste Grenze am Netzanschluss. Verlaufsdiagramme werden durchgehend
+dargestellt, auch wenn ein Sensor zwischen zwei Werten längere Zeit keine
+Änderung gemeldet hat.
 
 ## Installation über HACS
 

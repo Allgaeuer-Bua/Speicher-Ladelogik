@@ -34,7 +34,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
 
     output = {}
 
-    VERSION = "1.1.1-beta.1"
+    VERSION = "1.1.1-beta.2"
     NOW = float(data.get("now", time.time()))
     DAY0 = float(data.get("day0", 0))
     DAY1 = float(data.get("day1", 0))
@@ -42,6 +42,9 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     NINE = float(data.get("nine", 0))
     ELEVEN = float(data.get("eleven", 0))
     DEADLINE = float(data.get("deadline", 0))
+    SOLAR_NOON = float(data.get("solar_noon", 0))
+    MIDDAY_START = float(data.get("midday_start", NINE))
+    MIDDAY_END = float(data.get("midday_end", DEADLINE))
     REQUEST = str(data.get("request", "tick"))
     BATTERY_KEYS = [
         key for key in data.get("battery_keys", ["A", "E"])
@@ -426,6 +429,50 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         return {"finish": finish, "missing": sum(remaining.values())}
 
 
+    def minimum_working_caps(rows, start, end, battery_data, preferred_caps,
+                             hard_caps, load, eta, charge_after):
+        """Find the lowest 50-W cap blend that still reaches the target."""
+        preferred_result = simulate(
+            rows, start, end, battery_data, preferred_caps, load, 1, eta,
+            charge_after,
+        )
+        if preferred_result["finish"] is not None:
+            return preferred_caps.copy(), preferred_result
+
+        hard_result = simulate(
+            rows, start, end, battery_data, hard_caps, load, 1, eta,
+            charge_after,
+        )
+        if hard_result["finish"] is None:
+            return hard_caps.copy(), hard_result
+
+        low = 0.0
+        high = 1.0
+        best_caps = hard_caps.copy()
+        best_result = hard_result
+        for _iteration in range(7):
+            fraction = (low + high) / 2
+            candidate = {}
+            for key in BATTERY_KEYS:
+                span = max(0, hard_caps[key] - preferred_caps[key])
+                value = preferred_caps[key] + span * fraction
+                candidate[key] = min(
+                    hard_caps[key],
+                    int((value + 49) // 50) * 50,
+                )
+            result = simulate(
+                rows, start, end, battery_data, candidate, load, 1, eta,
+                charge_after,
+            )
+            if result["finish"] is not None:
+                high = fraction
+                best_caps = candidate
+                best_result = result
+            else:
+                low = fraction
+        return best_caps, best_result
+
+
     def continuous_window(rows, after, required_hours, load, factor):
         # The forecast itself is provided in 15-minute buckets, but the
         # measured energy requirement is exact. Rounding 7.54 h up to 7.75 h
@@ -806,7 +853,10 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     eta = setting("ladewirkungsgrad", 90, 75, 100) / 100
     safety = setting("prognose_sicherheit", 90, 50, 100) / 100
     extra = setting("unplanbare_reserve", 1, 0, 4)
-    reserve = setting("mindestreserve", 2, 0, 5)
+    reserves = {
+        key: setting("mindestreserve_" + key.lower() + "_kwh", 1, 0, 20)
+        for key in BATTERY_KEYS
+    }
     early_soc_goals = {
         key: setting("fruehes_ladeziel_" + key.lower() + "_soc", 0, 0, 100)
         for key in BATTERY_KEYS
@@ -837,9 +887,27 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     manual_active = any(manual_active_by_key.values())
     for key in BATTERY_KEYS:
         cfg = BATTERIES[key]
-        cfg["maximum"] = advertised_maximum(cfg["charge"], cfg["maximum"])
-        cfg["discharge_maximum"] = advertised_maximum(
-            cfg["discharge"], cfg["maximum"]
+        cfg["device_maximum"] = advertised_maximum(cfg["charge"], cfg["maximum"])
+        cfg["device_discharge_maximum"] = advertised_maximum(
+            cfg["discharge"], cfg["device_maximum"]
+        )
+        cfg["maximum"] = rounded_limit(
+            setting(
+                "maximale_ladeleistung_" + key.lower() + "_w",
+                cfg["device_maximum"],
+                0,
+                cfg["device_maximum"],
+            ),
+            cfg["device_maximum"],
+        )
+        cfg["discharge_maximum"] = rounded_limit(
+            setting(
+                "maximale_entladeleistung_" + key.lower() + "_w",
+                cfg["device_discharge_maximum"],
+                0,
+                cfg["device_discharge_maximum"],
+            ),
+            cfg["device_discharge_maximum"],
         )
         cfg["preferred"] = rounded_limit(
             setting(
@@ -856,9 +924,9 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     )
     calibration_min_power = max(300, calibration_power * 0.8)
     manual_charge = {key: rounded_limit(number(raw(MANUAL_CHARGE[key]), 0),
-                                        BATTERIES[key]["maximum"]) for key in BATTERY_KEYS}
+                                        BATTERIES[key]["device_maximum"]) for key in BATTERY_KEYS}
     manual_discharge = {key: rounded_limit(number(raw(MANUAL_DISCHARGE[key]), 0),
-                                           BATTERIES[key]["discharge_maximum"]) for key in BATTERY_KEYS}
+                                           BATTERIES[key]["device_discharge_maximum"]) for key in BATTERY_KEYS}
     failure_counts = {}
     for key in BATTERY_KEYS:
         failure_counts[key] = number(raw("input_number.speicher_ladelogik_schreibfehler_" + key.lower()),
@@ -1308,7 +1376,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             }
         changed = False
         for key in BATTERY_KEYS:
-            fields = [key, "D" + key] if manual_active_by_key[key] else [key]
+            fields = [key, "D" + key]
             for field in fields:
                 entity = BATTERIES[key]["discharge" if field.startswith("D") else "charge"]
                 if (bats[key]["owns"] and failure_counts[key] < 3 and backup[field] == -1
@@ -1361,7 +1429,16 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     target_energy = sum([bats[key]["target"] for key in BATTERY_KEYS])
     normal_stored = sum([bats[key]["stored"] for key in BATTERY_KEYS if caps[key] > 0])
     normal_target = sum([bats[key]["target"] for key in BATTERY_KEYS if caps[key] > 0])
-    normal_reserve = reserve * normal_target / max(0.001, target_energy)
+    reserve_targets = {
+        key: min(reserves[key], bats[key]["target"]) if caps[key] > 0 else 0
+        for key in BATTERY_KEYS
+    }
+    normal_reserve = sum(reserve_targets.values())
+    reserve_open_keys = [
+        key for key in BATTERY_KEYS
+        if reserve_targets[key] > 0
+        and bats[key]["stored"] + 0.02 < reserve_targets[key]
+    ]
     early_soc_keys = early_soc_candidates(caps, bats, early_soc_goals)
     need = sum(needs.values())
     max_total = sum(caps.values())
@@ -1376,35 +1453,50 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     solar_rows = [row for row in rows if row["wh"] * 4 > load]
     solar_start = solar_rows[0]["t"] if solar_rows else None
     solar_end = solar_rows[-1]["t"] + 900 if solar_rows else None
-    end = min(DEADLINE, solar_end) if solar_end is not None else DEADLINE
+    end = min(MIDDAY_END, solar_end) if solar_end is not None else MIDDAY_END
     if end <= NOW:
         end = solar_end if solar_end is not None else DAY1
-    preferred = max(preferred, solar_start if solar_start is not None else preferred)
+    preferred = max(
+        preferred,
+        MIDDAY_START,
+        solar_start if solar_start is not None else preferred,
+    )
     simulation_bats = {}
     for key in BATTERY_KEYS:
         simulation_bats[key] = bats[key].copy()
         simulation_bats[key]["need"] = needs[key]
-    preferred_sim = simulate(normal_rows, NOW, max(NOW, end - 1800), simulation_bats, caps, load, 1, eta, preferred)
+    simulation_end = max(NOW, end - 1800)
+    preferred_sim = simulate(
+        normal_rows, NOW, simulation_end, simulation_bats, caps, load, 1, eta,
+        preferred,
+    )
     start = preferred
     early = need > 0 and preferred_sim["finish"] is None
     if early:
         start = min(NOW, preferred)
     hard_caps = caps.copy()
     efficient_caps = {key: min(caps[key], BATTERIES[key]["preferred"]) for key in BATTERY_KEYS}
-    efficiency_mode = "Bevorzugte Leistung"
-    efficiency_sim = simulate(normal_rows, NOW, max(NOW, end - 1800), simulation_bats,
-                              efficient_caps, load, 1, eta, preferred)
-    if need > 0 and efficiency_sim["finish"] is None:
-        efficiency_sim = simulate(normal_rows, NOW, max(NOW, end - 1800), simulation_bats,
-                                  efficient_caps, load, 1, eta, NOW)
-        if efficiency_sim["finish"] is not None:
-            start = min(NOW, preferred)
-            early = True
-            efficiency_mode = "Früher beginnen mit bevorzugter Leistung"
-        else:
-            efficiency_mode = "Mehr Leistung erforderlich; Ladeziel hat Vorrang"
-    if need <= 0 or efficiency_sim["finish"] is not None:
-        caps = efficient_caps
+    caps, efficiency_sim = minimum_working_caps(
+        normal_rows,
+        NOW,
+        simulation_end,
+        simulation_bats,
+        efficient_caps,
+        hard_caps,
+        load,
+        eta,
+        start,
+    )
+    if need <= 0 or caps == efficient_caps:
+        efficiency_mode = (
+            "Früher beginnen mit bevorzugter Leistung"
+            if early else "Bevorzugte Leistung reicht aus"
+        )
+    elif efficiency_sim["finish"] is not None:
+        efficiency_mode = "Dynamisch erforderliche Leistung"
+    else:
+        efficiency_mode = "Automatische Maximalleistung erforderlich"
+    planned_caps = caps.copy()
     max_total = sum(caps.values())
     safe_rest = 0
     window_wh = 0
@@ -1474,16 +1566,29 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             total = max_total
             status = "PV-Fallback"
             reason = "Prognose ungültig; AstraMeter darf realen Überschuss aufnehmen"
-        elif scarce or normal_stored < min(normal_reserve, normal_target):
+        elif reserve_open_keys:
+            caps = {
+                key: planned_caps[key] if key in reserve_open_keys else 0
+                for key in BATTERY_KEYS
+            }
+            max_total = sum(caps.values())
+            start = min(start, NOW)
+            efficiency_mode = "Mindestreserve je Speicher sichern"
+            total = max_total
+            status = "Mindestreserve"
+            reason = "Früh abzusichernde Energie zuerst für " + "/".join(
+                SLOT_NAMES[key] for key in reserve_open_keys
+            )
+        elif scarce:
             caps = hard_caps
             max_total = sum(caps.values())
             start = min(start, NOW)
             efficiency_mode = "Reserve sichern; Ladeziel hat Vorrang"
             total = max_total
             status = "Sichern"
-            reason = "Knappheit oder Mindestreserve; vorhandenen Ueberschuss sichern"
+            reason = "Knappheit; vorhandenen Überschuss mit Vorrang sichern"
         else:
-            if peak_enabled and not early and min(end, DEADLINE) - 1800 > NOW:
+            if peak_enabled and not early and end - 1800 > NOW:
                 peak = peak_plan(normal_rows, end - 1800, simulation_bats, caps, load, eta, preferred)
             if peak["ok"]:
                 total = min(max(0, normal_live - peak["target"]), max(0, current_normal_surplus - peak["target"])) if preferred <= NOW else 0
@@ -1495,12 +1600,22 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 total = current_opportunity * min(1, quota_wh / max(1, window_wh))
                 if early:
                     total = max(total, min(max_total, need / eta * 1000 / max(0.25, (end - NOW) / 3600)))
-                if NOW >= DEADLINE:
+                if NOW >= end:
                     total = max_total
                 if total > 25:
                     total = max(total, min(max_total, setting("min_effiziente_leistung", 800, 0, 1500)))
                 status = "Vorladen" if early and preferred > NOW else "Fahrplanladen"
-                reason = "Spätere Ertragsfenster reichen nicht; Ladebeginn vorgezogen" if early and preferred > NOW else "Laden nach verbleibenden Viertelstunden-Überschüssen"
+                if efficiency_mode == "Dynamisch erforderliche Leistung":
+                    reason = "Bevorzugte Leistung reicht zeitlich nicht; dynamisch geplant: " + ", ".join(
+                        SLOT_NAMES[key] + " " + str(caps[key]) + " W"
+                        for key in BATTERY_KEYS if caps[key] > 0
+                    )
+                elif efficiency_mode == "Automatische Maximalleistung erforderlich":
+                    reason = "Ladeziel ist selbst mit den automatischen Maximalgrenzen knapp"
+                elif early and preferred > NOW:
+                    reason = "Spätere Ertragsfenster reichen nicht; Ladebeginn vorgezogen"
+                else:
+                    reason = "Bevorzugte Ladeleistung reicht bis zum dynamischen Fensterende"
             else:
                 status = "Zurückhalten"
                 reason = "Spätere PV-Fenster decken Restbedarf einschließlich Lade-Endphase"
@@ -1559,12 +1674,28 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         or all(number(prior_early_goals.get(key), 0) == goal
                for key, goal in early_soc_goals.items())
     )
+    prior_reserves = prior_attributes.get("mindestreserve_pro_speicher_kwh")
+    reserves_unchanged = (
+        not isinstance(prior_reserves, dict)
+        or all(number(prior_reserves.get(key), 0) == value
+               for key, value in reserves.items())
+    )
+    midday_window_unchanged = (
+        number(prior_attributes.get("sonnenhoechststand_ts"), SOLAR_NOON)
+        == SOLAR_NOON
+        and number(prior_attributes.get("mittagsfenster_start_ts"), MIDDAY_START)
+        == MIDDAY_START
+        and number(prior_attributes.get("mittagsfenster_ende_ts"), MIDDAY_END)
+        == MIDDAY_END
+    )
     decision_slot_locked = (
         prior_slot_start_ts is not None
         and int(prior_slot_start_ts) == slot_start_ts
         and prior_automatic
         and peak_setting_unchanged
         and early_goals_unchanged
+        and reserves_unchanged
+        and midday_window_unchanged
         and (not isinstance(prior_early_keys, list) or prior_early_keys == early_soc_keys)
     )
     within_charge_window = start <= NOW < end
@@ -1727,7 +1858,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 release_ready = False
         manual_d_field = "D" + key
         restore_manual_discharge = (backup is not None and backup[manual_d_field] >= 0
-                                    and (not manual_active_by_key[key] or not automatic)
+                                    and not automatic
                                     and not active_own and key not in cal["discharge"]
                                     and not key_restoring)
         if restore_manual_discharge:
@@ -1765,6 +1896,12 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                         hardware_commands.append({"entity": BATTERIES[key]["discharge"], "value": value, "battery": key, "restore": False})
                 elif manual_active_by_key[key] and manual_allowed.get(key, False) and not key_restoring:
                     value = manual_discharge[key]
+                    if (writable(BATTERIES[key]["discharge"], value)
+                            and write_needed(current_caps["D" + key], value)):
+                        hardware_commands.append({"entity": BATTERIES[key]["discharge"], "value": value,
+                                                  "battery": key, "restore": False})
+                elif not active_own and not key_restoring:
+                    value = BATTERIES[key]["discharge_maximum"]
                     if (writable(BATTERIES[key]["discharge"], value)
                             and write_needed(current_caps["D" + key], value)):
                         hardware_commands.append({"entity": BATTERIES[key]["discharge"], "value": value,
@@ -1880,6 +2017,12 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "bevorzugte_ladeleistung_a_w": BATTERIES["A"]["preferred"],
         "bevorzugte_ladeleistung_d_w": BATTERIES["D"]["preferred"],
         "bevorzugte_ladeleistung_e_w": BATTERIES["E"]["preferred"],
+        "maximale_ladeleistung_a_w": BATTERIES["A"]["maximum"],
+        "maximale_ladeleistung_d_w": BATTERIES["D"]["maximum"],
+        "maximale_ladeleistung_e_w": BATTERIES["E"]["maximum"],
+        "maximale_entladeleistung_a_w": BATTERIES["A"].get("discharge_maximum", BATTERIES["A"]["maximum"]),
+        "maximale_entladeleistung_d_w": BATTERIES["D"].get("discharge_maximum", BATTERIES["D"]["maximum"]),
+        "maximale_entladeleistung_e_w": BATTERIES["E"].get("discharge_maximum", BATTERIES["E"]["maximum"]),
         "prognose_tagesfaktor": round(day_factor, 3),
         "prognose_kurzfristfaktor": round(short_factor, 3), "prognose_qualitaetsfaktor": round(day_factor, 3),
         "prognose_effektivfaktor": round(short_factor * safety, 3), "prognose_rest_roh_kwh": round(raw_rest, 3),
@@ -1890,6 +2033,9 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "ueberschuss_bilanz_w": round(balance_surplus) if balance_surplus is not None else None,
         "tagesklasse": category,
         "solarfenster_start_ts": solar_start, "solarfenster_ende_ts": solar_end,
+        "sonnenhoechststand_ts": SOLAR_NOON,
+        "mittagsfenster_start_ts": MIDDAY_START,
+        "mittagsfenster_ende_ts": MIDDAY_END,
         "ladefenster_start_ts": start, "ladefenster_ende_ts": end,
         "ladefenster_dauer_h": round(max(0, end - start) / 3600, 2),
         "fenster_fortschritt_prozent": round(max(0, min(100, (NOW - start) / max(1, end - start) * 100)), 1),
@@ -1899,6 +2045,8 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "sicher_speicherbar_fenster_rest_kwh": round(window_wh / 1000 * eta, 3),
         "deckungsfaktor": round(safe_rest / reported_need, 2) if reported_need > 0.001 else 99,
         "knapp": scarce, "gespeicherte_energie_kwh": round(stored, 4), "zielenergie_kwh": round(target_energy, 4),
+        "mindestreserve_pro_speicher_kwh": reserves,
+        "mindestreserve_offen": reserve_open_keys,
         "restbedarf_kwh": round(reported_need, 4), "restbedarf_ac_kwh": round(reported_need / eta, 4),
         "fahrplanenergie_jetzt_kwh": round(stored - normal_stored + max(0, normal_target - window_wh / 1000 * eta), 3),
         "mindestenergie_jetzt_kwh": round(stored - normal_stored + min(normal_target, max(normal_reserve, normal_target - window_wh / 1000 * eta)), 3),

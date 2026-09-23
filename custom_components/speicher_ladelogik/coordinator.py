@@ -85,6 +85,11 @@ _STABILITY_KEYS = tuple(
     "betriebsart",
     "regelung_aktiv",
     "mittagsspitzen_aktiv",
+    "sonnenhoechststand_ts",
+    "mittagsfenster_start_ts",
+    "mittagsfenster_ende_ts",
+    "mindestreserve_pro_speicher_kwh",
+    "mindestreserve_offen",
     "fahrplan_slot_start_ts",
     "fahrplan_slot_ende_ts",
     "fahrplan_slot_aktiv_venus_a",
@@ -117,6 +122,8 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             model = str(instance["model"])
             modules = int(instance.get("modules", MODEL_DEFAULT_MODULES.get(model, 1)))
             self._control[f"bevorzugte_ladeleistung_{name}_w"] = MODEL_PREFERRED_W[model]
+            self._control[f"maximale_ladeleistung_{name}_w"] = MODEL_MAXIMUM_W[model]
+            self._control[f"maximale_entladeleistung_{name}_w"] = MODEL_MAXIMUM_W[model]
             self._control[f"nennkapazitaet_{name}_kwh"] = nominal_capacity(model, modules)
             self._control[f"manuell_entladen_{name}_w"] = MODEL_MAXIMUM_W[model]
             if model in MODEL_DEFAULT_MODULES:
@@ -209,6 +216,8 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             maximum = MODEL_MAXIMUM_W[model]
             for field in (
                 f"bevorzugte_ladeleistung_{name}_w",
+                f"maximale_ladeleistung_{name}_w",
+                f"maximale_entladeleistung_{name}_w",
                 f"manuell_laden_{name}_w",
                 f"manuell_entladen_{name}_w",
             ):
@@ -225,6 +234,31 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._control[f"nennkapazitaet_{name}_kwh"] = nominal_capacity(
                     model, modules
                 )
+
+    def _migrate_storage_reserves(self, loaded_control: dict[str, Any]) -> None:
+        """Split the former shared reserve without changing its total energy."""
+        keys = [f"mindestreserve_{slot.lower()}_kwh" for slot in self.enabled_models]
+        if not keys or any(key in loaded_control for key in keys):
+            return
+
+        legacy = max(0.0, float(self._control.get("mindestreserve", 2.0)))
+        capacities = {
+            slot: max(
+                0.1,
+                float(self._control.get(f"nennkapazitaet_{slot.lower()}_kwh", 1.0)),
+            )
+            for slot in self.enabled_models
+        }
+        total_capacity = sum(capacities.values())
+        remaining = round(legacy, 1)
+        for index, slot in enumerate(self.enabled_models):
+            key = f"mindestreserve_{slot.lower()}_kwh"
+            if index == len(self.enabled_models) - 1:
+                value = remaining
+            else:
+                value = round(legacy * capacities[slot] / total_capacity, 1)
+                remaining = round(max(0.0, remaining - value), 1)
+            self._control[key] = value
 
     async def async_set_mode(self, mode: str) -> None:
         """Set the native operating mode after validating active control."""
@@ -321,8 +355,10 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._state_loaded:
             return
         stored = await self._stability_store.async_load()
+        loaded_control: dict[str, Any] = {}
         if isinstance(stored, dict) and "control" in stored:
-            self._control.update(stored.get("control", {}))
+            loaded_control = dict(stored.get("control", {}))
+            self._control.update(loaded_control)
             self._stored_stability = dict(stored.get("stability", {}))
         else:
             # One-time migration. The first RC deliberately starts in
@@ -352,6 +388,7 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._control["mode"] = "Beobachten"
             self._control["migrated_from_legacy"] = True
         self._sync_model_controls()
+        self._migrate_storage_reserves(loaded_control)
         self._state_loaded = True
         self._last_plan = self._stored_stability or None
         self._schedule_state_save()

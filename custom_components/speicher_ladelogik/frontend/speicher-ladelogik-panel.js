@@ -29,7 +29,6 @@ const NUMBER_GROUPS = {
     ["min_effiziente_leistung", "Mindestwert für geplantes Laden", "Zielwert beim normalen Fahrplanladen; keine erzwungene Ladeleistung"],
   ],
   planung: [
-    ["mindestreserve", "Mindestreserve", "Früh abzusichernde gespeicherte Energie"],
     ["unplanbare_reserve", "Wolkenreserve", "Abzug vom prognostizierten Restüberschuss"],
     ["prognose_sicherheit", "Prognosesicherheit", "Anteil der Prognose, mit dem geplant wird"],
     ["ladewirkungsgrad", "Planungswirkungsgrad", "Anteil der AC-Energie, der im Speicher ankommt"],
@@ -45,12 +44,13 @@ const NUMBER_GROUPS = {
 
 const NUMBER_HELP = {
   leistung: [
-    ["Venus A / D / E", "Bevorzugte Obergrenze für das normale Laden je Gerät. Reicht das geplante PV-Fenster damit nicht aus, darf die Planung die Ladegrenze erhöhen."],
+    ["Bevorzugte Ladeleistung", "Mit dieser Ladegrenze plant das System zuerst. Reicht sie nicht aus, wird nur so weit wie nötig bis zur automatischen Maximalleistung erhöht."],
+    ["Automatische Maximalleistung", "Harte Obergrenze für den automatischen Lade- beziehungsweise Entladebetrieb. Der Handbetrieb besitzt weiterhin eigene Werte."],
     ["Mindestwert für geplantes Laden", "Läuft eine reguläre Ladung mit mehr als 25 W an, hebt die Planung ihr Ziel nach Möglichkeit mindestens auf diesen Wert an. Der tatsächliche Verbrauch hängt weiterhin vom PV-Überschuss, vom Gerät und von der Regelung ab."],
   ],
   planung: [
     ["Frühes Ladeziel je Speicher", "0 % deaktiviert das jeweilige Ziel. Oberhalb der unteren Gerätegrenze lädt zuerst jeder Speicher unter seinem Ziel, sobald mindestens 200 W PV-Überschuss verfügbar sind. Danach gilt der normale Fahrplan. Die untere SoC-Grenze des Geräts bleibt unverändert."],
-    ["Mindestreserve", "Gemeinsames bisheriges Ziel in kWh zusätzlich zu den SoC-Zielen je Speicher. So viel nutzbare Energie soll bei PV-Überschuss früh gesichert sein; 0 kWh deaktiviert es."],
+    ["Mindestreserve je Speicher", "Früh abzusichernde Energie in jedem einzelnen Speicher. 0 kWh deaktiviert sie für dieses Gerät und ermöglicht eine klare Priorisierung."],
     ["Wolkenreserve", "Dieser kWh-Wert wird vom für den restlichen Tag erwarteten speicherbaren PV-Überschuss abgezogen. Höher bedeutet vorsichtiger planen."],
     ["Prognosesicherheit", "Nur dieser Prozentsatz der 15-Minuten-PV-Prognose fließt in die Planung ein. 90 % bedeutet: 10 % der prognostizierten Energie werden nicht fest eingeplant."],
     ["Planungswirkungsgrad", "Schätzt Ladeverluste zwischen AC-Eingang und gespeicherter Energie. Bei 90 % werden aus 1 kWh AC rechnerisch 0,9 kWh im Speicher."],
@@ -83,7 +83,6 @@ class SpeicherLadelogikPanel extends HTMLElement {
     this._historyLoadedAt = 0;
     this._historyLoading = false;
     this._historyHours = {
-      overviewPower: 24,
       overviewSoc: 24,
       batteryA: 24,
       batteryD: 24,
@@ -389,20 +388,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 
   _chartSegments(points) {
-    // A straight line through hours without a measurement looks like a real
-    // power ramp. Keep unchanged values connected, but show changing values
-    // after a long pause as a new segment.
-    const segments = [];
-    for (const point of points) {
-      const current = segments.at(-1);
-      const previous = current?.at(-1);
-      if (!previous || (point.t - previous.t > 15 * 60_000 && Math.abs(point.v - previous.v) > 0.02)) {
-        segments.push([point]);
-      } else {
-        current.push(point);
-      }
-    }
-    return segments;
+    return points.length ? [points] : [];
   }
 
   _mergeSeries(seriesList, reducer) {
@@ -619,15 +605,6 @@ class SpeicherLadelogikPanel extends HTMLElement {
       ${this._energyRow("Netzbezug", values.imported, "#9a45ff", maximum)}
       ${this._energyRow("Netzeinspeisung", values.exported, "#ff942f", maximum)}
     </div></section>`;
-  }
-
-  _overviewPowerCard() {
-    return `<section class="card summary-card">${this._cardTitle("mdi:flash-outline", "Leistung")}${this._chart([
-      { name: "Solar", color: "#ffcf4a", entityId: this._sid("pv"), points: this._historySeries("pv").map((point) => ({ ...point, v: point.v / 1000 })) },
-      { name: "Haus", color: "#8bd8e9", entityId: this._sid("house"), points: this._historySeries("house").map((point) => ({ ...point, v: point.v / 1000 })) },
-      { name: "Batterie", color: "#52d990", points: this._combinedBatteryPower().map((point) => ({ ...point, v: point.v / 1000 })) },
-      { name: "Netz", color: "#8ea8ff", entityId: this._sid("grid"), points: this._historySeries("grid").map((point) => ({ ...point, v: point.v / 1000 })) },
-    ], { unit: " kW", hours: this._historyHours.overviewPower })}${this._historyButtons("overviewPower")}</section>`;
   }
 
   _overviewSocCard() {
@@ -864,6 +841,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const minSoc = this._entityNum(this._source(`min_soc_${suffix}`), this._num(this._attr("planung", `untere_geraetegrenze_venus_${suffix}_prozent`, 0)));
     const maxSoc = this._entityNum(this._source(`max_soc_${suffix}`), this._num(this._attr("planung", `obere_geraetegrenze_venus_${suffix}_prozent`, 100)));
     const target = this._num(this._attr("planung", `soll_ladegrenze_venus_${suffix}_w`, 0));
+    const chargeLimit = this._entityNum(this._source(`charge_limit_${suffix}`), target);
+    const dischargeLimit = this._entityNum(this._source(`discharge_limit_${suffix}`), this._attr("planung", `maximale_entladeleistung_${suffix}_w`, 0));
     const valid = this._state(`daten_venus_${suffix}`)?.state === "bereit";
     const efficiency = this._state(`wirkungsgrad_venus_${suffix}`)?.state;
     const loss = this._state(`verlustleistung_venus_${suffix}`)?.state;
@@ -887,7 +866,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
           ${this._metric("Verlust", this._power(loss), "mdi:lightning-bolt-outline")}
           ${this._metric("Wirkungsgrad", this._percent(efficiency, 1), "mdi:percent-outline")}
           ${this._metric("Restbedarf", this._energy(remaining), "mdi:battery-arrow-up-outline")}
-          ${this._metric("Register", this._power(target), "mdi:gauge")}
+          ${this._metric("Ladegrenze", this._power(chargeLimit), "mdi:battery-arrow-up-outline")}
+          ${this._metric("Entladegrenze", this._power(dischargeLimit), "mdi:battery-arrow-down-outline")}
           ${full ? this._metric("Heute geladen", this._historyEnergy(energy.charged), "mdi:battery-plus-outline") : ""}
           ${full ? this._metric("Heute entladen", this._historyEnergy(energy.discharged), "mdi:battery-minus-outline") : ""}
         </div>
@@ -946,7 +926,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
         <div class="peak-inline-title"><span><ha-icon icon="mdi:chart-bell-curve"></ha-icon>Mittagsspitzenkappung</span>${this._badge(active ? "Aktiv" : "Aus", active ? "good" : "neutral")}</div>
         <div class="peak-layout">
           ${this._metric("Geplante Einspeisung zur PV-Spitze", this._power(this._attr("planung", "einspeiseziel_w")), "mdi:transmission-tower-export")}
-          ${this._metric("Spitzenfenster", `${this._time(this._attr("planung", "spitzenfenster_start_ts"))}–${this._time(this._attr("planung", "spitzenfenster_ende_ts"))}`, "mdi:clock-outline")}
+          ${this._metric("Mittagsfenster", `${this._time(this._attr("planung", "mittagsfenster_start_ts"))}–${this._time(this._attr("planung", "mittagsfenster_ende_ts"))} · Höchststand ${this._time(this._attr("planung", "sonnenhoechststand_ts"))}`, "mdi:weather-sunset-up")}
           ${this._metric("Speicher voll", this._time(this._attr("planung", "spitzenplan_voll_ts")), "mdi:battery-check-outline")}
           ${this._metric("Planbar", planable ? "Ja" : "Derzeit nein", planable ? "mdi:check-circle-outline" : "mdi:information-outline")}
         </div>
@@ -954,7 +934,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 
   _overview() {
-    return `<main class="grid overview">${this._systemCard()}${this._flowCard()}${this._planningCard()}<div class="summary-grid span-full">${this._energyTodayCard()}${this._overviewPowerCard()}${this._overviewSocCard()}</div></main>`;
+    return `<main class="grid overview">${this._systemCard()}${this._flowCard()}${this._planningCard()}<div class="summary-grid span-full">${this._energyTodayCard()}${this._overviewSocCard()}</div></main>`;
   }
 
   _batteries() {
@@ -1004,19 +984,17 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _numberCard(title, icon, group) {
     const items = group === "leistung"
-      ? [
-        ...this._models().map((model) => [
-          `bevorzugte_ladeleistung_venus_${model.toLowerCase()}`,
-          this._storageLabel(model),
-          "Bevorzugte Ladeleistung",
-        ]),
+      ? [ ...this._models().flatMap((model) => [
+        [`bevorzugte_ladeleistung_venus_${model.toLowerCase()}`, `${this._storageLabel(model)}: bevorzugt Laden`, "Effiziente Ausgangsstufe der Planung"],
+        [`maximale_ladeleistung_venus_${model.toLowerCase()}`, `${this._storageLabel(model)}: maximal Laden`, "Harte Obergrenze im Automatikbetrieb"],
+        [`maximale_entladeleistung_venus_${model.toLowerCase()}`, `${this._storageLabel(model)}: maximal Entladen`, "Harte Obergrenze im Automatikbetrieb"],
+      ]),
         ...NUMBER_GROUPS.leistung,
       ]
       : group === "planung"
-        ? [...this._models().map((model) => [
-          `fruehes_ladeziel_venus_${model.toLowerCase()}`,
-          `${this._storageLabel(model)}: Frühes Ladeziel`,
-          "SoC vor dem Zurückhalten für die Mittagsspitze; 0 % = aus",
+        ? [...this._models().flatMap((model) => [
+          [`mindestreserve_venus_${model.toLowerCase()}`, `${this._storageLabel(model)}: Mindestreserve`, "Früh abzusichernde gespeicherte Energie"],
+          [`fruehes_ladeziel_venus_${model.toLowerCase()}`, `${this._storageLabel(model)}: Frühes Ladeziel`, "SoC vor dem Zurückhalten für die Mittagsspitze; 0 % = aus"],
         ]), ...NUMBER_GROUPS.planung]
         : NUMBER_GROUPS[group];
     const explanations = NUMBER_HELP[group]
@@ -1082,7 +1060,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 
   _control() {
-    return `<main class="grid control-view">${this._modeControl()}<section class="card span-full">${this._cardTitle("mdi:chart-bell-curve", "Fahrplanfunktionen")}${this._toggleRow("mittagsspitzen", "Mittagsspitzen reduzieren", "Speicherkapazität für die PV-Spitze freihalten", "mdi:chart-bell-curve")}</section><div class="control-columns span-full">${this._numberCard("Ladeleistungen", "mdi:battery-charging", "leistung")}${this._numberCard("Planungsreserven", "mdi:shield-sun-outline", "planung")}${this._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen")}</div><div class="control-columns manual-columns span-full">${this._models().map((model) => this._manualCard(model)).join("")}</div>${this._calibrationCard()}</main>`;
+    return `<main class="grid control-view">${this._calibrationCard()}<div class="control-columns manual-columns span-full">${this._models().map((model) => this._manualCard(model)).join("")}</div>${this._modeControl()}<section class="card span-full">${this._cardTitle("mdi:chart-bell-curve", "Fahrplanfunktionen")}${this._toggleRow("mittagsspitzen", "Mittagsspitzen reduzieren", "Speicherkapazität für die PV-Spitze freihalten", "mdi:chart-bell-curve")}${this._numberRow(["mittag_vorlauf", "Beginn vor Sonnenhöchststand", "Dynamischer Start des Mittagsfensters"])}${this._numberRow(["mittag_nachlauf", "Ende nach Sonnenhöchststand", "Dynamisches Ende des Mittagsfensters"])}</section><div class="control-columns span-full">${this._numberCard("Leistungsgrenzen", "mdi:battery-charging", "leistung")}${this._numberCard("Planungsreserven", "mdi:shield-sun-outline", "planung")}${this._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen")}</div></main>`;
   }
 
   _formatWriteResult(item) {
@@ -1141,12 +1119,12 @@ class SpeicherLadelogikPanel extends HTMLElement {
       .flow-lines{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible}.flow-lines line{stroke:rgba(132,169,156,.25);stroke-width:3;vector-effect:non-scaling-stroke}.flow-particle{filter:drop-shadow(0 0 5px currentColor)}
       .window-label{display:flex;justify-content:space-between;align-items:baseline;margin-top:13px;color:var(--primary-text-color);font-size:10px;font-weight:700}.window-label small{color:var(--muted);font-weight:400}
       .window-row{margin-top:6px}.number-input{width:100px;justify-content:flex-end}.number-input input{width:58px}.ack-card>p{color:var(--muted);font-size:11px;line-height:1.55;margin:0 0 8px}.ack-state{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px}
-      .summary-grid{display:grid;grid-template-columns:minmax(280px,.8fr) repeat(2,minmax(360px,1.15fr));gap:14px}.summary-card{min-height:360px}.energy-list{display:flex;flex-direction:column;gap:14px}.energy-row>div{display:flex;justify-content:space-between;gap:10px;margin-bottom:5px}.energy-row span{color:var(--muted)}.energy-row strong{font-size:14px}.energy-row>i{display:block;height:6px;border-radius:8px;background:rgba(120,150,140,.12);overflow:hidden}.energy-row>i b{display:block;height:100%;border-radius:8px}.chart-legend{display:flex;justify-content:center;gap:13px;flex-wrap:wrap;color:var(--muted);font-size:11px;margin:-4px 0 5px}.chart-legend span{display:inline-flex;align-items:center;gap:5px}.chart-legend i{width:9px;height:9px;border-radius:2px}.history-chart{display:block;width:100%;height:220px;overflow:visible}.chart-grid-line{stroke:rgba(144,177,164,.12);stroke-width:1;vector-effect:non-scaling-stroke}.chart-axis{fill:var(--muted);font-size:10px}.chart-empty{height:220px;display:grid;place-items:center;color:var(--muted)}.chart-ranges{display:flex;justify-content:flex-end;gap:6px;margin-top:3px}.chart-ranges button{border:1px solid var(--line);border-radius:8px;background:rgba(110,135,125,.07);color:var(--muted);padding:5px 9px;cursor:pointer}.chart-ranges button.active{color:var(--accent);border-color:rgba(56,213,130,.3);background:rgba(56,213,130,.1)}
+      .summary-grid{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(360px,1.15fr);gap:14px}.summary-card{min-height:360px}.energy-list{display:flex;flex-direction:column;gap:14px}.energy-row>div{display:flex;justify-content:space-between;gap:10px;margin-bottom:5px}.energy-row span{color:var(--muted)}.energy-row strong{font-size:14px}.energy-row>i{display:block;height:6px;border-radius:8px;background:rgba(120,150,140,.12);overflow:hidden}.energy-row>i b{display:block;height:100%;border-radius:8px}.chart-legend{display:flex;justify-content:center;gap:13px;flex-wrap:wrap;color:var(--muted);font-size:11px;margin:-4px 0 5px}.chart-legend span{display:inline-flex;align-items:center;gap:5px}.chart-legend i{width:9px;height:9px;border-radius:2px}.history-chart{display:block;width:100%;height:220px;overflow:visible}.chart-grid-line{stroke:rgba(144,177,164,.12);stroke-width:1;vector-effect:non-scaling-stroke}.chart-axis{fill:var(--muted);font-size:10px}.chart-empty{height:220px;display:grid;place-items:center;color:var(--muted)}.chart-ranges{display:flex;justify-content:flex-end;gap:6px;margin-top:3px}.chart-ranges button{border:1px solid var(--line);border-radius:8px;background:rgba(110,135,125,.07);color:var(--muted);padding:5px 9px;cursor:pointer}.chart-ranges button.active{color:var(--accent);border-color:rgba(56,213,130,.3);background:rgba(56,213,130,.1)}
       .peak-inline{margin-top:14px;padding-top:13px;border-top:1px solid var(--line)}.peak-inline-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.peak-inline-title>span{display:flex;align-items:center;gap:7px}.peak-inline-title ha-icon{--mdc-icon-size:16px}.peak-inline .metric{padding:8px}.peak-inline .metric strong{font-size:12px}
       .battery-upper{display:grid;grid-template-columns:minmax(205px,.52fr) minmax(320px,1.48fr);gap:18px;align-items:center}.battery-history{min-width:0}.battery-history-title{color:var(--muted);font-size:12px;font-weight:700;margin:0 0 6px}.battery-history .history-chart{height:175px}.battery-history .chart-empty{height:175px}.battery-chart-wrap{position:relative}.battery-soc-axis{position:absolute;right:0;top:24px;bottom:27px;display:flex;flex-direction:column;justify-content:space-between;color:var(--muted);font-size:10px;pointer-events:none}
       :host{font-size:15px}.brand-copy strong{font-size:18px}.brand-copy span,.live-pill{font-size:13px}.card-title,.badge{font-size:12px}.soc-ring span{font-size:12px}.status-line{font-size:14px}.flow-node strong{font-size:19px}.flow-node span,.flow-core span{font-size:12px}.decision strong{font-size:17px}.decision p{font-size:13px}.metric span{font-size:11px}.metric strong{font-size:14px}.window-label,.window-row,.slot-note{font-size:12px}.battery-now strong{font-size:15px}.battery-now b{font-size:27px}.soc-scale{font-size:11px}.detail span{font-size:11px}.detail strong,.control-row strong,.number-row strong,.cal-state strong{font-size:14px}.comparison p,.diag-line{font-size:14px}.control-row span,.number-row span,.cal-state span{font-size:11px}.action-btn,.message-list>div,.empty,.ack-card>p{font-size:13px}
-      @media(max-width:1350px){.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.summary-grid .energy-card{grid-row:span 2}.battery-upper{grid-template-columns:1fr}.battery-history .history-chart{height:190px}}
-      @media(max-width:1050px){.summary-grid{grid-template-columns:1fr}.summary-grid .energy-card{grid-row:auto}.summary-card{min-height:0}.battery-upper{grid-template-columns:minmax(205px,.52fr) minmax(320px,1.48fr)}}
+      @media(max-width:1350px){.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.battery-upper{grid-template-columns:1fr}.battery-history .history-chart{height:190px}}
+      @media(max-width:1050px){.summary-grid{grid-template-columns:1fr}.summary-card{min-height:0}.battery-upper{grid-template-columns:minmax(205px,.52fr) minmax(320px,1.48fr)}}
       @media(max-width:720px){.flow-canvas{min-height:320px}.window-label{align-items:flex-start;flex-direction:column;gap:3px}.ack-state{grid-template-columns:1fr}.number-input{width:94px}.summary-grid{gap:9px}.battery-upper{grid-template-columns:1fr}.history-chart{height:190px}.chart-empty{height:190px}.brand-copy strong{font-size:15px}.nav-item span{font-size:11px}.flow-node span{font-size:9px}}
       .flow-canvas{display:block;min-height:260px;position:relative;overflow:hidden}.flow-node,.flow-core{position:absolute;transform:translateX(-50%);z-index:3}.flow-node.grid{left:16%;top:96px}.flow-node.pv{left:50%;top:0}.flow-core{left:50%;top:86px}.flow-node.battery{left:84%;top:96px;color:var(--accent)}.flow-lines{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible}.flow-route,.flow-dots{fill:none;vector-effect:non-scaling-stroke}.flow-route{stroke:rgba(132,169,156,.2);stroke-width:.75;stroke-dasharray:7 8}.flow-route.active{stroke:var(--flow-color);stroke-width:1.05;stroke-dasharray:none;stroke-linecap:round;opacity:.62;filter:drop-shadow(0 0 2px var(--flow-color))}.flow-dots{stroke:transparent;stroke-width:4;stroke-linecap:round;stroke-dasharray:.1 16;pointer-events:none}.flow-dots.active{stroke:var(--flow-color);animation:flow-dots 1.35s linear infinite;filter:drop-shadow(0 0 4px var(--flow-color))}@keyframes flow-dots{to{stroke-dashoffset:-16.1}}.flow-node ha-icon{box-shadow:none}.flow-core ha-icon{box-shadow:0 0 18px rgba(82,184,255,.16)}
       .chart-shell{position:relative;min-width:0}.chart-hover-plane{fill:transparent;pointer-events:none}.chart-tooltip{position:absolute;z-index:6;min-width:155px;padding:9px 11px;border:1px solid rgba(144,177,164,.22);border-radius:9px;background:rgba(8,15,18,.96);box-shadow:0 8px 24px rgba(0,0,0,.38);opacity:0;visibility:hidden;pointer-events:none;transform:translateX(12px);transition:opacity .08s;color:var(--primary-text-color)}.chart-tooltip.visible{opacity:1;visibility:visible}.chart-tooltip.flip{transform:translateX(calc(-100% - 12px))}.chart-tooltip>b{display:block;margin-bottom:6px;font-size:11px;color:var(--muted)}.chart-tooltip>div{display:grid;grid-template-columns:9px 1fr auto;gap:7px;align-items:center;font-size:12px;padding:2px 0}.chart-tooltip i{width:8px;height:8px;border-radius:2px}.chart-tooltip strong{font-size:12px}.chart-legend .entity-card{cursor:pointer;padding:2px 4px;border-radius:5px}.drift-values{display:flex;gap:5px;flex-wrap:wrap}.drift-value{border:0;border-radius:10px;padding:3px 7px;cursor:pointer}.drift-value.good{color:#61e69a;background:rgba(56,213,130,.13)}.drift-value.warn{color:#ffd078;background:rgba(255,189,69,.14)}.drift-value.bad{color:#ff8a8a;background:rgba(255,107,107,.14)}.drift-value.neutral{color:var(--muted);background:rgba(130,150,145,.12)}.storage-slots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}.storage-slots>div{display:grid;grid-template-columns:auto auto;gap:3px 8px;padding:8px;border-radius:8px;background:rgba(110,135,125,.06)}.storage-slots span{justify-self:end;color:var(--accent)}.storage-slots small{grid-column:1/-1;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.entity-card{transition:border-color .15s,background .15s}.entity-card:hover{border-color:rgba(82,184,255,.3);background-color:rgba(82,184,255,.04)}
@@ -1312,7 +1290,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 }
 
-const PANEL_ELEMENT = "speicher-ladelogik-panel-1-1-1-beta-1";
+const PANEL_ELEMENT = "speicher-ladelogik-panel-1-1-1-beta-2";
 
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);
