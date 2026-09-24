@@ -11,9 +11,11 @@ const PHASE_LABELS = {
   idle: "Bereit",
   requested: "Auftrag vorgemerkt",
   drain: "Entladen auf 13 %",
+  empty_rest: "Untere Ruhephase",
   wait: "Warten auf PV-Fenster",
   charge: "Kalibrierladung",
-  rest: "Ruheprüfung",
+  rest: "Obere Ruhephase",
+  full_rest: "Obere Ruhephase",
   paused: "Pausiert",
   restore: "Grenzwerte wiederherstellen",
   done: "Erfolgreich beendet",
@@ -27,7 +29,6 @@ const NUMBER_GROUPS = {
     ["min_effiziente_leistung", "Mindestwert für geplantes Laden", "Zielwert beim normalen Fahrplanladen; keine erzwungene Ladeleistung"],
   ],
   planung: [
-    ["mindestreserve", "Mindestreserve", "Früh abzusichernde gespeicherte Energie"],
     ["unplanbare_reserve", "Wolkenreserve", "Abzug vom prognostizierten Restüberschuss"],
     ["prognose_sicherheit", "Prognosesicherheit", "Anteil der Prognose, mit dem geplant wird"],
     ["ladewirkungsgrad", "Planungswirkungsgrad", "Anteil der AC-Energie, der im Speicher ankommt"],
@@ -43,12 +44,12 @@ const NUMBER_GROUPS = {
 
 const NUMBER_HELP = {
   leistung: [
-    ["Venus A / D / E", "Bevorzugte Obergrenze für das normale Laden je Gerät. Reicht das geplante PV-Fenster damit nicht aus, darf die Planung die Ladegrenze erhöhen."],
+    ["Bevorzugte Ladeleistung", "Mit dieser Ladegrenze plant das System zuerst. Reicht sie nicht aus, wird nur so weit wie nötig bis zur automatischen Maximalleistung erhöht."],
+    ["Automatische Maximalleistung", "Harte Obergrenze für den automatischen Lade- beziehungsweise Entladebetrieb. Der Handbetrieb besitzt weiterhin eigene Werte."],
     ["Mindestwert für geplantes Laden", "Läuft eine reguläre Ladung mit mehr als 25 W an, hebt die Planung ihr Ziel nach Möglichkeit mindestens auf diesen Wert an. Der tatsächliche Verbrauch hängt weiterhin vom PV-Überschuss, vom Gerät und von der Regelung ab."],
   ],
   planung: [
-    ["Frühes Ladeziel je Speicher", "0 % deaktiviert das jeweilige Ziel. Oberhalb der unteren Gerätegrenze lädt zuerst jeder Speicher unter seinem Ziel, sobald mindestens 200 W PV-Überschuss verfügbar sind. Danach gilt der normale Fahrplan. Die untere SoC-Grenze des Geräts bleibt unverändert."],
-    ["Mindestreserve", "Gemeinsames bisheriges Ziel in kWh zusätzlich zu den SoC-Zielen je Speicher. So viel nutzbare Energie soll bei PV-Überschuss früh gesichert sein; 0 kWh deaktiviert es."],
+    ["Vorzeitiges Ladeziel je Speicher", "0 % deaktiviert das festgelegte Ziel. Bei anhaltender gemessener Einspeisung kann die Automatik an unsicheren Tagen auch ohne Ziel bis 80 % laden. Die untere SoC-Grenze des Geräts bleibt unverändert."],
     ["Wolkenreserve", "Dieser kWh-Wert wird vom für den restlichen Tag erwarteten speicherbaren PV-Überschuss abgezogen. Höher bedeutet vorsichtiger planen."],
     ["Prognosesicherheit", "Nur dieser Prozentsatz der 15-Minuten-PV-Prognose fließt in die Planung ein. 90 % bedeutet: 10 % der prognostizierten Energie werden nicht fest eingeplant."],
     ["Planungswirkungsgrad", "Schätzt Ladeverluste zwischen AC-Eingang und gespeicherter Energie. Bei 90 % werden aus 1 kWh AC rechnerisch 0,9 kWh im Speicher."],
@@ -81,7 +82,6 @@ class SpeicherLadelogikPanel extends HTMLElement {
     this._historyLoadedAt = 0;
     this._historyLoading = false;
     this._historyHours = {
-      overviewPower: 24,
       overviewSoc: 24,
       batteryA: 24,
       batteryD: 24,
@@ -302,9 +302,15 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const keys = this._tab === "overview"
       ? ["pv", "grid", "house", ...this._models().flatMap((model) => [`power_${model.toLowerCase()}`, `soc_${model.toLowerCase()}`])]
       : this._models().flatMap((model) => [`power_${model.toLowerCase()}`, `soc_${model.toLowerCase()}`]);
-    return keys
+    const extra = this._tab === "batteries" ? this._models().flatMap((model) => [
+      this._eid(`wirkungsgrad_venus_${model.toLowerCase()}`),
+      ...(Array.isArray(this._config().sources?.[`drift_${model.toLowerCase()}`])
+        ? this._config().sources[`drift_${model.toLowerCase()}`]
+        : [this._sid(`drift_${model.toLowerCase()}`)]),
+    ]) : [];
+    return [...keys
       .map((key) => this._sid(key))
-      .filter(Boolean);
+      .filter(Boolean), ...extra.filter(Boolean)];
   }
 
   _dayStart() {
@@ -317,7 +323,11 @@ class SpeicherLadelogikPanel extends HTMLElement {
     if (!this.isConnected || !this._hass?.callWS || !this._panel) return;
     const entityIds = [...new Set(this._historySourceIds())];
     if (!entityIds.length || this._historyLoading) return;
-    const start = this._dayStart();
+    const selected = this._tab === "batteries" ? Math.max(24, ...this._models().flatMap((model) => [
+      this._historyHours[`efficiency${model}`] || 24, this._historyHours[`drift${model}`] || 24,
+    ])) : 24;
+    const start = selected > 24 ? new Date(Date.now() - selected * 3_600_000) : this._dayStart();
+    if (selected > 24) start.setMinutes(0, 0, 0);
     const key = `${start.toISOString()}|${entityIds.join(",")}`;
     const fresh = Date.now() - this._historyLoadedAt < 300_000;
     if (!force && this._historyKey === key && fresh) return;
@@ -337,6 +347,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       this._historySeriesCache.clear();
       this._historyLoading = false;
       this._render();
+      this._ensureHistory();
     }).catch(() => {
       this._historyLoading = false;
       this._render();
@@ -356,6 +367,10 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _historySeries(key) {
     const entityId = this._sid(key);
+    return this._historySeriesId(entityId);
+  }
+
+  _historySeriesId(entityId) {
     if (!entityId) return [];
     if (!this._historySeriesCache.has(entityId)) {
       const historyPoints = this._historyRaw(entityId).map((item) => {
@@ -368,7 +383,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       this._historySeriesCache.set(entityId, historyPoints.filter((point, index) => !index || point.t !== historyPoints[index - 1].t));
     }
     const points = [...this._historySeriesCache.get(entityId)];
-    const current = this._source(key);
+    const current = this._hass?.states?.[entityId];
     if (this._available(current)) points.push({ t: Date.now(), v: this._entityNum(current, 0) });
     return points;
   }
@@ -387,20 +402,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 
   _chartSegments(points) {
-    // A straight line through hours without a measurement looks like a real
-    // power ramp. Keep unchanged values connected, but show changing values
-    // after a long pause as a new segment.
-    const segments = [];
-    for (const point of points) {
-      const current = segments.at(-1);
-      const previous = current?.at(-1);
-      if (!previous || (point.t - previous.t > 15 * 60_000 && Math.abs(point.v - previous.v) > 0.02)) {
-        segments.push([point]);
-      } else {
-        current.push(point);
-      }
-    }
-    return segments;
+    return points.length ? [points] : [];
   }
 
   _mergeSeries(seriesList, reducer) {
@@ -445,7 +447,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _historyRangeStart(hours = 24) {
     const dayStart = this._dayStart().getTime();
-    return hours >= 24 ? dayStart : Math.max(dayStart, Date.now() - hours * 3_600_000);
+    return hours > 24 ? Date.now() - hours * 3_600_000 : hours === 24 ? dayStart : Math.max(dayStart, Date.now() - hours * 3_600_000);
   }
 
   _integrateEnergy(series, selector) {
@@ -588,9 +590,10 @@ class SpeicherLadelogikPanel extends HTMLElement {
     tooltip.classList.add("visible");
   }
 
-  _historyButtons(key) {
+  _historyButtons(key, extended = false) {
     const selected = this._historyHours[key] ?? 24;
-    return `<div class="chart-ranges">${[[1, "1 h"], [6, "6 h"], [12, "12 h"], [24, "Alles"]].map(([hours, label]) => `<button data-history-key="${key}" data-history-hours="${hours}" class="${selected === hours ? "active" : ""}">${label}</button>`).join("")}</div>`;
+    const ranges = extended ? [[24, "Heute"], [168, "7 Tage"], [720, "30 Tage"]] : [[1, "1 h"], [6, "6 h"], [12, "12 h"], [24, "Alles"]];
+    return `<div class="chart-ranges">${ranges.map(([hours, label]) => `<button data-history-key="${key}" data-history-hours="${hours}" class="${selected === hours ? "active" : ""}">${label}</button>`).join("")}</div>`;
   }
 
   _energyRow(label, value, color, maximum) {
@@ -619,15 +622,6 @@ class SpeicherLadelogikPanel extends HTMLElement {
     </div></section>`;
   }
 
-  _overviewPowerCard() {
-    return `<section class="card summary-card">${this._cardTitle("mdi:flash-outline", "Leistung")}${this._chart([
-      { name: "Solar", color: "#ffcf4a", entityId: this._sid("pv"), points: this._historySeries("pv").map((point) => ({ ...point, v: point.v / 1000 })) },
-      { name: "Haus", color: "#8bd8e9", entityId: this._sid("house"), points: this._historySeries("house").map((point) => ({ ...point, v: point.v / 1000 })) },
-      { name: "Batterie", color: "#52d990", points: this._combinedBatteryPower().map((point) => ({ ...point, v: point.v / 1000 })) },
-      { name: "Netz", color: "#8ea8ff", entityId: this._sid("grid"), points: this._historySeries("grid").map((point) => ({ ...point, v: point.v / 1000 })) },
-    ], { unit: " kW", hours: this._historyHours.overviewPower })}${this._historyButtons("overviewPower")}</section>`;
-  }
-
   _overviewSocCard() {
     return `<section class="card summary-card">${this._cardTitle("mdi:chart-line", "SoC · heute")}${this._chart([
       { name: "Gesamt-SoC", color: "#48d88b", points: this._combinedSoc() },
@@ -642,6 +636,32 @@ class SpeicherLadelogikPanel extends HTMLElement {
       { name: "Leistung", color: "#8ea8ff", entityId: this._sid(`power_${suffix}`), points: this._historySeries(`power_${suffix}`).map((point) => ({ ...point, v: point.v / 1000 })) },
       { name: "SoC", color: "#48d88b", entityId: this._sid(`soc_${suffix}`), tooltipValue: (value) => (value + limit) / (limit * 2) * 100, tooltipUnit: " %", points: this._historySeries(`soc_${suffix}`).map((point) => ({ ...point, v: point.v / 100 * limit * 2 - limit })) },
     ], { min: -limit, max: limit, unit: " kW", hours: this._historyHours[historyKey] })}<div class="battery-soc-axis"><span>100 %</span><span>50 %</span><span>0 %</span></div></div>${this._historyButtons(historyKey)}</div>`;
+  }
+
+  _batteryDiagnostics(letter) {
+    const suffix = letter.toLowerCase();
+    const powerMax = this._storageModel(letter) === "A" ? 1500 : 2500;
+    const efficiencyId = this._eid(`wirkungsgrad_venus_${suffix}`);
+    const efficiencyKey = `efficiency${letter}`;
+    const driftKey = `drift${letter}`;
+    const driftStates = this._sourceStates(`drift_${suffix}`);
+    const driftSeries = driftStates.map((state, index) => {
+      const toMv = String(state.attributes?.unit_of_measurement || "mV").toLowerCase() === "v" ? 1000 : 1;
+      return {
+        name: driftStates.length > 1 ? `Pack ${index + 1}` : "Zelldrift",
+        color: ["#48d88b", "#8ea8ff", "#ffbd45", "#b493ff", "#ff8a8a", "#6dd7e2"][index % 6],
+        entityId: state.entity_id,
+        points: this._historySeriesId(state.entity_id).map((point) => ({ ...point, v: point.v * toMv })),
+      };
+    });
+    const maxDrift = Math.max(20, ...driftSeries.flatMap((series) => series.points.map((point) => point.v)));
+    return `<div class="battery-diagnostics">
+      <div><strong>Wirkungsgrad und Leistung</strong>${this._chart([
+        { name: "Wirkungsgrad", color: "#48d88b", entityId: efficiencyId, points: this._historySeriesId(efficiencyId) },
+        { name: "Leistung", color: "#8ea8ff", entityId: this._sid(`power_${suffix}`), tooltipValue: (value) => Math.round(value * powerMax / 100), tooltipUnit: " W", points: this._historySeries(`power_${suffix}`).map((point) => ({ ...point, v: Math.abs(point.v) / powerMax * 100 })) },
+      ], { min: 0, max: 100, unit: " %", hours: this._historyHours[efficiencyKey] })}<small>Leistung auf 0–${powerMax} W skaliert; Kurve für genaue Werte antippen.</small>${this._historyButtons(efficiencyKey, true)}</div>
+      <div><strong>Zelldrift</strong>${this._chart(driftSeries, { min: 0, max: maxDrift, unit: " mV", hours: this._historyHours[driftKey] })}${this._historyButtons(driftKey, true)}</div>
+    </div>`;
   }
 
   _time(timestamp) {
@@ -833,6 +853,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
           ${this._metric("Restbedarf Speicherfüllung", this._energy(this._attr("planung", "restbedarf_kwh")), "mdi:battery-arrow-up")}
           ${this._metric("Sollleistung", this._power(this._attr("planung", "soll_ladeleistung_gesamt_w")), "mdi:flash")}
         </div>
+        <div class="slot-note">Live: PV-Prognose derzeit ${esc(this._percent(this._num(this._attr("planung", "prognose_kurzfristfaktor"), NaN) * 100))} bestätigt · Haus ${esc(this._power(this._attr("planung", "hausleistung_aktuell_w")))} · sicherer Überschuss ${esc(this._power(this._attr("planung", "ueberschuss_untergrenze_w")))}</div>
         <div class="window-label"><span>Ladefenster</span><small>Zeitraum für die geplante PV-Ladung</small></div>
         <div class="window-row"><span>${this._time(this._attr("planung", "ladefenster_start_ts"))}</span><div class="progress"><i style="width:${progress}%"></i></div><span>${this._time(this._attr("planung", "ladefenster_ende_ts"))}</span></div>
         <div class="storage-slots">
@@ -862,6 +883,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const minSoc = this._entityNum(this._source(`min_soc_${suffix}`), this._num(this._attr("planung", `untere_geraetegrenze_venus_${suffix}_prozent`, 0)));
     const maxSoc = this._entityNum(this._source(`max_soc_${suffix}`), this._num(this._attr("planung", `obere_geraetegrenze_venus_${suffix}_prozent`, 100)));
     const target = this._num(this._attr("planung", `soll_ladegrenze_venus_${suffix}_w`, 0));
+    const chargeLimit = this._entityNum(this._source(`charge_limit_${suffix}`), target);
+    const dischargeLimit = this._entityNum(this._source(`discharge_limit_${suffix}`), this._attr("planung", `maximale_entladeleistung_${suffix}_w`, 0));
     const valid = this._state(`daten_venus_${suffix}`)?.state === "bereit";
     const efficiency = this._state(`wirkungsgrad_venus_${suffix}`)?.state;
     const loss = this._state(`verlustleistung_venus_${suffix}`)?.state;
@@ -885,11 +908,12 @@ class SpeicherLadelogikPanel extends HTMLElement {
           ${this._metric("Verlust", this._power(loss), "mdi:lightning-bolt-outline")}
           ${this._metric("Wirkungsgrad", this._percent(efficiency, 1), "mdi:percent-outline")}
           ${this._metric("Restbedarf", this._energy(remaining), "mdi:battery-arrow-up-outline")}
-          ${this._metric("Register", this._power(target), "mdi:gauge")}
+          ${this._metric("Ladegrenze", this._power(chargeLimit), "mdi:battery-arrow-up-outline")}
+          ${this._metric("Entladegrenze", this._power(dischargeLimit), "mdi:battery-arrow-down-outline")}
           ${full ? this._metric("Heute geladen", this._historyEnergy(energy.charged), "mdi:battery-plus-outline") : ""}
           ${full ? this._metric("Heute entladen", this._historyEnergy(energy.discharged), "mdi:battery-minus-outline") : ""}
         </div>
-        ${full ? this._batteryDetails(letter) : ""}
+        ${full ? this._batteryDetails(letter) + this._batteryDiagnostics(letter) : ""}
       </section>`;
   }
 
@@ -944,7 +968,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
         <div class="peak-inline-title"><span><ha-icon icon="mdi:chart-bell-curve"></ha-icon>Mittagsspitzenkappung</span>${this._badge(active ? "Aktiv" : "Aus", active ? "good" : "neutral")}</div>
         <div class="peak-layout">
           ${this._metric("Geplante Einspeisung zur PV-Spitze", this._power(this._attr("planung", "einspeiseziel_w")), "mdi:transmission-tower-export")}
-          ${this._metric("Spitzenfenster", `${this._time(this._attr("planung", "spitzenfenster_start_ts"))}–${this._time(this._attr("planung", "spitzenfenster_ende_ts"))}`, "mdi:clock-outline")}
+          ${this._metric("Mittagsfenster", `${this._time(this._attr("planung", "mittagsfenster_start_ts"))}–${this._time(this._attr("planung", "mittagsfenster_ende_ts"))} · Höchststand ${this._time(this._attr("planung", "sonnenhoechststand_ts"))}`, "mdi:weather-sunset-up")}
           ${this._metric("Speicher voll", this._time(this._attr("planung", "spitzenplan_voll_ts")), "mdi:battery-check-outline")}
           ${this._metric("Planbar", planable ? "Ja" : "Derzeit nein", planable ? "mdi:check-circle-outline" : "mdi:information-outline")}
         </div>
@@ -952,7 +976,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 
   _overview() {
-    return `<main class="grid overview">${this._systemCard()}${this._flowCard()}${this._planningCard()}<div class="summary-grid span-full">${this._energyTodayCard()}${this._overviewPowerCard()}${this._overviewSocCard()}</div></main>`;
+    return `<main class="grid overview">${this._systemCard()}${this._flowCard()}${this._planningCard()}<div class="summary-grid span-full">${this._energyTodayCard()}${this._overviewSocCard()}</div></main>`;
   }
 
   _batteries() {
@@ -1002,20 +1026,15 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _numberCard(title, icon, group) {
     const items = group === "leistung"
-      ? [
-        ...this._models().map((model) => [
-          `bevorzugte_ladeleistung_venus_${model.toLowerCase()}`,
-          this._storageLabel(model),
-          "Bevorzugte Ladeleistung",
-        ]),
+      ? [ ...this._models().flatMap((model) => [
+        [`bevorzugte_ladeleistung_venus_${model.toLowerCase()}`, `${this._storageLabel(model)}: bevorzugt Laden`, "Effiziente Ausgangsstufe der Planung"],
+        [`maximale_ladeleistung_venus_${model.toLowerCase()}`, `${this._storageLabel(model)}: maximal Laden`, "Harte Obergrenze im Automatikbetrieb"],
+        [`maximale_entladeleistung_venus_${model.toLowerCase()}`, `${this._storageLabel(model)}: maximal Entladen`, "Harte Obergrenze im Automatikbetrieb"],
+      ]),
         ...NUMBER_GROUPS.leistung,
       ]
       : group === "planung"
-        ? [...this._models().map((model) => [
-          `fruehes_ladeziel_venus_${model.toLowerCase()}`,
-          `${this._storageLabel(model)}: Frühes Ladeziel`,
-          "SoC vor dem Zurückhalten für die Mittagsspitze; 0 % = aus",
-        ]), ...NUMBER_GROUPS.planung]
+        ? NUMBER_GROUPS.planung
         : NUMBER_GROUPS[group];
     const explanations = NUMBER_HELP[group]
       .map(([label, description]) => `<div><strong>${esc(label)}</strong><span>${esc(description)}</span></div>`)
@@ -1049,26 +1068,48 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return `<div class="cal-window ${preview.ok ? "good" : "warn"}"><strong>${esc(title)}</strong><span>${esc(range)}</span><small>${hours(available)} verfügbar · ${hours(required)} benötigt</small>${basis ? `<small>${esc(basis)}</small>` : ""}</div>`;
   }
 
+  _calibrationResult(model) {
+    const result = this._attr("kalibrierung", `letztes_ergebnis_${model.toLowerCase()}`);
+    if (!result || typeof result !== "object") return "";
+    const energy = result.ac_kwh == null ? "—" : this._energy(result.ac_kwh);
+    const learned = result.learned === true
+      ? "Für künftige Kalibrierfenster übernommen"
+      : result.learned === false
+        ? "Nicht als Lernwert übernommen"
+        : "Lernstatus dieses älteren Laufs nicht gespeichert";
+    const drift = Array.isArray(result.drift_after_mv)
+      ? result.drift_after_mv.map((value, index) => value == null || !Number.isFinite(Number(value))
+        ? null : `${model === "E" ? "Zellen" : `Pack ${index + 1}`}: ${this._decimal(value, 1)} mV`).filter(Boolean)
+      : [];
+    const topStart = Array.isArray(result.drift_top_start_mv) ? result.drift_top_start_mv : [];
+    const topChange = Array.isArray(result.drift_top_change_mv) ? result.drift_top_change_mv : [];
+    const comparison = topStart.map((value, index) => value == null || topChange[index] == null
+      ? null : `${model === "E" ? "Zellen" : `Pack ${index + 1}`}: ${this._decimal(value, 1)} → ${this._decimal(result.drift_after_mv[index], 1)} mV (${Number(topChange[index]) > 0 ? "+" : ""}${this._decimal(topChange[index], 1)} mV)`).filter(Boolean);
+    return `<div class="cal-result"><strong>Letztes Ergebnis</strong><span>Geladen: ${esc(energy)}</span><span>${esc(learned)}</span><span>Drift nach oberer Ruhephase: ${esc(drift.length ? drift.join(" · ") : "kein Messwert gespeichert")}</span>${comparison.length ? `<span>Bei 100 % vor → nach der Ruhephase: ${esc(comparison.join(" · "))}</span>` : ""}<small>Zellspannungen während der Ruhephase können sich auch ohne aktives Balancing ändern. Ein Top-Balancing-Erfolg lässt sich daraus nicht ableiten.</small></div>`;
+  }
+
   _calibrationCard() {
     const cal = this._state("kalibrierung");
     const battery = this._attr("kalibrierung", "batterie", "");
     const batteryName = ["A", "D", "E"].includes(String(battery)) ? this._storageLabel(String(battery)) : "Keiner";
     const phase = this._statusLabel(cal?.state || "Bereit");
     const reason = String(this._attr("kalibrierung", "grund", "") || "").trim();
+    const restSeconds = this._num(this._attr("kalibrierung", "ruhe_verbleibend_s"), 0);
+    const restHint = restSeconds > 0
+      ? ` · noch ca. ${Math.ceil(restSeconds / 60)} min`
+      : "";
     const statusText = reason && reason !== "—"
       ? reason : phase === "Bereit" ? "Kein Kalibrierauftrag aktiv" : phase;
     return `
       <section class="card span-full calibration-card">
         ${this._cardTitle("mdi:battery-sync-outline", "Kalibrierung", this._badge(cal?.state || "—", cal?.state === "Bereit" ? "good" : "warn"))}
-        <div class="cal-state"><div><span>Speicher</span><strong>${esc(batteryName)}</strong><small>Gerät des aktuellen Kalibrierauftrags</small></div><div><span>Status</span><strong>${esc(statusText)}</strong><small>Aktuelle Phase: ${esc(phase)}</small></div><div><span>Energie</span><strong>${this._energy(this._attr("kalibrierung", "energie_ac_kwh"))}</strong><small>Bisher in diesem Kalibrierlauf geladene AC-Energie</small></div></div>
-        <div class="control-list calibration-setting">${this._numberRow(["kalibrierleistung", "Kalibrierleistung", "Leistung für die vollständige Kalibrierladung"])}</div>
+        <div class="cal-state"><div><span>Speicher</span><strong>${esc(batteryName)}</strong><small>Gerät des aktuellen Kalibrierauftrags</small></div><div><span>Status</span><strong>${esc(statusText)}</strong><small>Aktuelle Phase: ${esc(phase)}${esc(restHint)}</small></div><div><span>Energie</span><strong>${this._energy(this._attr("kalibrierung", "energie_ac_kwh"))}</strong><small>Bisher in diesem Kalibrierlauf geladene AC-Energie</small></div></div>
+        <div class="control-list calibration-setting">${this._numberRow(["kalibrierleistung", "Kalibrierleistung", "Leistung für die vollständige Kalibrierladung"])}${this._toggleRow("kalibrierung_parallel", "Zwei Speicher gleichzeitig", "Nur bei zwei vorbereiteten Speichern und ausreichend gemeinsamem PV-Überschuss", "mdi:battery-sync")}</div>
+        ${(this._attr("kalibrierung", "laufende_laeufe", []) || []).length > 1 ? `<div class="cal-window-grid">${this._attr("kalibrierung", "laufende_laeufe", []).map((run) => `<div class="cal-result"><strong>${esc(this._storageLabel(run.batterie))}</strong><span>${esc(PHASE_LABELS[run.phase] || run.phase)} · ${esc(this._energy(run.energie_ac_kwh))}</span></div>`).join("")}</div>` : ""}
         <div class="cal-window-grid">
-          ${this._models().map((model) => `<div class="cal-window-storage"><b>${esc(this._storageLabel(model))}</b><small>Letzte Kalibrierung: ${esc(this._lastCalibration(model))}</small>${this._calibrationWindow(model, "heute", "Heute")}${this._calibrationWindow(model, "morgen", "Morgen")}</div>`).join("")}
-        </div>
-        <div class="action-groups">
           ${this._models().map((model) => {
             const suffix = model.toLowerCase();
-            return `<div><strong>${esc(this._storageLabel(model))}</strong>${this._actionButton(`kalibrierung_venus_${suffix}_anfordern`, "mdi:play", "Heute")}${this._actionButton(`kalibrierung_venus_${suffix}_morgen`, "mdi:calendar-arrow-right", "Morgen")}${this._actionButton(`kalibrierung_venus_${suffix}_entfernen`, "mdi:playlist-remove", "Vormerkung löschen", "subtle")}</div>`;
+            return `<div class="cal-window-storage"><b>${esc(this._storageLabel(model))}</b><small>Letzte Kalibrierung: ${esc(this._lastCalibration(model))}</small>${this._calibrationResult(model)}${this._calibrationWindow(model, "heute", "Heute")}${this._calibrationWindow(model, "morgen", "Morgen")}<div class="cal-actions">${this._actionButton(`kalibrierung_venus_${suffix}_anfordern`, "mdi:play", "Heute")}${this._actionButton(`kalibrierung_venus_${suffix}_morgen`, "mdi:calendar-arrow-right", "Morgen")}${this._actionButton(`kalibrierung_venus_${suffix}_entfernen`, "mdi:playlist-remove", "Vormerkung löschen", "subtle")}</div></div>`;
           }).join("")}
         </div>
         <div class="danger-actions">${this._actionButton("kalibrierung_abbrechen", "mdi:cancel", "Laufende Kalibrierung abbrechen", "danger")}</div>
@@ -1076,7 +1117,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 
   _control() {
-    return `<main class="grid control-view">${this._modeControl()}<section class="card span-full">${this._cardTitle("mdi:chart-bell-curve", "Fahrplanfunktionen")}${this._toggleRow("mittagsspitzen", "Mittagsspitzen reduzieren", "Speicherkapazität für die PV-Spitze freihalten", "mdi:chart-bell-curve")}</section><div class="control-columns span-full">${this._numberCard("Ladeleistungen", "mdi:battery-charging", "leistung")}${this._numberCard("Planungsreserven", "mdi:shield-sun-outline", "planung")}${this._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen")}</div><div class="control-columns manual-columns span-full">${this._models().map((model) => this._manualCard(model)).join("")}</div>${this._calibrationCard()}</main>`;
+    const earlyGoals = this._models().map((model) => this._numberRow([`fruehes_ladeziel_venus_${model.toLowerCase()}`, `${this._storageLabel(model)}: Vorzeitiges Ladeziel`, "Mit realem Überschuss vor der Mittagsspitze sichern; 0 % = kein festes Ziel"])).join("");
+    return `<main class="grid control-view">${this._calibrationCard()}<div class="control-columns manual-columns span-full">${this._models().map((model) => this._manualCard(model)).join("")}</div><section class="card span-full">${this._cardTitle("mdi:chart-bell-curve", "Fahrplanfunktionen")}${this._toggleRow("mittagsspitzen", "Mittagsspitzen reduzieren", "Speicherkapazität für die PV-Spitze freihalten", "mdi:chart-bell-curve")}${earlyGoals}${this._numberRow(["mittag_vorlauf", "Beginn vor Sonnenhöchststand", "Dynamischer Start des Mittagsfensters"])}${this._numberRow(["mittag_nachlauf", "Ende nach Sonnenhöchststand", "Dynamisches Ende des Mittagsfensters"])}</section><div class="control-columns span-full">${this._numberCard("Leistungsgrenzen", "mdi:battery-charging", "leistung")}${this._numberCard("Planungsparameter", "mdi:shield-sun-outline", "planung")}${this._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen")}</div>${this._modeControl()}</main>`;
   }
 
   _formatWriteResult(item) {
@@ -1123,7 +1165,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return `
       :host{display:block;min-height:100%;background:var(--primary-background-color,#0b1013);color:var(--primary-text-color,#edf5f1);font-family:var(--ha-font-family,Roboto,sans-serif);--accent:#38d582;--accent2:#52b8ff;--warn:#ffbd45;--bad:#ff6b6b;--card:var(--ha-card-background,var(--card-background-color,#12191d));--line:rgba(127,155,145,.17);--muted:var(--secondary-text-color,#8faaa0)}*{box-sizing:border-box}button,input{font:inherit}header{min-height:70px;display:flex;align-items:center;padding:10px 22px;gap:12px;background:var(--app-header-background-color,#0d1316);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}.brand-mark{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;background:linear-gradient(135deg,#69ec9f,#25b96e);color:#06120b}.brand-mark ha-icon{--mdc-icon-size:24px}.brand-copy{display:flex;flex-direction:column;min-width:190px}.brand-copy strong{font-size:16px}.brand-copy span{font-size:11px;color:var(--muted);margin-top:2px}nav{display:flex;align-self:stretch;margin-left:18px}.nav-item{border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);padding:0 18px;display:flex;align-items:center;gap:8px;cursor:pointer}.nav-item ha-icon{--mdc-icon-size:19px}.nav-item:hover{color:var(--primary-text-color)}.nav-item.active{color:var(--accent);border-color:var(--accent)}.live-pill{margin-left:auto;padding:5px 9px;border-radius:12px;border:1px solid rgba(56,213,130,.3);font-size:11px;color:var(--accent)}.live-pill span{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent);margin-right:5px}.grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:14px;padding:14px;max-width:1800px;margin:0 auto}.span-full{grid-column:1/-1}.span-7{grid-column:span 7}.span-6{grid-column:span 6}.span-5{grid-column:span 5}.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:0 10px 28px rgba(0,0,0,.08);min-width:0}.card-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:15px;text-transform:uppercase;letter-spacing:.075em;color:var(--muted);font-size:10px;font-weight:700}.card-title>span{display:flex;align-items:center;gap:7px}.card-title ha-icon{--mdc-icon-size:15px}.badge{display:inline-flex;align-items:center;padding:4px 8px;border-radius:20px;background:rgba(130,150,145,.14);color:var(--muted);font-size:10px;text-transform:none;letter-spacing:0;white-space:nowrap}.badge.good{color:#61e69a;background:rgba(56,213,130,.13);border:1px solid rgba(56,213,130,.18)}.badge.bad{color:#ff8a8a;background:rgba(255,107,107,.12)}.badge.warn{color:#ffd078;background:rgba(255,189,69,.12)}.badge.accent{color:#81ccff;background:rgba(82,184,255,.12)}.system-grid{display:grid;grid-template-columns:190px 1fr;gap:28px;align-items:center}.soc-ring{--p:calc(var(--soc)*1%);width:152px;height:152px;border-radius:50%;display:grid;place-items:center;margin:auto;background:conic-gradient(var(--accent) var(--p),rgba(100,130,120,.15) 0);filter:drop-shadow(0 0 13px rgba(56,213,130,.22));position:relative}.soc-ring:before{content:"";position:absolute;inset:10px;border-radius:50%;background:var(--card);box-shadow:inset 0 0 28px rgba(56,213,130,.08)}.soc-ring>div{position:relative;text-align:center;display:flex;flex-direction:column}.soc-ring strong{font-size:36px;line-height:1}.soc-ring small{font-size:16px}.soc-ring span{color:var(--muted);font-size:10px;margin-top:8px;text-transform:uppercase}.status-table{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px}.status-line{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);font-size:12px}.status-line>span{color:var(--muted)}.flow-canvas{min-height:310px;position:relative;display:grid;grid-template-columns:1fr 1.1fr 1fr;grid-template-rows:1fr 1fr;align-items:center;justify-items:center;overflow:hidden}.flow-node,.flow-core{z-index:2;text-align:center;display:flex;flex-direction:column;align-items:center;gap:4px}.flow-node ha-icon{width:46px;height:46px;--mdc-icon-size:24px;border-radius:14px;display:grid;place-items:center;background:rgba(100,130,120,.12);color:var(--muted)}.flow-node strong{font-size:17px}.flow-node span,.flow-core span{font-size:10px;color:var(--muted)}.flow-node.pv{grid-area:1/2;color:var(--warn)}.flow-node.pv ha-icon{color:var(--warn);background:rgba(255,189,69,.12)}.flow-node.grid{grid-area:1/1;color:#ff9a55}.flow-node.grid ha-icon{color:#ff9a55}.flow-node.batt-a{grid-area:2/1;color:var(--accent)}.flow-node.batt-e{grid-area:2/3;color:var(--accent)}.flow-core{grid-area:1/3}.flow-core ha-icon{width:64px;height:64px;--mdc-icon-size:32px;border-radius:50%;display:grid;place-items:center;background:rgba(82,184,255,.1);color:var(--accent2);border:1px solid rgba(82,184,255,.2)}.flow-core strong{font-size:18px}.line{position:absolute;height:2px;background:linear-gradient(90deg,transparent,var(--accent2),transparent);opacity:.35;transform-origin:left center}.l1{width:34%;left:18%;top:25%}.l2{width:31%;left:52%;top:25%}.l3{width:38%;left:20%;top:63%;transform:rotate(-23deg)}.l4{width:34%;left:53%;top:50%;transform:rotate(35deg)}.line:after{content:"";position:absolute;width:6px;height:6px;background:var(--accent);border-radius:50%;top:-2px;animation:flow 2.4s linear infinite;box-shadow:0 0 8px var(--accent)}@keyframes flow{from{left:0}to{left:100%}}.decision{padding:13px;border-radius:10px;background:rgba(82,184,255,.07);border-left:3px solid var(--accent2);margin-bottom:12px}.decision strong{font-size:15px}.decision p{font-size:11px;line-height:1.45;color:var(--muted);margin:5px 0 0}.metric-pairs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{display:grid;grid-template-columns:22px 1fr;gap:2px 7px;padding:9px;border-radius:9px;background:rgba(110,135,125,.07)}.metric ha-icon{grid-row:1/3;align-self:center;color:var(--muted);--mdc-icon-size:18px}.metric span{font-size:9px;color:var(--muted)}.metric strong{font-size:12px}.window-row{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;margin-top:13px;color:var(--muted);font-size:10px}.progress{height:5px;background:rgba(120,150,140,.15);border-radius:8px;overflow:hidden}.progress i{display:block;height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));border-radius:8px}.slot-note{font-size:10px;color:var(--muted);display:flex;align-items:center;gap:6px;margin-top:11px}.slot-note ha-icon{--mdc-icon-size:14px}.battery-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.battery-main{display:grid;grid-template-columns:92px 1fr;gap:18px;align-items:center}.battery-gauge{width:66px;height:116px;border:3px solid rgba(115,145,135,.28);border-radius:10px;position:relative;overflow:hidden;margin:auto}.battery-gauge:before{content:"";position:absolute;width:26px;height:6px;background:rgba(115,145,135,.35);left:17px;top:-8px;border-radius:3px}.battery-gauge>div{position:absolute;bottom:0;width:100%;background:linear-gradient(0deg,#23b969,#65e89b);box-shadow:0 0 18px rgba(56,213,130,.35)}.battery-gauge>span{position:absolute;inset:0;display:grid;place-items:center;font-weight:700;text-shadow:0 1px 3px #000}.battery-now{display:grid;grid-template-columns:12px 1fr;gap:4px 6px}.battery-now .mode-dot{width:8px;height:8px;border-radius:50%;align-self:center;background:var(--muted)}.mode-dot.charge{background:var(--accent);box-shadow:0 0 8px var(--accent)}.mode-dot.discharge{background:#b493ff}.battery-now strong{font-size:13px}.battery-now b{grid-column:2;font-size:25px}.battery-now small{grid-column:2;color:var(--muted)}.soc-scale{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:8px;margin:10px 0;font-size:9px;color:var(--muted)}.soc-scale i{height:3px;background:rgba(120,150,140,.18);position:relative}.soc-scale b{position:absolute;width:7px;height:7px;border-radius:50%;background:var(--accent);top:-2px}.compact{margin-top:10px}.detail-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}.detail{padding:10px;background:rgba(110,135,125,.06);border-radius:8px;display:flex;flex-direction:column;gap:4px}.detail span{font-size:9px;color:var(--muted)}.detail strong{font-size:12px}.peak-layout{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.comparison-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.comparison{padding:13px;border-radius:10px;background:rgba(110,135,125,.06)}.comparison>div{display:flex;align-items:center;justify-content:space-between}.comparison p{color:var(--muted);font-size:11px;margin:8px 0 0}.mode-select{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.mode-select button{padding:15px;border-radius:11px;background:rgba(110,135,125,.06);border:1px solid var(--line);color:var(--primary-text-color);display:grid;grid-template-columns:28px 1fr;gap:2px 7px;text-align:left;cursor:pointer}.mode-select button ha-icon{grid-row:1/3;align-self:center;color:var(--muted)}.mode-select button span{font-size:10px;color:var(--muted)}.mode-select button.active{border-color:var(--accent);background:rgba(56,213,130,.08)}.mode-select button.active ha-icon{color:var(--accent)}.control-columns{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.control-columns.two{grid-template-columns:repeat(2,minmax(0,1fr))}.control-list{display:flex;flex-direction:column}.control-row,.number-row{display:grid;grid-template-columns:28px 1fr auto;gap:9px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line)}.control-row>ha-icon,.number-row>ha-icon{color:var(--muted);--mdc-icon-size:19px}.control-row>div,.number-row>div{display:flex;flex-direction:column}.control-row strong,.number-row strong{font-size:12px}.control-row span,.number-row span{font-size:9px;color:var(--muted);margin-top:3px}.toggle{width:38px;height:21px;border:0;border-radius:15px;background:#46534f;padding:3px;cursor:pointer}.toggle i{display:block;width:15px;height:15px;border-radius:50%;background:#fff;transition:.2s}.toggle.on{background:var(--accent)}.toggle.on i{transform:translateX(17px)}.number-input{flex-direction:row!important;align-items:center;background:rgba(100,130,120,.08);border:1px solid var(--line);border-radius:7px;padding:0 7px}.number-input input{width:74px;border:0;background:transparent;color:var(--primary-text-color);padding:7px 2px;text-align:right;outline:0}.number-input span{margin:0 0 0 4px}.cal-state{display:grid;grid-template-columns:150px 1fr 150px;gap:10px}.cal-state>div{display:flex;flex-direction:column;gap:4px;padding:11px;background:rgba(110,135,125,.06);border-radius:9px}.cal-state span{font-size:9px;color:var(--muted)}.cal-state strong{font-size:12px;overflow-wrap:anywhere}.cal-state small{font-size:10px;line-height:1.4;color:var(--muted)}.action-groups{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:14px}.action-groups>div{display:flex;gap:8px;align-items:center;padding:12px;border:1px solid var(--line);border-radius:10px}.action-groups>div>strong{margin-right:auto}.action-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(56,213,130,.28);border-radius:8px;background:rgba(56,213,130,.1);color:var(--primary-text-color);padding:8px 10px;cursor:pointer;font-size:11px}.action-btn:hover{background:rgba(56,213,130,.18)}.action-btn ha-icon{--mdc-icon-size:16px;color:var(--accent)}.action-btn.subtle{border-color:var(--line);background:rgba(110,135,125,.06)}.action-btn.danger{border-color:rgba(255,107,107,.28);background:rgba(255,107,107,.08)}.action-btn.danger ha-icon{color:var(--bad)}.danger-actions{margin-top:12px;text-align:right}.diag-line{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);font-size:12px}.diag-line span{color:var(--muted)}.diag-line strong.ok{color:var(--accent)}.message-list>div{display:flex;gap:5px;padding:8px 0;border-bottom:1px solid var(--line);font-size:11px}.message-list ha-icon{--mdc-icon-size:15px;color:var(--muted)}.empty{display:flex;align-items:center;gap:7px;color:var(--accent);font-size:11px}.entity-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.entity-link{display:flex;flex-direction:column;text-align:left;border:1px solid var(--line);border-radius:8px;background:rgba(110,135,125,.05);color:var(--primary-text-color);padding:8px;cursor:pointer;overflow:hidden}.entity-link span{font-size:9px;color:var(--muted)}.entity-link strong{font-size:10px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;margin-top:3px}.ack-row{text-align:right;margin-top:12px}.entity-card{cursor:pointer}
       .setting-help{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}.setting-help summary{cursor:pointer;color:var(--accent);font-size:12px;font-weight:600;list-style-position:inside}.setting-help>div{display:grid;gap:10px;margin-top:12px}.setting-help>div>div{display:flex;flex-direction:column;gap:3px;padding-left:11px;border-left:2px solid var(--line)}.setting-help strong{font-size:12px}.setting-help span{font-size:11px;line-height:1.45;color:var(--muted)}
-       .calibration-setting{margin-top:12px;padding:0 11px;border:1px solid var(--line);border-radius:10px;background:rgba(110,135,125,.04)}.cal-window-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:10px;margin-top:12px}.cal-window-storage{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:11px;border:1px solid var(--line);border-radius:10px;background:rgba(110,135,125,.04)}.cal-window-storage>b{grid-column:1/-1;font-size:12px}.cal-window-storage>small{grid-column:1/-1;font-size:10px;color:var(--muted)}.cal-window{display:flex;flex-direction:column;gap:3px;padding:9px;border-left:3px solid var(--warn);border-radius:8px;background:rgba(110,135,125,.07)}.cal-window.good{border-color:var(--accent)}.cal-window strong{font-size:11px}.cal-window span{font-size:12px}.cal-window small{font-size:10px;color:var(--muted)}
+       .calibration-setting{margin-top:12px;padding:0 11px;border:1px solid var(--line);border-radius:10px;background:rgba(110,135,125,.04)}.cal-window-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:10px;margin-top:12px}.cal-window-storage{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:11px;border:1px solid var(--line);border-radius:10px;background:rgba(110,135,125,.04)}.cal-window-storage>b{grid-column:1/-1;font-size:12px}.cal-window-storage>small{grid-column:1/-1;font-size:10px;color:var(--muted)}.cal-result{grid-column:1/-1;display:flex;flex-direction:column;gap:4px;padding:10px;border-left:3px solid var(--accent);border-radius:8px;background:rgba(56,213,130,.07)}.cal-result strong{font-size:11px}.cal-result span{font-size:12px}.cal-result small{color:var(--muted);font-size:10px;line-height:1.45}.cal-window{display:flex;flex-direction:column;gap:3px;padding:9px;border-left:3px solid var(--warn);border-radius:8px;background:rgba(110,135,125,.07)}.cal-window.good{border-color:var(--accent)}.cal-window strong{font-size:11px}.cal-window span{font-size:12px}.cal-window small{font-size:10px;color:var(--muted)}
       @media(max-width:1050px){.span-7,.span-5{grid-column:1/-1}.control-columns{grid-template-columns:1fr 1fr}.control-columns .control-card:last-child{grid-column:1/-1}.peak-layout{grid-template-columns:repeat(2,1fr)}.action-groups>div{flex-wrap:wrap}.entity-grid{grid-template-columns:repeat(2,1fr)}}
       @media(max-width:720px){header{padding:8px 10px;flex-wrap:wrap}.brand-copy{min-width:0}.brand-copy strong{font-size:14px}.live-pill{display:none}nav{order:3;width:calc(100% + 20px);margin:4px -10px -8px;overflow-x:auto;height:49px}.nav-item{flex:1;min-width:76px;padding:0 8px;justify-content:center}.nav-item span{font-size:10px}.grid{padding:9px;gap:9px}.card{padding:13px;border-radius:11px}.system-grid{grid-template-columns:1fr}.status-table{grid-template-columns:1fr}.soc-ring{width:128px;height:128px}.battery-pair,.control-columns,.control-columns.two,.comparison-grid,.action-groups{grid-template-columns:1fr}.control-columns .control-card:last-child{grid-column:auto}.flow-canvas{min-height:270px}.battery-main{grid-template-columns:76px 1fr}.detail-grid,.entity-grid{grid-template-columns:repeat(2,1fr)}.cal-state{grid-template-columns:1fr}.mode-select{grid-template-columns:1fr}.mode-select button{grid-template-columns:28px 1fr}.peak-layout{grid-template-columns:1fr}.action-groups>div{align-items:stretch}.action-groups>div>strong{width:100%}.metric-pairs{grid-template-columns:1fr 1fr}}
       @media(max-width:720px){.cal-window-grid,.cal-window-storage{grid-template-columns:1fr}.cal-window-storage>b{grid-column:auto}}
@@ -1135,12 +1177,12 @@ class SpeicherLadelogikPanel extends HTMLElement {
       .flow-lines{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible}.flow-lines line{stroke:rgba(132,169,156,.25);stroke-width:3;vector-effect:non-scaling-stroke}.flow-particle{filter:drop-shadow(0 0 5px currentColor)}
       .window-label{display:flex;justify-content:space-between;align-items:baseline;margin-top:13px;color:var(--primary-text-color);font-size:10px;font-weight:700}.window-label small{color:var(--muted);font-weight:400}
       .window-row{margin-top:6px}.number-input{width:100px;justify-content:flex-end}.number-input input{width:58px}.ack-card>p{color:var(--muted);font-size:11px;line-height:1.55;margin:0 0 8px}.ack-state{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px}
-      .summary-grid{display:grid;grid-template-columns:minmax(280px,.8fr) repeat(2,minmax(360px,1.15fr));gap:14px}.summary-card{min-height:360px}.energy-list{display:flex;flex-direction:column;gap:14px}.energy-row>div{display:flex;justify-content:space-between;gap:10px;margin-bottom:5px}.energy-row span{color:var(--muted)}.energy-row strong{font-size:14px}.energy-row>i{display:block;height:6px;border-radius:8px;background:rgba(120,150,140,.12);overflow:hidden}.energy-row>i b{display:block;height:100%;border-radius:8px}.chart-legend{display:flex;justify-content:center;gap:13px;flex-wrap:wrap;color:var(--muted);font-size:11px;margin:-4px 0 5px}.chart-legend span{display:inline-flex;align-items:center;gap:5px}.chart-legend i{width:9px;height:9px;border-radius:2px}.history-chart{display:block;width:100%;height:220px;overflow:visible}.chart-grid-line{stroke:rgba(144,177,164,.12);stroke-width:1;vector-effect:non-scaling-stroke}.chart-axis{fill:var(--muted);font-size:10px}.chart-empty{height:220px;display:grid;place-items:center;color:var(--muted)}.chart-ranges{display:flex;justify-content:flex-end;gap:6px;margin-top:3px}.chart-ranges button{border:1px solid var(--line);border-radius:8px;background:rgba(110,135,125,.07);color:var(--muted);padding:5px 9px;cursor:pointer}.chart-ranges button.active{color:var(--accent);border-color:rgba(56,213,130,.3);background:rgba(56,213,130,.1)}
+      .summary-grid{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(360px,1.15fr);gap:14px}.summary-card{min-height:360px}.energy-list{display:flex;flex-direction:column;gap:14px}.energy-row>div{display:flex;justify-content:space-between;gap:10px;margin-bottom:5px}.energy-row span{color:var(--muted)}.energy-row strong{font-size:14px}.energy-row>i{display:block;height:6px;border-radius:8px;background:rgba(120,150,140,.12);overflow:hidden}.energy-row>i b{display:block;height:100%;border-radius:8px}.chart-legend{display:flex;justify-content:center;gap:13px;flex-wrap:wrap;color:var(--muted);font-size:11px;margin:-4px 0 5px}.chart-legend span{display:inline-flex;align-items:center;gap:5px}.chart-legend i{width:9px;height:9px;border-radius:2px}.history-chart{display:block;width:100%;height:220px;overflow:visible}.chart-grid-line{stroke:rgba(144,177,164,.12);stroke-width:1;vector-effect:non-scaling-stroke}.chart-axis{fill:var(--muted);font-size:10px}.chart-empty{height:220px;display:grid;place-items:center;color:var(--muted)}.chart-ranges{display:flex;justify-content:flex-end;gap:6px;margin-top:3px}.chart-ranges button{border:1px solid var(--line);border-radius:8px;background:rgba(110,135,125,.07);color:var(--muted);padding:5px 9px;cursor:pointer}.chart-ranges button.active{color:var(--accent);border-color:rgba(56,213,130,.3);background:rgba(56,213,130,.1)}
       .peak-inline{margin-top:14px;padding-top:13px;border-top:1px solid var(--line)}.peak-inline-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.peak-inline-title>span{display:flex;align-items:center;gap:7px}.peak-inline-title ha-icon{--mdc-icon-size:16px}.peak-inline .metric{padding:8px}.peak-inline .metric strong{font-size:12px}
       .battery-upper{display:grid;grid-template-columns:minmax(205px,.52fr) minmax(320px,1.48fr);gap:18px;align-items:center}.battery-history{min-width:0}.battery-history-title{color:var(--muted);font-size:12px;font-weight:700;margin:0 0 6px}.battery-history .history-chart{height:175px}.battery-history .chart-empty{height:175px}.battery-chart-wrap{position:relative}.battery-soc-axis{position:absolute;right:0;top:24px;bottom:27px;display:flex;flex-direction:column;justify-content:space-between;color:var(--muted);font-size:10px;pointer-events:none}
       :host{font-size:15px}.brand-copy strong{font-size:18px}.brand-copy span,.live-pill{font-size:13px}.card-title,.badge{font-size:12px}.soc-ring span{font-size:12px}.status-line{font-size:14px}.flow-node strong{font-size:19px}.flow-node span,.flow-core span{font-size:12px}.decision strong{font-size:17px}.decision p{font-size:13px}.metric span{font-size:11px}.metric strong{font-size:14px}.window-label,.window-row,.slot-note{font-size:12px}.battery-now strong{font-size:15px}.battery-now b{font-size:27px}.soc-scale{font-size:11px}.detail span{font-size:11px}.detail strong,.control-row strong,.number-row strong,.cal-state strong{font-size:14px}.comparison p,.diag-line{font-size:14px}.control-row span,.number-row span,.cal-state span{font-size:11px}.action-btn,.message-list>div,.empty,.ack-card>p{font-size:13px}
-      @media(max-width:1350px){.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.summary-grid .energy-card{grid-row:span 2}.battery-upper{grid-template-columns:1fr}.battery-history .history-chart{height:190px}}
-      @media(max-width:1050px){.summary-grid{grid-template-columns:1fr}.summary-grid .energy-card{grid-row:auto}.summary-card{min-height:0}.battery-upper{grid-template-columns:minmax(205px,.52fr) minmax(320px,1.48fr)}}
+      @media(max-width:1350px){.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.battery-upper{grid-template-columns:1fr}.battery-history .history-chart{height:190px}}
+      @media(max-width:1050px){.summary-grid{grid-template-columns:1fr}.summary-card{min-height:0}.battery-upper{grid-template-columns:minmax(205px,.52fr) minmax(320px,1.48fr)}}
       @media(max-width:720px){.flow-canvas{min-height:320px}.window-label{align-items:flex-start;flex-direction:column;gap:3px}.ack-state{grid-template-columns:1fr}.number-input{width:94px}.summary-grid{gap:9px}.battery-upper{grid-template-columns:1fr}.history-chart{height:190px}.chart-empty{height:190px}.brand-copy strong{font-size:15px}.nav-item span{font-size:11px}.flow-node span{font-size:9px}}
       .flow-canvas{display:block;min-height:260px;position:relative;overflow:hidden}.flow-node,.flow-core{position:absolute;transform:translateX(-50%);z-index:3}.flow-node.grid{left:16%;top:96px}.flow-node.pv{left:50%;top:0}.flow-core{left:50%;top:86px}.flow-node.battery{left:84%;top:96px;color:var(--accent)}.flow-lines{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible}.flow-route,.flow-dots{fill:none;vector-effect:non-scaling-stroke}.flow-route{stroke:rgba(132,169,156,.2);stroke-width:.75;stroke-dasharray:7 8}.flow-route.active{stroke:var(--flow-color);stroke-width:1.05;stroke-dasharray:none;stroke-linecap:round;opacity:.62;filter:drop-shadow(0 0 2px var(--flow-color))}.flow-dots{stroke:transparent;stroke-width:4;stroke-linecap:round;stroke-dasharray:.1 16;pointer-events:none}.flow-dots.active{stroke:var(--flow-color);animation:flow-dots 1.35s linear infinite;filter:drop-shadow(0 0 4px var(--flow-color))}@keyframes flow-dots{to{stroke-dashoffset:-16.1}}.flow-node ha-icon{box-shadow:none}.flow-core ha-icon{box-shadow:0 0 18px rgba(82,184,255,.16)}
       .chart-shell{position:relative;min-width:0}.chart-hover-plane{fill:transparent;pointer-events:none}.chart-tooltip{position:absolute;z-index:6;min-width:155px;padding:9px 11px;border:1px solid rgba(144,177,164,.22);border-radius:9px;background:rgba(8,15,18,.96);box-shadow:0 8px 24px rgba(0,0,0,.38);opacity:0;visibility:hidden;pointer-events:none;transform:translateX(12px);transition:opacity .08s;color:var(--primary-text-color)}.chart-tooltip.visible{opacity:1;visibility:visible}.chart-tooltip.flip{transform:translateX(calc(-100% - 12px))}.chart-tooltip>b{display:block;margin-bottom:6px;font-size:11px;color:var(--muted)}.chart-tooltip>div{display:grid;grid-template-columns:9px 1fr auto;gap:7px;align-items:center;font-size:12px;padding:2px 0}.chart-tooltip i{width:8px;height:8px;border-radius:2px}.chart-tooltip strong{font-size:12px}.chart-legend .entity-card{cursor:pointer;padding:2px 4px;border-radius:5px}.drift-values{display:flex;gap:5px;flex-wrap:wrap}.drift-value{border:0;border-radius:10px;padding:3px 7px;cursor:pointer}.drift-value.good{color:#61e69a;background:rgba(56,213,130,.13)}.drift-value.warn{color:#ffd078;background:rgba(255,189,69,.14)}.drift-value.bad{color:#ff8a8a;background:rgba(255,107,107,.14)}.drift-value.neutral{color:var(--muted);background:rgba(130,150,145,.12)}.storage-slots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}.storage-slots>div{display:grid;grid-template-columns:auto auto;gap:3px 8px;padding:8px;border-radius:8px;background:rgba(110,135,125,.06)}.storage-slots span{justify-self:end;color:var(--accent)}.storage-slots small{grid-column:1/-1;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.entity-card{transition:border-color .15s,background .15s}.entity-card:hover{border-color:rgba(82,184,255,.3);background-color:rgba(82,184,255,.04)}
@@ -1149,6 +1191,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
       @media(max-width:720px){.flow-card .flow-canvas{min-height:340px}.flow-card .flow-ring{width:82px;height:82px;border-width:2px}.flow-card .flow-ring ha-icon{--mdc-icon-size:23px}.flow-card .flow-ring strong{font-size:14px}.flow-card .flow-ring b{font-size:10px}.flow-card .flow-node>span{font-size:9px}.flow-card .flow-node.grid{left:14%}.flow-card .flow-node.pv{top:21%}.flow-card .flow-node.home{left:86%}.flow-card .flow-node.battery{top:79%}}
       .battery-pair{grid-template-columns:repeat(auto-fit,minmax(390px,1fr))}.comparison-grid{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}.control-columns.manual-columns{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}.action-groups{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}.storage-slots{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
       @media(max-width:720px){.battery-pair,.comparison-grid,.control-columns.manual-columns,.action-groups,.storage-slots{grid-template-columns:1fr}}
+      .battery-diagnostics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:15px;padding-top:14px;border-top:1px solid var(--line)}.battery-diagnostics>div{min-width:0}.battery-diagnostics strong{font-size:12px}.battery-diagnostics small{display:block;color:var(--muted);font-size:10px}.battery-diagnostics .history-chart{height:180px}.cal-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}.cal-actions .action-btn{font-size:11px}
+      @media(max-width:720px){.battery-diagnostics{grid-template-columns:1fr}}
       @media(prefers-reduced-motion:reduce){.flow-dots.active{animation-duration:3s}}
     `;
   }
@@ -1251,6 +1295,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       const key = button.dataset.historyKey;
       if (key) this._historyHours[key] = Number(button.dataset.historyHours);
       this._render();
+      this._ensureHistory();
     }));
     this.shadowRoot.querySelectorAll("[data-chart-id]").forEach((shell) => {
       const svg = shell.querySelector(".history-chart");
@@ -1306,7 +1351,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 }
 
-const PANEL_ELEMENT = "speicher-ladelogik-panel-1-1-0";
+const PANEL_ELEMENT = "speicher-ladelogik-panel-1-2-0";
 
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);

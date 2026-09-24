@@ -96,6 +96,34 @@ def _local_timestamp(local_date, hour: int) -> float:
     return datetime.combine(local_date, time(hour=hour), tzinfo=zone).timestamp()
 
 
+def _solar_noon_today(hass: HomeAssistant, now: datetime) -> datetime:
+    """Return today's solar noon even after sun.sun advanced to tomorrow."""
+    sun = hass.states.get("sun.sun")
+    parsed = None
+    if sun is not None:
+        parsed = dt_util.parse_datetime(str(sun.attributes.get("next_noon", "")))
+    if parsed is None or parsed.tzinfo is None:
+        return datetime.combine(now.date(), time(hour=12), tzinfo=dt_util.DEFAULT_TIME_ZONE)
+
+    local_noon = dt_util.as_local(parsed)
+    while local_noon.date() > now.date():
+        local_noon -= timedelta(days=1)
+    while local_noon.date() < now.date():
+        local_noon += timedelta(days=1)
+    return local_noon
+
+
+def _bounded_hours(value: Any, default: float) -> float:
+    """Return a valid configurable solar-noon offset."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    if parsed != parsed:  # NaN
+        parsed = default
+    return max(0.0, min(8.0, parsed))
+
+
 def calculate(
     hass: HomeAssistant,
     config: dict[str, Any],
@@ -106,6 +134,12 @@ def calculate(
     """Run one planner calculation."""
     now = dt_util.now()
     today = now.date()
+    controls = control or {}
+    noon = _solar_noon_today(hass, now)
+    before_h = _bounded_hours(controls.get("mittag_vorlauf_h"), 2.0)
+    after_h = _bounded_hours(controls.get("mittag_nachlauf_h"), 4.0)
+    midday_start = noon - timedelta(hours=before_h)
+    midday_end = noon + timedelta(hours=after_h)
     mapping = _entity_mapping(config)
     proxy = _MappedHomeAssistant(
         hass,
@@ -132,7 +166,10 @@ def calculate(
             "day2": _local_timestamp(today + timedelta(days=2), 0),
             "nine": _local_timestamp(today, 9),
             "eleven": _local_timestamp(today, 11),
-            "deadline": _local_timestamp(today, 15),
+            "deadline": midday_end.timestamp(),
+            "solar_noon": noon.timestamp(),
+            "midday_start": midday_start.timestamp(),
+            "midday_end": midday_end.timestamp(),
             "prior_plan": prior_plan,
             "battery_keys": config.get(CONF_ENABLED_MODELS, ["A", "E"]),
             "slot_models": slot_models,
@@ -145,6 +182,8 @@ def calculate(
             "drift_entities": {
                 slot: _entities(slot, "drift") for slot in ("A", "D", "E")
             },
+            "parallel_calibration": bool(controls.get("kalibrierung_parallel", False)),
+            "parallel_session": controls.get("kalibrierung_zweitsitzung", ""),
         },
     )
     for command_key in ("commands", "proposed_commands"):

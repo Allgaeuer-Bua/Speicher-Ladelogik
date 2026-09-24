@@ -126,7 +126,11 @@ class SpeicherLadelogikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ),
                 vol.Required("storage_1_model", default="A"): SelectSelector(
                     SelectSelectorConfig(
-                        options=["A", "D", "E"],
+                        options=[
+                            {"value": "A", "label": "Venus A"},
+                            {"value": "D", "label": "Venus D"},
+                            {"value": "E", "label": "Venus E"},
+                        ],
                         mode=SelectSelectorMode.LIST,
                     )
                 ),
@@ -294,7 +298,11 @@ class SpeicherLadelogikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required("storage_1_model", default=models[0]): SelectSelector(
                         SelectSelectorConfig(
-                            options=["A", "D", "E"],
+                            options=[
+                                {"value": "A", "label": "Venus A"},
+                                {"value": "D", "label": "Venus D"},
+                                {"value": "E", "label": "Venus E"},
+                            ],
                             mode=SelectSelectorMode.LIST,
                         )
                     ),

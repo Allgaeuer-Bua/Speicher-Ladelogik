@@ -40,7 +40,11 @@ function createPanel() {
       entities: {
         betriebsart: "select.speicher_ladelogik_betriebsart",
         mittagsspitzen: "switch.speicher_ladelogik_mittagsspitzen",
-        mindestreserve: "number.speicher_ladelogik_mindestreserve",
+        fruehes_ladeziel_venus_a: "number.speicher_ladelogik_fruehes_ladeziel_venus_a",
+        maximale_ladeleistung_venus_a: "number.speicher_ladelogik_maximale_ladeleistung_venus_a",
+        maximale_entladeleistung_venus_a: "number.speicher_ladelogik_maximale_entladeleistung_venus_a",
+        mittag_vorlauf: "number.speicher_ladelogik_mittag_vorlauf",
+        mittag_nachlauf: "number.speicher_ladelogik_mittag_nachlauf",
         kalibrierleistung: "number.speicher_ladelogik_kalibrierleistung",
         kalibrierung: "sensor.speicher_ladelogik_kalibrierung",
         fehler_quittieren: "button.speicher_ladelogik_fehler_quittieren",
@@ -54,13 +58,19 @@ function createPanel() {
         soc_a: "sensor.venus_a_soc",
         soc_e: "sensor.venus_e_soc",
         drift_e: "sensor.venus_e_cell_delta",
+        charge_limit_a: "number.venus_a_charge_limit",
+        discharge_limit_a: "number.venus_a_discharge_limit",
       },
     },
   };
   panel._hass = {
     states: {
       "switch.speicher_ladelogik_mittagsspitzen": { state: "on", attributes: {} },
-      "number.speicher_ladelogik_mindestreserve": { state: "2", attributes: {} },
+      "number.speicher_ladelogik_fruehes_ladeziel_venus_a": { state: "70", attributes: { step: 1, unit_of_measurement: "%" } },
+      "number.speicher_ladelogik_maximale_ladeleistung_venus_a": { state: "1500", attributes: { step: 50, unit_of_measurement: "W" } },
+      "number.speicher_ladelogik_maximale_entladeleistung_venus_a": { state: "1500", attributes: { step: 50, unit_of_measurement: "W" } },
+      "number.speicher_ladelogik_mittag_vorlauf": { state: "2", attributes: { step: 0.25, unit_of_measurement: "h" } },
+      "number.speicher_ladelogik_mittag_nachlauf": { state: "4", attributes: { step: 0.25, unit_of_measurement: "h" } },
       "number.speicher_ladelogik_kalibrierleistung": {
         state: "750",
         attributes: { min: 400, max: 1500, step: 50, unit_of_measurement: "W" },
@@ -85,6 +95,8 @@ function createPanel() {
         state: "0.008000135",
         attributes: { unit_of_measurement: "V" },
       },
+      "number.venus_a_charge_limit": { state: "1100", attributes: { unit_of_measurement: "W" } },
+      "number.venus_a_discharge_limit": { state: "1500", attributes: { unit_of_measurement: "W" } },
     },
     callService: async (...args) => calls.push(args),
   };
@@ -103,7 +115,7 @@ test("panel controls call the matching Home Assistant services", async () => {
 
   await panel._setMode("Automatik");
   await panel._toggle("mittagsspitzen");
-  await panel._setNumber("mindestreserve", "3.5");
+  await panel._setNumber("fruehes_ladeziel_venus_a", "75");
   await panel._setNumber("kalibrierleistung", "800");
   await panel._press("fehler_quittieren");
 
@@ -116,8 +128,8 @@ test("panel controls call the matching Home Assistant services", async () => {
       entity_id: "switch.speicher_ladelogik_mittagsspitzen",
     }],
     ["number", "set_value", {
-      entity_id: "number.speicher_ladelogik_mindestreserve",
-      value: 3.5,
+      entity_id: "number.speicher_ladelogik_fruehes_ladeziel_venus_a",
+      value: 75,
     }],
     ["number", "set_value", {
       entity_id: "number.speicher_ladelogik_kalibrierleistung",
@@ -159,12 +171,37 @@ test("panel formats single-value drift sensors and register results", () => {
   );
 });
 
+test("battery diagnostics show measured efficiency, power and individual drift history", () => {
+  const { panel } = createPanel();
+  panel._panel.config.entities.wirkungsgrad_venus_a = "sensor.speicher_ladelogik_wirkungsgrad_venus_a";
+  panel._panel.config.sources.drift_a = ["sensor.pack_1_drift", "sensor.pack_2_drift"];
+  panel._hass.states["sensor.speicher_ladelogik_wirkungsgrad_venus_a"] = { state: "93", attributes: {} };
+  panel._hass.states["sensor.pack_1_drift"] = { entity_id: "sensor.pack_1_drift", state: "0.015", attributes: { unit_of_measurement: "V" } };
+  panel._hass.states["sensor.pack_2_drift"] = { entity_id: "sensor.pack_2_drift", state: "18", attributes: { unit_of_measurement: "mV" } };
+  panel._tab = "batteries";
+  assert.ok(panel._historySourceIds().includes("sensor.pack_2_drift"));
+  const markup = panel._batteryDiagnostics("A");
+  assert.match(markup, /Wirkungsgrad und Leistung/);
+  assert.match(markup, /Pack 1/);
+  assert.match(markup, /Pack 2/);
+  assert.match(markup, /30 Tage/);
+});
+
+test("control keeps calibration actions beside their storage and the operating mode last", () => {
+  const { panel } = createPanel();
+  const control = panel._control();
+  assert.ok(control.indexOf("Vormerkung löschen") < control.indexOf("Laufende Kalibrierung abbrechen"));
+  assert.ok(control.indexOf("Vorzeitiges Ladeziel") < control.indexOf("Betriebsart"));
+  assert.doesNotMatch(control, /Mindestreserve/);
+});
+
 test("overview replaces duplicate battery cards with daily history cards", () => {
   const { panel } = createPanel();
   const overview = panel._overview();
 
   assert.match(overview, /Energie heute/);
   assert.match(overview, /SoC · heute/);
+  assert.doesNotMatch(overview, /mdi:flash-outline.*Leistung/);
   assert.match(overview, /Mittagsspitzenkappung/);
   assert.doesNotMatch(overview, /battery-pair span-full/);
   assert.match(panel._header(), />Speicher</);
@@ -185,26 +222,21 @@ test("planning uses the remaining forecast and labels the battery fill need", ()
   assert.match(card, /Geplante Einspeisung zur PV-Spitze/);
 });
 
-test("number fields show whole steps as integers and retain fractional reserves", () => {
+test("number fields show whole steps as integers", () => {
   const { panel } = createPanel();
   panel._hass.states["number.speicher_ladelogik_kalibrierleistung"].state = "750.0";
-  panel._hass.states["number.speicher_ladelogik_mindestreserve"].attributes = {
-    step: 0.1, unit_of_measurement: "kWh",
-  };
   assert.match(panel._numberRow(["kalibrierleistung", "Ladeleistung", ""]), /value="750"/);
-  assert.match(panel._numberRow(["mindestreserve", "Mindestreserve", ""]), /value="2"/);
-  panel._hass.states["number.speicher_ladelogik_mindestreserve"].state = "2.5";
-  assert.match(panel._numberRow(["mindestreserve", "Mindestreserve", ""]), /value="2\.5"/);
+  assert.match(panel._numberRow(["fruehes_ladeziel_venus_a", "Vorzeitiges Ladeziel", ""]), /value="70"/);
 });
 
-test("charts do not draw a slope across a long change without readings", () => {
+test("charts connect their lines across measurement gaps", () => {
   const { panel } = createPanel();
   const now = Date.now();
   assert.deepEqual(panel._chartSegments([
     { t: now - 4_000_000, v: 0.1 },
     { t: now - 3_000_000, v: -0.5 },
     { t: now - 2_999_000, v: -0.4 },
-  ]).map((segment) => segment.length), [1, 2]);
+  ]).map((segment) => segment.length), [3]);
   assert.equal(panel._chartSegments([
     { t: now - 4_000_000, v: 0.1 },
     { t: now - 3_000_000, v: 0.1 },
@@ -220,26 +252,57 @@ test("calibration shows the last success per storage", () => {
   assert.match(card, /Noch keine erfolgreiche Kalibrierung bekannt/);
 });
 
+test("calibration shows stored energy, accepted learning and end drift without claiming balancing", () => {
+  const { panel } = createPanel();
+  const attributes = panel._hass.states["sensor.speicher_ladelogik_kalibrierung"].attributes;
+  attributes.kalibrierung_letzter_erfolg_a_ts = Date.now() / 1000;
+  attributes.letztes_ergebnis_a = {
+    ac_kwh: 3.913, learned: true, drift_after_mv: [9, 2],
+  };
+  const card = panel._calibrationCard();
+  assert.match(card, /Geladen: 3,91 kWh/);
+  assert.match(card, /Für künftige Kalibrierfenster übernommen/);
+  assert.match(card, /Pack 1: 9 mV · Pack 2: 2 mV/);
+  assert.match(card, /Ein Top-Balancing-Erfolg lässt sich daraus nicht ableiten/);
+  attributes.letztes_ergebnis_a = {
+    ac_kwh: 3.913, learned: true, drift_top_start_mv: [11, null],
+    drift_top_change_mv: [-2, null], drift_after_mv: [9, 2],
+  };
+  assert.match(panel._calibrationCard(), /Pack 1: 11 → 9 mV \(-2 mV\)/);
+  attributes.letztes_ergebnis_a = {
+    ac_kwh: null, learned: false, drift_after_mv: [null],
+  };
+  const missing = panel._calibrationCard();
+  assert.match(missing, /Geladen: —/);
+  assert.match(missing, /Nicht als Lernwert übernommen/);
+  assert.match(missing, /kein Messwert gespeichert/);
+});
+
 test("daily battery energy separates charging and discharging signs", () => {
   const { panel } = createPanel();
   const now = Date.now();
+  const dayStart = panel._dayStart().getTime();
+  const third = Math.max(1000, (now - dayStart) / 3);
   panel._history = {
     "sensor.venus_a_power": [
-      { s: "-1000", lu: (now - 7_200_000) / 1000 },
-      { s: "500", lu: (now - 3_600_000) / 1000 },
-      { s: "500", lu: now / 1000 },
+      { s: "-1000", lu: dayStart / 1000 },
+      { s: "500", lu: (dayStart + third) / 1000 },
+      { s: "500", lu: (dayStart + 2 * third) / 1000 },
     ],
   };
 
   const energy = panel._batteryEnergy("a");
-  assert.ok(energy.charged > 0.99 && energy.charged < 1.01);
-  assert.ok(energy.discharged > 0.49 && energy.discharged < 0.51);
+  assert.ok(energy.charged > 0);
+  assert.ok(energy.discharged > 0);
+  assert.ok(Math.abs(energy.charged - energy.discharged) < 0.01);
   const card = panel._batteryCard("A", true);
   assert.match(card, /Heute geladen/);
   assert.match(card, /Heute entladen/);
   assert.match(card, /Restbedarf/);
   assert.match(card, />Verlust</);
-  assert.match(card, /Register/);
+  assert.match(card, /Ladegrenze/);
+  assert.match(card, /Entladegrenze/);
+  assert.doesNotMatch(card, /Register/);
   assert.doesNotMatch(card, /Fahrplanlimit/);
   assert.ok(card.indexOf("Verlust") < card.indexOf("Restbedarf"));
 });
@@ -311,22 +374,38 @@ test("calibration status explains empty and active states", () => {
   assert.match(card, /Venus A/);
   assert.match(card, /Ladung mit 500 W/);
   assert.match(card, /Aktuelle Phase: Kalibrierung A: Kalibrierladung/);
+
+  panel._hass.states["sensor.speicher_ladelogik_kalibrierung"].state = "Kalibrierung A: full_rest";
+  panel._hass.states["sensor.speicher_ladelogik_kalibrierung"].attributes.ruhe_verbleibend_s = 3599;
+  card = panel._calibrationCard();
+  assert.match(card, /Aktuelle Phase: Kalibrierung A: Obere Ruhephase · noch ca. 60 min/);
 });
 
 test("control settings explain the effect of planning thresholds", () => {
   const { panel } = createPanel();
-  const reserves = panel._numberCard("Planungsreserven", "mdi:shield-sun-outline", "planung");
+  const reserves = panel._numberCard("Planungsparameter", "mdi:shield-sun-outline", "planung");
   const classes = panel._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen");
-  const power = panel._numberCard("Ladeleistungen", "mdi:battery-charging", "leistung");
+  const power = panel._numberCard("Leistungsgrenzen", "mdi:battery-charging", "leistung");
   assert.match(reserves, /Was bedeuten diese Werte\?/);
   assert.match(reserves, /Knappheits-Hysterese/);
   assert.match(reserves, /1,25-mal der Restbedarf/);
   assert.match(classes, /bevorzugten Ladebeginn/);
   assert.match(power, /tatsächliche Verbrauch/);
+  assert.match(power, /maximal Entladen/);
+  assert.match(power, /Harte Obergrenze im Automatikbetrieb/);
+});
+
+test("control page starts with calibration, then manual mode, then the remaining settings", () => {
+  const { panel } = createPanel();
+  const control = panel._control();
+  assert.ok(control.indexOf("Kalibrierung") < control.indexOf("Handbetrieb Venus A"));
+  assert.ok(control.indexOf("Handbetrieb Venus A") < control.indexOf("Betriebsart"));
+  assert.match(control, /Beginn vor Sonnenhöchststand/);
+  assert.match(control, /Leistungsgrenzen/);
 });
 
 test("frontend element name matches the integration release version", () => {
-  assert.equal(panelElementName, "speicher-ladelogik-panel-1-1-0");
+  assert.equal(panelElementName, "speicher-ladelogik-panel-1-2-0");
   assert.equal(registry.get(panelElementName), Panel);
   assert.equal(registry.has("speicher-ladelogik-panel-1-0-1"), false);
 });
@@ -370,12 +449,10 @@ test("source-only updates avoid a full dashboard render", () => {
 test("every chart keeps its own selected history range", () => {
   const { panel } = createPanel();
 
-  panel._historyHours.overviewPower = 1;
   panel._historyHours.overviewSoc = 6;
   panel._historyHours.batteryA = 12;
   panel._historyHours.batteryE = 24;
 
-  assert.match(panel._historyButtons("overviewPower"), /data-history-hours="1" class="active"/);
   assert.match(panel._historyButtons("overviewSoc"), /data-history-hours="6" class="active"/);
   assert.match(panel._historyButtons("batteryA"), /data-history-hours="12" class="active"/);
   assert.match(panel._historyButtons("batteryE"), /data-history-hours="24" class="active"/);

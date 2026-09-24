@@ -17,6 +17,7 @@ from homeassistant.const import PERCENTAGE, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from .calibration_results import last_successful_result
 from .coordinator import SpeicherLadelogikCoordinator
 from .entity import SpeicherLadelogikEntity
 
@@ -24,9 +25,11 @@ PHASE_LABELS = {
     "idle": "Bereit",
     "requested": "Auftrag vorgemerkt",
     "drain": "Entladen auf 13 %",
+    "empty_rest": "Untere Ruhephase",
     "wait": "Wartet auf PV-Fenster",
     "charge": "Kalibrierladung",
-    "rest": "Ruheprüfung",
+    "rest": "Obere Ruhephase",
+    "full_rest": "Obere Ruhephase",
     "paused": "Pausiert",
     "restore": "Grenzwerte wiederherstellen",
     "done": "Erfolgreich beendet",
@@ -259,6 +262,9 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "tagesklasse",
                 "ladefenster_start_ts",
                 "ladefenster_ende_ts",
+                "sonnenhoechststand_ts",
+                "mittagsfenster_start_ts",
+                "mittagsfenster_ende_ts",
                 "fenster_fortschritt_prozent",
                 "sicher_speicherbar_rest_kwh",
                 "sicher_speicherbar_fenster_rest_kwh",
@@ -274,6 +280,13 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "spitzenfenster_start_ts",
                 "spitzenfenster_ende_ts",
                 "spitzenplan_voll_ts",
+                "netzeinspeisung_seit_ts",
+                "morgenueberschuss_aktiv",
+                "morgenueberschuss_speicher",
+                "prognose_kurzfristfaktor",
+                "hausleistung_aktuell_w",
+                "ueberschuss_untergrenze_w",
+                "fruehe_soc_ziele_prozent",
                 "vorziehen_noetig",
                 "fruehestens_voll_ts",
                 "ziel_fehlmenge_simulation_kwh",
@@ -294,6 +307,8 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "untere_geraetegrenze_venus_{name}_prozent",
                 "obere_geraetegrenze_venus_{name}_prozent",
                 "soll_ladegrenze_venus_{name}_w",
+                "maximale_ladeleistung_{name}_w",
+                "maximale_entladeleistung_{name}_w",
                 "fahrplan_ladegrenze_roh_venus_{name}_w",
                 "fahrplan_ladegrenze_stabil_venus_{name}_w",
                 "sollwert_venus_{name}_gehalten",
@@ -359,6 +374,11 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 )
                 for key in drift_fields:
                     attributes[key] = calibration.get(key)
+                attributes[f"letztes_ergebnis_{name}"] = last_successful_result(
+                    self.coordinator.control,
+                    model,
+                    data.get(f"kalibrierung_letzter_erfolg_{name}_ts"),
+                )
             return attributes
         for model in self.coordinator.enabled_models:
             name = model.lower()

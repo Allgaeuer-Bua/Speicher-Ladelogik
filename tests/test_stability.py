@@ -16,11 +16,26 @@ SPEC.loader.exec_module(STABILITY)
 
 stable_charge_limit = STABILITY.stable_charge_limit
 calibration_available_surplus = STABILITY.calibration_available_surplus
+calibration_required_seconds = STABILITY.calibration_required_seconds
 target_latch = STABILITY.target_latch
 peer_discharge_release = STABILITY.peer_discharge_release
 peer_grid_support = STABILITY.peer_grid_support
 quarter_hour_window = STABILITY.quarter_hour_window
 early_soc_candidates = STABILITY.early_soc_candidates
+confirmed_export = STABILITY.confirmed_export
+
+
+def test_morning_export_needs_three_minutes_of_real_surplus() -> None:
+    ready, since = confirmed_export(now_ts=1000, grid_power_w=-900,
+                                    live_surplus_w=750, prior_since_ts=None)
+    assert (ready, since) == (False, 1000)
+    ready, since = confirmed_export(now_ts=1180, grid_power_w=-900,
+                                    live_surplus_w=750, prior_since_ts=since)
+    assert (ready, since) == (True, 1000)
+    assert confirmed_export(now_ts=1210, grid_power_w=300,
+                            live_surplus_w=750, prior_since_ts=since) == (False, None)
+    assert confirmed_export(now_ts=1210, grid_power_w=-900,
+                            live_surplus_w=50, prior_since_ts=since) == (False, None)
 
 
 def test_early_soc_goals_only_select_eligible_storages_below_their_goal() -> None:
@@ -45,6 +60,11 @@ def test_calibration_surplus_restores_its_own_draw() -> None:
 
 def test_calibration_surplus_does_not_help_before_start() -> None:
     assert calibration_available_surplus(120, 480, running=False) == 120
+
+
+def test_calibration_duration_is_not_rounded_to_forecast_slots() -> None:
+    assert calibration_required_seconds(3.77 / 0.5) == 27_144
+    assert calibration_required_seconds(3.77 / 0.5) < 7.75 * 3600
 
 
 def test_target_is_latched_at_device_goal() -> None:

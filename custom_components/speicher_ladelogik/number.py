@@ -10,7 +10,7 @@ from homeassistant.components.number import (
     NumberMode,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfPower
+from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfPower, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -30,6 +30,12 @@ NUMBERS = (
     SpeicherNumberDescription(key="bevorzugte_ladeleistung_venus_a", name="Bevorzugte Ladeleistung Venus A", control_key="bevorzugte_ladeleistung_a_w", minimum=0, maximum=1500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
     SpeicherNumberDescription(key="bevorzugte_ladeleistung_venus_d", name="Bevorzugte Ladeleistung Venus D", control_key="bevorzugte_ladeleistung_d_w", minimum=0, maximum=2500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
     SpeicherNumberDescription(key="bevorzugte_ladeleistung_venus_e", name="Bevorzugte Ladeleistung Venus E", control_key="bevorzugte_ladeleistung_e_w", minimum=0, maximum=2500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
+    SpeicherNumberDescription(key="maximale_ladeleistung_venus_a", name="Maximale automatische Ladeleistung Venus A", control_key="maximale_ladeleistung_a_w", minimum=0, maximum=1500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
+    SpeicherNumberDescription(key="maximale_ladeleistung_venus_d", name="Maximale automatische Ladeleistung Venus D", control_key="maximale_ladeleistung_d_w", minimum=0, maximum=2500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
+    SpeicherNumberDescription(key="maximale_ladeleistung_venus_e", name="Maximale automatische Ladeleistung Venus E", control_key="maximale_ladeleistung_e_w", minimum=0, maximum=2500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
+    SpeicherNumberDescription(key="maximale_entladeleistung_venus_a", name="Maximale automatische Entladeleistung Venus A", control_key="maximale_entladeleistung_a_w", minimum=0, maximum=1500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
+    SpeicherNumberDescription(key="maximale_entladeleistung_venus_d", name="Maximale automatische Entladeleistung Venus D", control_key="maximale_entladeleistung_d_w", minimum=0, maximum=2500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
+    SpeicherNumberDescription(key="maximale_entladeleistung_venus_e", name="Maximale automatische Entladeleistung Venus E", control_key="maximale_entladeleistung_e_w", minimum=0, maximum=2500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
     SpeicherNumberDescription(key="nennkapazitaet_venus_a", name="Nennkapazität Venus A", control_key="nennkapazitaet_a_kwh", minimum=0.1, maximum=30, step=0.01, native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR),
     SpeicherNumberDescription(key="nennkapazitaet_venus_d", name="Nennkapazität Venus D", control_key="nennkapazitaet_d_kwh", minimum=0.1, maximum=30, step=0.01, native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR),
     SpeicherNumberDescription(key="nennkapazitaet_venus_e", name="Nennkapazität Venus E", control_key="nennkapazitaet_e_kwh", minimum=0.1, maximum=30, step=0.01, native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR),
@@ -39,19 +45,18 @@ NUMBERS = (
     SpeicherNumberDescription(key="manuell_entladen_venus_d", name="Handbetrieb Entladen Venus D", control_key="manuell_entladen_d_w", minimum=0, maximum=2500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
     SpeicherNumberDescription(key="manuell_laden_venus_e", name="Handbetrieb Laden Venus E", control_key="manuell_laden_e_w", minimum=0, maximum=2500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
     SpeicherNumberDescription(key="manuell_entladen_venus_e", name="Handbetrieb Entladen Venus E", control_key="manuell_entladen_e_w", minimum=0, maximum=2500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
-    SpeicherNumberDescription(key="mindestreserve", name="Mindestreserve", control_key="mindestreserve", minimum=0, maximum=20, step=0.1, native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR),
     SpeicherNumberDescription(
-        key="fruehes_ladeziel_venus_a", name="Frühes Ladeziel Venus A",
+        key="fruehes_ladeziel_venus_a", name="Vorzeitiges Ladeziel Venus A",
         control_key="fruehes_ladeziel_a_soc", minimum=0, maximum=100,
         step=1, native_unit_of_measurement=PERCENTAGE,
     ),
     SpeicherNumberDescription(
-        key="fruehes_ladeziel_venus_d", name="Frühes Ladeziel Venus D",
+        key="fruehes_ladeziel_venus_d", name="Vorzeitiges Ladeziel Venus D",
         control_key="fruehes_ladeziel_d_soc", minimum=0, maximum=100,
         step=1, native_unit_of_measurement=PERCENTAGE,
     ),
     SpeicherNumberDescription(
-        key="fruehes_ladeziel_venus_e", name="Frühes Ladeziel Venus E",
+        key="fruehes_ladeziel_venus_e", name="Vorzeitiges Ladeziel Venus E",
         control_key="fruehes_ladeziel_e_soc", minimum=0, maximum=100,
         step=1, native_unit_of_measurement=PERCENTAGE,
     ),
@@ -63,6 +68,8 @@ NUMBERS = (
     SpeicherNumberDescription(key="mittlerer_tag", name="Mittlerer PV-Tag", control_key="mittlerer_tag", minimum=0, maximum=200, step=1, native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR),
     SpeicherNumberDescription(key="starker_tag", name="Starker PV-Tag", control_key="starker_tag", minimum=0, maximum=200, step=1, native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR),
     SpeicherNumberDescription(key="knappheitsreserve", name="Knappheitsreserve", control_key="knappheitsreserve", minimum=100, maximum=200, step=1, native_unit_of_measurement=PERCENTAGE),
+    SpeicherNumberDescription(key="mittag_vorlauf", name="Mittagsfenster vor Sonnenhöchststand", control_key="mittag_vorlauf_h", minimum=0, maximum=8, step=0.25, native_unit_of_measurement=UnitOfTime.HOURS),
+    SpeicherNumberDescription(key="mittag_nachlauf", name="Mittagsfenster nach Sonnenhöchststand", control_key="mittag_nachlauf_h", minimum=0, maximum=8, step=0.25, native_unit_of_measurement=UnitOfTime.HOURS),
     SpeicherNumberDescription(key="min_effiziente_leistung", name="Minimale effiziente Ladeleistung", control_key="min_effiziente_leistung", minimum=0, maximum=5000, step=50, native_unit_of_measurement=UnitOfPower.WATT),
     SpeicherNumberDescription(key="kalibrierleistung", name="Kalibrierleistung", control_key="kalibrierleistung_w", minimum=400, maximum=1500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
     SpeicherNumberDescription(key="venus_a_packs", name="Anzahl Module Speicher 1", control_key="venus_a_packs", minimum=1, maximum=6, step=1),

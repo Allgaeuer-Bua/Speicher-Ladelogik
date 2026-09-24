@@ -1,0 +1,56 @@
+name: Publish v1.1.1-beta.1
+
+on:
+  push:
+    branches:
+      - codex/v1.1.1-beta.1
+
+permissions:
+  contents: write
+
+jobs:
+  prerelease:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out beta branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Run Python checks
+        run: |
+          python -m compileall -q custom_components tests
+          python - <<'PY'
+          import importlib.util
+          from pathlib import Path
+
+          count = 0
+          for path in sorted(Path("tests").glob("test_*.py")):
+              spec = importlib.util.spec_from_file_location(path.stem, path)
+              module = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(module)
+              for name in sorted(vars(module)):
+                  test = getattr(module, name)
+                  if name.startswith("test_") and callable(test):
+                      test()
+                      count += 1
+          print(f"{count} Python tests passed")
+          PY
+
+      - name: Run frontend tests
+        run: node --test tests/test_frontend_panel.mjs
+
+      - name: Create GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view v1.1.1-beta.1 --repo "${{ github.repository }}" >/dev/null 2>&1 || \
+            gh release create v1.1.1-beta.1 \
+              --repo "${{ github.repository }}" \
+              --target "${{ github.sha }}" \
+              --title "v1.1.1-beta.1" \
+              --prerelease \
+              --notes "Praxistest: dynamisch neu bewertetes PV-Fenster, sekundengenaue Ladedauer sowie je 90 Minuten untere und obere Ruhephase. Nicht für stabile Installationen vorgesehen."

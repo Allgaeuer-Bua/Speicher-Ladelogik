@@ -85,6 +85,10 @@ _STABILITY_KEYS = tuple(
     "betriebsart",
     "regelung_aktiv",
     "mittagsspitzen_aktiv",
+    "sonnenhoechststand_ts",
+    "mittagsfenster_start_ts",
+    "mittagsfenster_ende_ts",
+    "netzeinspeisung_seit_ts",
     "fahrplan_slot_start_ts",
     "fahrplan_slot_ende_ts",
     "fahrplan_slot_aktiv_venus_a",
@@ -117,6 +121,8 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             model = str(instance["model"])
             modules = int(instance.get("modules", MODEL_DEFAULT_MODULES.get(model, 1)))
             self._control[f"bevorzugte_ladeleistung_{name}_w"] = MODEL_PREFERRED_W[model]
+            self._control[f"maximale_ladeleistung_{name}_w"] = MODEL_MAXIMUM_W[model]
+            self._control[f"maximale_entladeleistung_{name}_w"] = MODEL_MAXIMUM_W[model]
             self._control[f"nennkapazitaet_{name}_kwh"] = nominal_capacity(model, modules)
             self._control[f"manuell_entladen_{name}_w"] = MODEL_MAXIMUM_W[model]
             if model in MODEL_DEFAULT_MODULES:
@@ -209,6 +215,8 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             maximum = MODEL_MAXIMUM_W[model]
             for field in (
                 f"bevorzugte_ladeleistung_{name}_w",
+                f"maximale_ladeleistung_{name}_w",
+                f"maximale_entladeleistung_{name}_w",
                 f"manuell_laden_{name}_w",
                 f"manuell_entladen_{name}_w",
             ):
@@ -321,8 +329,10 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._state_loaded:
             return
         stored = await self._stability_store.async_load()
+        loaded_control: dict[str, Any] = {}
         if isinstance(stored, dict) and "control" in stored:
-            self._control.update(stored.get("control", {}))
+            loaded_control = dict(stored.get("control", {}))
+            self._control.update(loaded_control)
             self._stored_stability = dict(stored.get("stability", {}))
         else:
             # One-time migration. The first RC deliberately starts in
@@ -352,6 +362,8 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._control["mode"] = "Beobachten"
             self._control["migrated_from_legacy"] = True
         self._sync_model_controls()
+        for obsolete in ("mindestreserve", "mindestreserve_a_kwh", "mindestreserve_d_kwh", "mindestreserve_e_kwh"):
+            self._control.pop(obsolete, None)
         self._state_loaded = True
         self._last_plan = self._stored_stability or None
         self._schedule_state_save()
@@ -971,6 +983,9 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     CAL_BACKUP_ENTITY, output["save_cal_backup"]
                 )
             await self._async_set_helper(SESSION_ENTITY, output.get("session", ""))
+            if isinstance(output.get("parallel_session"), str):
+                self._control["kalibrierung_zweitsitzung"] = output["parallel_session"]
+                self._schedule_state_save()
             await self._async_set_helper(QUEUE_ENTITY, output.get("queue", ""))
 
             by_battery = {battery: [] for battery in self.enabled_models}
@@ -1011,8 +1026,10 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._async_set_helper(
                 "input_boolean.speicher_ladelogik_laden_freigegeben", release
             )
-            if output.get("finish") and all_ok:
-                battery = str(output.get("calibration", {}).get("batterie", ""))
+            for finish_event in output.get("finish_events", []):
+                battery = str(finish_event.get("battery", ""))
+                if not successful.get(battery, False):
+                    continue
                 name = battery.lower()
                 if battery in self.enabled_models:
                     await self._async_set_helper(
@@ -1028,12 +1045,17 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     await self._async_set_helper(
                         "input_number.speicher_ladelogik_kalibrierung_"
                         f"{name}_letzte_energie",
-                        output.get("calibration", {}).get("energie_ac_kwh", 0),
+                        finish_event.get("energy_kwh", 0),
                     )
-                for entity_id in output.get("reset_after_calibration", []):
-                    await self._async_set_helper(entity_id, False)
+                    for suffix in ("freigegeben", "laden_sperren"):
+                        await self._async_set_helper(
+                            f"input_boolean.speicher_ladelogik_kalibrierung_{name}_{suffix}", False,
+                        )
 
-            if output.get("capture_drift") and all_ok:
+            for finish_event in output.get("finish_events", []):
+                battery = finish_event.get("battery")
+                if not successful.get(battery, False) or not finish_event.get("capture_drift"):
+                    continue
                 calibration = output.get("calibration", {})
                 drift_fields = {
                     "A": (
@@ -1046,7 +1068,6 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         ("d_p2", "drift_d_p2_mv"),
                     ),
                 }
-                battery = calibration.get("batterie")
                 for helper_suffix, attribute in drift_fields.get(battery, ()):
                     value = calibration.get(attribute)
                     if value is not None:
