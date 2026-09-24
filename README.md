@@ -11,7 +11,7 @@ oder Speichern. Sie verwendet vorhandene Home-Assistant-Entitäten. Dadurch
 können Messwerte aus unterschiedlichen Integrationen und von verschiedenen
 Anbietern verwendet werden, sofern Bedeutung, Einheit und Vorzeichen passen.
 
-> **Version im Quellcode:** 1.2.0
+> **Version im Quellcode:** 1.2.1
 > **Erforderliche Home-Assistant-Version:** 2026.9.1 oder neuer
 
 ## Wofür ist die Integration gedacht?

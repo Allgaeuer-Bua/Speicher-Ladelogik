@@ -1,5 +1,11 @@
 # Änderungsverlauf
 
+## 1.2.1
+
+- Wirkungsgrad und AC-Leistung zeigen Laden und Entladen als getrennte
+  Kurven. Ein Wirkungsgrad von 0 % im Leerlauf erscheint nicht als Messung.
+- Bei 7- und 30-Tage-Verläufen enthält der Tooltip auch das Datum.
+
 ## 1.2.0
 
 - Die Änderungen der Vorabversion 1.1.1 einschließlich der getrennten Kalibrierergebnisse,

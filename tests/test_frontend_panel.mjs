@@ -178,12 +178,20 @@ test("battery diagnostics show measured efficiency, power and individual drift h
   panel._hass.states["sensor.speicher_ladelogik_wirkungsgrad_venus_a"] = { state: "93", attributes: {} };
   panel._hass.states["sensor.pack_1_drift"] = { entity_id: "sensor.pack_1_drift", state: "0.015", attributes: { unit_of_measurement: "V" } };
   panel._hass.states["sensor.pack_2_drift"] = { entity_id: "sensor.pack_2_drift", state: "18", attributes: { unit_of_measurement: "mV" } };
+  panel._history = {
+    "sensor.venus_a_power": [
+      { state: "-500", last_updated: new Date(Date.now() - 120_000).toISOString() },
+      { state: "400", last_updated: new Date(Date.now() - 60_000).toISOString() },
+    ],
+  };
   panel._tab = "batteries";
   assert.ok(panel._historySourceIds().includes("sensor.pack_2_drift"));
   const markup = panel._batteryDiagnostics("A");
   assert.match(markup, /Wirkungsgrad und Leistung/);
   assert.match(markup, /Pack 1/);
   assert.match(markup, /Pack 2/);
+  assert.match(markup, /Laden/);
+  assert.match(markup, /Entladen/);
   assert.match(markup, /30 Tage/);
 });
 
@@ -405,7 +413,7 @@ test("control page starts with calibration, then manual mode, then the remaining
 });
 
 test("frontend element name matches the integration release version", () => {
-  assert.equal(panelElementName, "speicher-ladelogik-panel-1-2-0");
+  assert.equal(panelElementName, "speicher-ladelogik-panel-1-2-1");
   assert.equal(registry.get(panelElementName), Panel);
   assert.equal(registry.has("speicher-ladelogik-panel-1-0-1"), false);
 });
