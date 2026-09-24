@@ -84,6 +84,7 @@ PANEL_ENTITIES: Final = {
     "wirkungsgrad_venus_e": ("sensor", "wirkungsgrad_venus_e"),
     "verlustleistung_venus_e": ("sensor", "verlustleistung_venus_e"),
     "mittagsspitzen": ("switch", "mittagsspitzen"),
+    "kalibrierung_parallel": ("switch", "kalibrierung_parallel"),
     "handbetrieb_venus_a": ("switch", "handbetrieb_venus_a"),
     "handbetrieb_venus_d": ("switch", "handbetrieb_venus_d"),
     "handbetrieb_venus_e": ("switch", "handbetrieb_venus_e"),

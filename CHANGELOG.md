@@ -1,5 +1,21 @@
 # Änderungsverlauf
 
+## 1.1.1-beta.3
+
+- Die Kalibrierkarte zeigt je Speicher die AC-Energie des letzten erfolgreichen
+  Laufs, ob der Messwert für die künftige Fensterplanung übernommen wurde, und
+  die nach der oberen Ruhephase gespeicherte Zelldrift je verfügbarem Pack.
+- Fehlende historische Driftwerte werden als fehlend gekennzeichnet. Die Drift
+  am Ladebeginn und bei 100 % wird nicht als Top-Balancing-Erfolg interpretiert,
+  weil sie bei unterschiedlichem SoC gemessen wurde.
+- Zwei Kalibrierungen können optional parallel laufen, wenn der zweite Speicher
+  bereits leer vorbereitet ist und beide Leistungen gemeinsam vom gemessenen
+  PV-Überschuss gedeckt werden. Jeder Lauf behält seinen eigenen Zustand,
+  Abschluss, Messwert und seine eigene Grenzwert-Rücksicherung.
+- Neue Läufe speichern zusätzlich die Zelldrift bei 100 % vor und nach der
+  oberen Ruhephase. Die Veränderung wird als Messwert angezeigt und nicht als
+  Beweis für aktives Balancing gewertet.
+
 ## 1.1.1-beta.2
 
 - Verlaufsdiagramme werden als durchgehende Linien dargestellt; der doppelte

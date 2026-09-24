@@ -34,7 +34,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
 
     output = {}
 
-    VERSION = "1.1.1-beta.2"
+    VERSION = "1.1.1-beta.3"
     NOW = float(data.get("now", time.time()))
     DAY0 = float(data.get("day0", 0))
     DAY1 = float(data.get("day1", 0))
@@ -568,11 +568,14 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             context["batteries"][key].get("charge_power")
             if key in BATTERY_KEYS else None
         )
-        calibration_surplus = calibration_available_surplus(
-            context["live_surplus"],
-            actual_draw,
-            running=running_charge,
+        calibration_surplus = (
+            context["shared_surplus"] if context.get("parallel")
+            else calibration_available_surplus(
+                context["live_surplus"], actual_draw, running=running_charge,
+            )
         )
+        required_start = calibration_power * context.get("parallel_factor", 1) + 100 * context.get("parallel_factor", 1)
+        required_running = calibration_min_power * context.get("running_factor", 1)
         if key not in BATTERY_KEYS:
             transition(s, "error", "state_corrupt")
         elif p != "restore" and (request == "cancel" or not context["automatic"] or not context["armed"][key]):
@@ -595,7 +598,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             resume = s["u"] or "requested"
             if resume == "charge" and s["x"] + 1800 <= NOW:
                 transition(s, "restore", "retry_window")
-            elif resume != "charge" or calibration_surplus >= calibration_power + 100:
+            elif resume != "charge" or calibration_surplus >= required_start:
                 transition(s, resume, "resumed")
                 s["u"] = ""
                 s["q"] = int(NOW)
@@ -680,7 +683,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 and s["s"] <= NOW
                 and s["n"] <= DAY0
                 and preview["ok"]
-                and context["live_surplus"] >= calibration_power + 100
+                and calibration_surplus >= required_start
             ):
                 if context["batteries"][key]["cal_empty_ready"]:
                     transition(s, "charge", "charging")
@@ -718,7 +721,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 else:
                     s["f"] = 0
                 if s["p"] == "charge":
-                    if calibration_surplus < calibration_min_power:
+                    if calibration_surplus < required_running:
                         pause_session(s, "pv_pause")
                     elif s["h"] and power is not None and power < calibration_min_power and not bat["all_full"]:
                         s["l"] = s["l"] or int(NOW)
@@ -733,7 +736,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                     # The forecast window starts a calibration. It must not
                     # stop a nearly full battery while measured PV surplus is
                     # still sufficient, so extend it in quarter-hour steps.
-                    if calibration_surplus >= calibration_min_power:
+                    if calibration_surplus >= required_running:
                         s["x"] = int(NOW + 900)
                         s["r"] = "window_extended_live_surplus"
                     else:
@@ -831,11 +834,16 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     def read_learning():
         state = hass.states.get(LEARNING_ID)
         saved = state.attributes if state is not None else {}
-        result = {"active": {}, "history": [], "models": {key: {} for key in BATTERY_KEYS}}
+        result = {"active": {}, "active_runs": {}, "history": [], "models": {key: {} for key in BATTERY_KEYS}}
         try:
             active = saved.get("active", {})
             if active.get("battery") in BATTERY_KEYS and 0 < number(active.get("start"), 0) <= NOW:
                 result["active"] = active.copy()
+                result["active_runs"][active["battery"]] = active.copy()
+            for key, run in saved.get("active_runs", {}).items():
+                if (key in BATTERY_KEYS and isinstance(run, dict)
+                        and run.get("battery") == key and 0 < number(run.get("start"), 0) <= NOW):
+                    result["active_runs"][key] = run.copy()
             for record in saved.get("history", [])[-20:]:
                 if record.get("battery") in BATTERY_KEYS and number(record.get("end")) is not None:
                     result["history"].append(record.copy())
@@ -845,7 +853,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                         and 0 < number(model.get("usable_reference"), 0) < 20):
                     result["models"][key] = model.copy()
         except (AttributeError, TypeError):
-            return {"active": {}, "history": [], "models": {key: {} for key in BATTERY_KEYS}}
+            return {"active": {}, "active_runs": {}, "history": [], "models": {key: {} for key in BATTERY_KEYS}}
         return result
 
 
@@ -1259,13 +1267,21 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 saved.setdefault(key, -1)
                 saved.setdefault("D" + key, -1)
     session = read_session(raw(SESSION_ID))
+    secondary = read_session(data.get("parallel_session", ""))
+    parallel_enabled = bool(data.get("parallel_calibration", False))
+    # A completed primary yields its slot to a still active secondary. This
+    # preserves the legacy session helper and its existing HA migrations.
+    if session["p"] in {"idle", "done", "incomplete", "cancelled"} and secondary["p"] in ACTIVE_PHASES:
+        session, secondary = secondary, read_session("")
     queue_value = raw(QUEUE_ID)
 
     if queue_value in ["unknown", "unavailable"] and raw("input_boolean.speicher_ladelogik_v1_beta_1_initialisiert") != "on":
         queue_value = ""
     queue = read_queue(queue_value)
     current_caps = cap_snapshot()
-    records_ok = (session["p"] != "error" and raw(SESSION_ID) not in ["unknown", "unavailable"]
+    records_ok = (session["p"] != "error" and secondary["p"] != "error"
+                  and (secondary["p"] not in ACTIVE_PHASES or secondary["b"] != session["b"])
+                  and raw(SESSION_ID) not in ["unknown", "unavailable"]
                   and (backup is not None or raw(BACKUP_ID) == "")
                   and (cal_backup is not None or raw(CAL_BACKUP_ID) == "") and queue is not None)
     if queue is None:
@@ -1277,6 +1293,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 item["d"] = "-"
     original_phase = session["p"]
     original_battery = session["b"]
+    secondary_original_phase = secondary["p"]
     save_backup = ""
     save_cal_backup = ""
     clear_cal_backup = False
@@ -1293,16 +1310,17 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         not_before = int(DAY1 if REQUEST.endswith("tomorrow") else DAY0)
         if not automatic or not cal_armed[key]:
             queue_notify = "Vormerkung erfordert Automatik und die Kalibrierfreigabe für " + SLOT_NAMES[key] + "."
-        elif session["p"] in ACTIVE_PHASES and session["b"] == key:
-            if session["p"] == "requested":
-                session["n"] = not_before
-                session["s"] = 0
-                session["x"] = 0
+        elif any(s["p"] in ACTIVE_PHASES and s["b"] == key for s in (session, secondary)):
+            current = next(s for s in (session, secondary) if s["p"] in ACTIVE_PHASES and s["b"] == key)
+            if current["p"] == "requested":
+                current["n"] = not_before
+                current["s"] = 0
+                current["x"] = 0
                 queue_notify = "Termin für " + SLOT_NAMES[key] + " aktualisiert."
             else:
                 queue_notify = SLOT_NAMES[key] + " wird bereits vorbereitet oder kalibriert."
         else:
-            depends = session["b"] if session["p"] in ACTIVE_PHASES else "-"
+            depends = session["b"] if session["p"] in ACTIVE_PHASES and not parallel_enabled else "-"
             queue[key] = {"n": not_before, "t": int(NOW), "d": depends}
             queue_notify = SLOT_NAMES[key] + (" für morgen vorgemerkt." if REQUEST.endswith("tomorrow") else " für das nächste geeignete Fenster vorgemerkt.")
     if REQUEST == "cancel":
@@ -1320,7 +1338,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             queue.pop(key)
 
     cancel_requests = ["cancel_" + key.lower() for key in BATTERY_KEYS]
-    if session["p"] not in ACTIVE_PHASES and records_ok and automatic and REQUEST not in ["start", "cancel", *cancel_requests]:
+    if session["p"] not in ACTIVE_PHASES and secondary["p"] not in ACTIVE_PHASES and records_ok and automatic and REQUEST not in ["start", "cancel", *cancel_requests]:
         candidates = [key for key in BATTERY_KEYS if key in queue and queue[key]["d"] == "-"
                       and cal_armed[key] and failure_counts[key] < 3]
         chosen = None
@@ -1335,16 +1353,44 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             session["n"] = q["n"]
             transition(session, "requested", "requested")
 
+    if (parallel_enabled and records_ok and automatic
+            and session["p"] in {"wait", "charge"}
+            and secondary["p"] not in ACTIVE_PHASES
+            and REQUEST not in ["cancel", *cancel_requests, "start"]):
+        eligible = [key for key in BATTERY_KEYS
+                    if key in queue and queue[key]["d"] == "-" and queue[key]["n"] <= DAY0
+                    and key != session["b"] and cal_armed[key]
+                    and failure_counts[key] < 3 and cal_safe[key]
+                    and bats[key]["cal_empty_ready"]
+                    and previews_today[key]["ok"]]
+        if eligible:
+            chosen = min(eligible, key=lambda key: queue[key]["t"])
+            q = queue.pop(chosen)
+            secondary = read_session("")
+            secondary["b"] = chosen
+            secondary["z"] = pack_counts.get(chosen, 1)
+            secondary["n"] = q["n"]
+            transition(secondary, "requested", "requested")
+
     cal_restored = cal_backup is None and session["s"] == 0
     if cal_backup is not None and session["b"] in BATTERY_KEYS:
         key = session["b"]
         own_saved = {key: cal_backup[key], "D" + key: cal_backup["D" + key]}
         cal_restored = backup_restored(own_saved, current_caps)
-    cal = calibration_step(session, {"request": effective_request, "automatic": automatic,
+    other_running = [s for s in (session, secondary) if s["p"] in {"charge", "paused"}
+                     and (s["p"] == "charge" or s.get("u") == "charge")]
+    shared_surplus = live_surplus + sum(max(0, bats[s["b"]]["charge_power"] or 0)
+                                        for s in other_running if s["b"] in BATTERY_KEYS)
+    active_parallel = secondary["p"] in ACTIVE_PHASES
+    factor = sum(s["p"] in {"wait", "charge"} or (s["p"] == "paused" and s["u"] == "charge")
+                 for s in (session, secondary))
+    cal_context = {"request": effective_request, "automatic": automatic,
         "armed": cal_armed, "safe": cal_safe, "critical": cal_critical,
         "batteries": bats, "today": previews_today, "tomorrow": previews_tomorrow,
         "backup": cal_backup, "restored": cal_restored,
         "grid_power": grid, "live_surplus": live_surplus,
+        "parallel": active_parallel, "shared_surplus": shared_surplus,
+        "parallel_factor": max(1, factor), "running_factor": max(1, len(other_running)),
         "pack_count": pack_counts.get(session.get("b"), 1),
         "peer_drain_ok": {key: failure_counts[key] < 3 and writable(BATTERIES[key]["discharge"], 0) for key in BATTERY_KEYS},
         "peer_discharge_max": {
@@ -1355,18 +1401,43 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 BATTERIES[key]["maximum"],
             )
             for key in BATTERY_KEYS
-        }})
+        }}
+    cal = calibration_step(session, cal_context)
     session = cal["session"]
+    secondary_cal = None
+    if secondary["p"] in ACTIVE_PHASES:
+        other = secondary["b"]
+        secondary_restored = cal_backup is None and secondary["s"] == 0
+        if cal_backup is not None and other in BATTERY_KEYS:
+            secondary_restored = backup_restored(
+                {other: cal_backup[other], "D" + other: cal_backup["D" + other]}, current_caps)
+        secondary_context = {**cal_context,
+            "request": "cancel" if REQUEST == "cancel" or REQUEST == "cancel_" + other.lower() else "tick",
+            "restored": secondary_restored,
+            "pack_count": pack_counts.get(other, 1),
+            "parallel_factor": max(1, factor + int(session["p"] == "charge" and original_phase != "charge")),
+        }
+        secondary_cal = calibration_step(secondary, secondary_context)
+        secondary = secondary_cal["session"]
+        for action in ("charge", "discharge"):
+            # Secondary is only admitted when already empty; it never issues
+            # peer drain overrides against the primary calibration.
+            cal[action].update(secondary_cal[action])
     if not records_ok:
         cal["finish"] = False
         cal["retry"] = False
-    if cal["finish"]:
-        for item in queue.values():
-            if item["d"] == session["b"]:
-                item["d"] = "-"
-    if cal["retry"]:
-        key = session["b"]
-        queue[key] = {"n": int(max(session["n"], DAY1)), "t": int(NOW), "d": "-"}
+        if secondary_cal:
+            secondary_cal["finish"] = secondary_cal["retry"] = False
+    for current, outcome in ((session, cal), (secondary, secondary_cal)):
+        if outcome is None:
+            continue
+        if outcome["finish"]:
+            for item in queue.values():
+                if item["d"] == current["b"]:
+                    item["d"] = "-"
+        if outcome["retry"]:
+            key = current["b"]
+            queue[key] = {"n": int(max(current["n"], DAY1)), "t": int(NOW), "d": "-"}
 
     if automatic and records_ok:
         if backup is None:
@@ -1386,21 +1457,20 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         if changed:
             save_backup = encode_backup(backup)
 
-    if (
-        session["p"]
-        in ["drain", "empty_rest", "wait", "charge", "rest", "full_rest", "paused"]
-        and records_ok
-    ):
+    if (any(s["p"] in ["drain", "empty_rest", "wait", "charge", "rest", "full_rest", "paused"]
+            for s in (session, secondary)) and records_ok):
         if cal_backup is None:
             cal_backup = {
                 **{key: -1 for key in BATTERY_KEYS},
                 **{"D" + key: -1 for key in BATTERY_KEYS},
             }
         previous_backup = encode_backup(cal_backup)
-        key = session["b"]
-        for field in [key, "D" + key]:
-            if cal_backup[field] == -1 and current_caps[field] is not None:
-                cal_backup[field] = current_caps[field]
+        for current in (session, secondary):
+            if current["p"] in ["drain", "empty_rest", "wait", "charge", "rest", "full_rest", "paused"]:
+                key = current["b"]
+                for field in [key, "D" + key]:
+                    if cal_backup[field] == -1 and current_caps[field] is not None:
+                        cal_backup[field] = current_caps[field]
         for other in cal["discharge"]:
             if cal_backup["D" + other] == -1 and current_caps["D" + other] is not None:
                 cal_backup["D" + other] = current_caps["D" + other]
@@ -1409,7 +1479,8 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
 
     held = {}
     for key in BATTERY_KEYS:
-        pending = key in queue or (session["p"] in ACTIVE_PHASES and session["b"] == key)
+        pending = key in queue or any(s["p"] in ACTIVE_PHASES and s["b"] == key
+                                      for s in (session, secondary))
         held[key] = pending and raw("input_boolean.speicher_ladelogik_kalibrierung_" + key.lower() + "_laden_sperren") == "on"
     cal_active = session["b"] if session["p"] in [
         "drain",
@@ -1421,9 +1492,10 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "paused",
         "restore",
     ] else ""
+    cal_active_keys = {s["b"] for s in (session, secondary) if s["p"] in ACTIVE_PHASES}
     caps = {key: bats[key]["cap"] if bats[key]["owns"] and bats[key]["usable_data"] and failure_counts[key] < 3
             and not reaction_blocked_prior[key] and not bats[key]["target_met"]
-            and key != cal_active and not held[key] else 0 for key in BATTERY_KEYS}
+            and key not in cal_active_keys and not held[key] else 0 for key in BATTERY_KEYS}
     needs = {key: bats[key]["need"] if caps[key] > 0 else 0 for key in BATTERY_KEYS}
     stored = sum([bats[key]["stored"] for key in BATTERY_KEYS])
     target_energy = sum([bats[key]["target"] for key in BATTERY_KEYS])
@@ -1446,9 +1518,10 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     normal_rows = []
     for row in rows:
         cal_reservation = 0
-        if cal_active and session["p"] in ["wait", "charge", "paused"]:
-            overlap = max(0, min(row["t"] + 900, session["x"] + 1800) - max(row["t"], session["s"]))
-            cal_reservation = calibration_power * overlap / 3600
+        for current in (session, secondary):
+            if current["b"] in cal_active_keys and current["p"] in ["wait", "charge", "paused"]:
+                overlap = max(0, min(row["t"] + 900, current["x"] + 1800) - max(row["t"], current["s"]))
+                cal_reservation += calibration_power * overlap / 3600
         normal_rows.append({"t": row["t"], "wh": max(0, row["wh"] - cal_reservation)})
     solar_rows = [row for row in rows if row["wh"] * 4 > load]
     solar_start = solar_rows[0]["t"] if solar_rows else None
@@ -1536,7 +1609,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     total = 0
     peak = {"ok": False, "target": 0, "start": None, "end": None, "finish": None}
     peak_enabled = raw("input_boolean.speicher_ladelogik_mittagsspitzen") != "off"
-    cal_draw = calibration_power if session["p"] == "charge" else 0
+    cal_draw = calibration_power * sum(s["p"] == "charge" for s in (session, secondary))
     normal_live = max(0, live_surplus - cal_draw)
     if not live_valid:
         reason = "Keine verlässliche Live-Überschusserkennung"
@@ -1631,10 +1704,11 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     # Registerwert und erzeugt so keine unnötigen Schreibzyklen.
     dispatch_caps = caps.copy()
     if cal_draw:
-        total = min(total, max(0, live_surplus - calibration_power - 100))
-        if (
-            bats[session["b"]]["charge_power"] < calibration_min_power
-            and not bats[session["b"]]["all_full"]
+        total = min(total, max(0, live_surplus - cal_draw - 100))
+        if any(
+            bats[s["b"]]["charge_power"] < calibration_min_power
+            and not bats[s["b"]]["all_full"]
+            for s in (session, secondary) if s["p"] == "charge"
         ):
             total = 0
             automatic_reason = (
@@ -1707,7 +1781,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             ),
             0,
         )
-        eligible = caps[key] > 0 and key != cal_active and not held[key]
+        eligible = caps[key] > 0 and key not in cal_active_keys and not held[key]
         safety_stop = (
             not automatic
             or not records_ok
@@ -1744,7 +1818,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
 
     manual_allowed = {}
     for key in BATTERY_KEYS:
-        manual_allowed[key] = (manual_active_by_key[key] and key != cal_active
+        manual_allowed[key] = (manual_active_by_key[key] and key not in cal_active_keys
                                and bats[key]["owns"] and failure_counts[key] < 3)
         if manual_allowed[key]:
             limits[key] = manual_charge[key]
@@ -1820,17 +1894,18 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     hardware_commands = []
     release_ready = True
     normal_release = not automatic and backup is not None
-    cal_release = cal["release"] and cal_backup is not None
+    cal_release = (cal["release"] or bool(secondary_cal and secondary_cal["release"])) and cal_backup is not None
     release = normal_release or cal_release
     cal_changed = False
     normal_changed = False
     order = list(BATTERY_KEYS)
-    if session["p"] in ACTIVE_PHASES and session["b"] in order:
-        order.remove(session["b"])
-        order.insert(0, session["b"])
+    for current in (secondary, session):
+        if current["p"] in ACTIVE_PHASES and current["b"] in order:
+            order.remove(current["b"])
+            order.insert(0, current["b"])
     for key in order:
         permitted = records_ok and bats[key]["owns"] and failure_counts[key] < 3 and backup is not None and backup[key] >= 0
-        active_own = session["p"] in [
+        active_own = any(s["p"] in [
             "drain",
             "empty_rest",
             "wait",
@@ -1838,7 +1913,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             "rest",
             "full_rest",
             "paused",
-        ] and session["b"] == key
+        ] and s["b"] == key for s in (session, secondary))
         restoring_fields = []
         if cal_backup is not None:
             for field in ["D" + key, key]:
@@ -2138,8 +2213,9 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         soc = b["soc"]
         soc_str = (str(round(soc, 1)) + " %") if soc is not None else "SoC ?"
         lw = limits.get(key, 0)
-        if cal_active == key:
-            lade_str = "Kalibrierung (" + session.get("p", "?") + ")"
+        own_session = next((s for s in (session, secondary) if s["b"] == key and s["p"] in ACTIVE_PHASES), None)
+        if own_session is not None:
+            lade_str = "Kalibrierung (" + own_session.get("p", "?") + ")"
         elif held.get(key):
             lade_str = "Gesperrt (Kalibrierung wartet)"
         elif manual_active_by_key.get(key, False) and lw > 0:
@@ -2216,6 +2292,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     output["plan"] = plan
     output["calibration"] = calibration
     output["session"] = encode_session(session)
+    output["parallel_session"] = encode_session(secondary) if secondary["p"] in ACTIVE_PHASES else ""
     output["save_backup"] = save_backup
     output["clear_backup"] = clear_backup
     output["save_cal_backup"] = save_cal_backup
@@ -2224,16 +2301,27 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     output["commands"] = hardware_commands
     output["execute"] = can_execute
     output["finish"] = cal["finish"]
+    output["finish_events"] = [
+        {"battery": s["b"], "energy_kwh": round(s["w"] / 1000, 3),
+         "capture_drift": previous in ["rest", "full_rest"] and s["r"] == "success"}
+        for s, previous, outcome in ((session, original_phase, cal),
+                                      (secondary, secondary_original_phase, secondary_cal))
+        if outcome is not None and outcome["finish"] and s["b"] in BATTERY_KEYS
+    ]
 
     reset_after_calibration = []
-    if cal["finish"] and session["b"] in BATTERY_KEYS:
-        key_cal = session["b"]
-        reset_after_calibration = [
-            "input_boolean.speicher_ladelogik_kalibrierung_" + key_cal.lower() + "_freigegeben",
-            "input_boolean.speicher_ladelogik_kalibrierung_" + key_cal.lower() + "_laden_sperren",
-        ]
+    for event in output["finish_events"]:
+        key_cal = event["battery"].lower()
+        reset_after_calibration.extend([
+            "input_boolean.speicher_ladelogik_kalibrierung_" + key_cal + "_freigegeben",
+            "input_boolean.speicher_ladelogik_kalibrierung_" + key_cal + "_laden_sperren",
+        ])
     output["reset_after_calibration"] = reset_after_calibration
-    output["notify"] = ("Kalibrierung " + SLOT_NAMES.get(session["b"], session["b"]) + ": " + cal_reason) if cal["notify"] else queue_notify
+    notifications = ["Kalibrierung " + SLOT_NAMES.get(session["b"], session["b"]) + ": " + cal_reason] if cal["notify"] else []
+    if secondary_cal and secondary_cal["notify"]:
+        notifications.append("Kalibrierung " + SLOT_NAMES.get(secondary["b"], secondary["b"])
+                             + ": " + reasons.get(secondary["r"], secondary["r"]))
+    output["notify"] = "; ".join(notifications) if notifications else queue_notify
     output["ack"] = REQUEST == "ack"
 
     plan["daten_gueltig_gemeinsam"] = live_valid
@@ -2256,11 +2344,11 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         plan["schreibfehler_venus_" + name] = failure_counts[key]
         plan["fahrplan_ladegrenze_venus_" + name + "_w"] = normal_limits[key]
         plan["vorgemerkt_ladesperre_venus_" + name] = held[key]
-        own_calibration = session["p"] in ACTIVE_PHASES and session["b"] == key
+        own_session = next((s for s in (session, secondary) if s["p"] in ACTIVE_PHASES and s["b"] == key), None)
         key_errors = [item for item in data_errors
                       if item.startswith(key + ":") or item.startswith("Venus " + key + ":")]
-        if own_calibration:
-            plan["status_venus_" + name] = "Kalibrierung: " + PHASE_LABELS.get(session["p"], session["p"])
+        if own_session:
+            plan["status_venus_" + name] = "Kalibrierung: " + PHASE_LABELS.get(own_session["p"], own_session["p"])
             plan["grund_venus_" + name] = reason
         elif key_errors:
             plan["status_venus_" + name] = "Datenfehler"
@@ -2287,10 +2375,16 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             if not next_key:
                 next_key = key
                 next_day = item["n"]
-        active_request = session["b"] == key and session["p"] in ACTIVE_PHASES
+        current_request = next((s for s in (session, secondary) if s["b"] == key and s["p"] in ACTIVE_PHASES), None)
+        active_request = current_request is not None
         calibration[key.lower() + "_vorgemerkt"] = key in queue or active_request
-        calibration[key.lower() + "_fruehestens_ts"] = queue[key]["n"] if key in queue else (session["n"] if active_request else None)
+        calibration[key.lower() + "_fruehestens_ts"] = queue[key]["n"] if key in queue else (current_request["n"] if active_request else None)
         calibration[key.lower() + "_laden_gesperrt"] = held[key]
+    calibration["laufende_laeufe"] = [
+        {"batterie": s["b"], "phase": s["p"], "energie_ac_kwh": round(s["w"] / 1000, 3),
+         "start_ts": s["s"] or None, "ende_ts": s["x"] or None}
+        for s in (session, secondary) if s["p"] in ACTIVE_PHASES
+    ]
     calibration["vormerkungen"] = pending_items
     calibration["naechste_batterie"] = next_key
     calibration["naechster_termin_ts"] = next_day
@@ -2321,32 +2415,42 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             )
             for index in range(1, len(DRIFTS[key]) + 1)
         ]
-    active = learning["active"]
-    if session["p"] == "charge" and original_phase in ["wait", "requested"]:
-        key = session["b"]
-        active = {"battery": key, "start": NOW, "soc": bats[key]["soc"],
-                  "usable_reference": bats[key]["usable"], "eta": eta, "drift": drifts[key]}
-        learning["active"] = active
-    journal_event = ((session["p"] == "paused" and original_phase != "paused") or
-                     (session["p"] in ["done", "incomplete", "cancelled", "error"]
-                      and original_phase in ACTIVE_PHASES))
-    if journal_event and session["b"] in BATTERY_KEYS:
-        key = session["b"]
+    journal_event = False
+    for current, previous, outcome in ((session, original_phase, cal),
+                                       (secondary, secondary_original_phase, secondary_cal)):
+        if outcome is None or current["b"] not in BATTERY_KEYS:
+            continue
+        key = current["b"]
+        active = learning["active_runs"].get(key, {})
+        if current["p"] == "charge" and previous in ["wait", "requested"]:
+            active = {"battery": key, "start": NOW, "soc": bats[key]["soc"],
+                      "usable_reference": bats[key]["usable"], "eta": eta, "drift": drifts[key]}
+            learning["active_runs"][key] = active
+        if current["p"] == "full_rest" and previous == "charge" and active.get("battery") == key:
+            # Two samples at full SoC; their difference is a voltage trend,
+            # never a claim that passive top balancing has succeeded.
+            active["drift_top_start_mv"] = drifts[key]
+        event = ((current["p"] == "paused" and previous != "paused") or
+                 (current["p"] in ["done", "incomplete", "cancelled", "error"]
+                  and previous in ACTIVE_PHASES))
+        if not event:
+            continue
+        journal_event = True
         has_start = active.get("battery") == key and number(active.get("start")) is not None
         start_stamp = active["start"] if has_start else None
-        sample = session["w"] / 1000
+        sample = current["w"] / 1000
         start_soc = number(active.get("soc")) if has_start else None
         reference = number(active.get("usable_reference"), 0)
         sample_eta = number(active.get("eta"), eta)
-        measured_ac = sample
-        sample_ok = (cal["finish"] and not session["i"] and has_start
+        sample_ok = (outcome["finish"] and not current["i"] and has_start
                      and start_soc is not None and 0 <= start_soc <= 15
                      and abs(reference - bats[key]["usable"]) < 0.01
-                     and 0.6 * reference <= measured_ac * sample_eta <= 1.4 * reference)
+                     and 0.6 * reference <= sample * sample_eta <= 1.4 * reference)
         record = {"battery": key, "start": start_stamp, "end": NOW,
                   "duration_h": round((NOW - start_stamp) / 3600, 3) if has_start else None,
-                  "result": session["p"], "reason": cal_reason, "ac_kwh": round(sample, 4),
+                  "result": current["p"], "reason": current["r"], "ac_kwh": round(sample, 4),
                   "drift_before_mv": active.get("drift", []) if has_start else [],
+                  "drift_top_start_mv": active.get("drift_top_start_mv", []) if has_start else [],
                   "drift_after_mv": drifts[key], "learning_valid": sample_ok}
         learning["history"] = (learning["history"] + [record])[-20:]
         if sample_ok:
@@ -2354,13 +2458,14 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             old_count = int(number(old.get("count"), 0))
             if abs(number(old.get("usable_reference"), 0) - reference) >= 0.01:
                 old_count = 0
-            average = (0.75 * number(old.get("ac_kwh"), measured_ac) + 0.25 * measured_ac
-                       if old_count else measured_ac)
+            average = (0.75 * number(old.get("ac_kwh"), sample) + 0.25 * sample
+                       if old_count else sample)
             learning["models"][key] = {"count": min(10000, old_count + 1), "ac_kwh": round(average, 4),
                 "usable_estimate_kwh": round(average * sample_eta, 4), "eta_assumed": sample_eta,
                 "usable_reference": reference, "updated_ts": NOW}
-        if session["p"] != "paused":
-            learning["active"] = {}
+        if current["p"] != "paused":
+            learning["active_runs"].pop(key, None)
+    learning["active"] = learning["active_runs"].get(session["b"], {})
     output["learning"] = learning
     output["journal_event"] = journal_event
     output["proposed_commands"] = list(output.get("commands", []))

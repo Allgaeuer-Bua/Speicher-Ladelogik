@@ -8,7 +8,7 @@ from homeassistant.const import Platform
 
 DOMAIN: Final = "speicher_ladelogik"
 NAME: Final = "Speicher-Ladelogik"
-VERSION: Final = "1.1.1-beta.2"
+VERSION: Final = "1.1.1-beta.3"
 
 PLATFORMS: Final = [
     Platform.SENSOR,

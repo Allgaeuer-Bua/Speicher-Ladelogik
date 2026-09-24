@@ -230,6 +230,32 @@ test("calibration shows the last success per storage", () => {
   assert.match(card, /Noch keine erfolgreiche Kalibrierung bekannt/);
 });
 
+test("calibration shows stored energy, accepted learning and end drift without claiming balancing", () => {
+  const { panel } = createPanel();
+  const attributes = panel._hass.states["sensor.speicher_ladelogik_kalibrierung"].attributes;
+  attributes.kalibrierung_letzter_erfolg_a_ts = Date.now() / 1000;
+  attributes.letztes_ergebnis_a = {
+    ac_kwh: 3.913, learned: true, drift_after_mv: [9, 2],
+  };
+  const card = panel._calibrationCard();
+  assert.match(card, /Geladen: 3,91 kWh/);
+  assert.match(card, /Für künftige Kalibrierfenster übernommen/);
+  assert.match(card, /Pack 1: 9 mV · Pack 2: 2 mV/);
+  assert.match(card, /Ein Top-Balancing-Erfolg lässt sich daraus nicht ableiten/);
+  attributes.letztes_ergebnis_a = {
+    ac_kwh: 3.913, learned: true, drift_top_start_mv: [11, null],
+    drift_top_change_mv: [-2, null], drift_after_mv: [9, 2],
+  };
+  assert.match(panel._calibrationCard(), /Pack 1: 11 → 9 mV \(-2 mV\)/);
+  attributes.letztes_ergebnis_a = {
+    ac_kwh: null, learned: false, drift_after_mv: [null],
+  };
+  const missing = panel._calibrationCard();
+  assert.match(missing, /Geladen: —/);
+  assert.match(missing, /Nicht als Lernwert übernommen/);
+  assert.match(missing, /kein Messwert gespeichert/);
+});
+
 test("daily battery energy separates charging and discharging signs", () => {
   const { panel } = createPanel();
   const now = Date.now();
@@ -357,7 +383,7 @@ test("control page starts with calibration, then manual mode, then the remaining
 });
 
 test("frontend element name matches the integration release version", () => {
-  assert.equal(panelElementName, "speicher-ladelogik-panel-1-1-1-beta-2");
+  assert.equal(panelElementName, "speicher-ladelogik-panel-1-1-1-beta-3");
   assert.equal(registry.get(panelElementName), Panel);
   assert.equal(registry.has("speicher-ladelogik-panel-1-0-1"), false);
 });

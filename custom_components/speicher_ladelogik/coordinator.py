@@ -1008,6 +1008,9 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     CAL_BACKUP_ENTITY, output["save_cal_backup"]
                 )
             await self._async_set_helper(SESSION_ENTITY, output.get("session", ""))
+            if isinstance(output.get("parallel_session"), str):
+                self._control["kalibrierung_zweitsitzung"] = output["parallel_session"]
+                self._schedule_state_save()
             await self._async_set_helper(QUEUE_ENTITY, output.get("queue", ""))
 
             by_battery = {battery: [] for battery in self.enabled_models}
@@ -1048,8 +1051,10 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._async_set_helper(
                 "input_boolean.speicher_ladelogik_laden_freigegeben", release
             )
-            if output.get("finish") and all_ok:
-                battery = str(output.get("calibration", {}).get("batterie", ""))
+            for finish_event in output.get("finish_events", []):
+                battery = str(finish_event.get("battery", ""))
+                if not successful.get(battery, False):
+                    continue
                 name = battery.lower()
                 if battery in self.enabled_models:
                     await self._async_set_helper(
@@ -1065,12 +1070,17 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     await self._async_set_helper(
                         "input_number.speicher_ladelogik_kalibrierung_"
                         f"{name}_letzte_energie",
-                        output.get("calibration", {}).get("energie_ac_kwh", 0),
+                        finish_event.get("energy_kwh", 0),
                     )
-                for entity_id in output.get("reset_after_calibration", []):
-                    await self._async_set_helper(entity_id, False)
+                    for suffix in ("freigegeben", "laden_sperren"):
+                        await self._async_set_helper(
+                            f"input_boolean.speicher_ladelogik_kalibrierung_{name}_{suffix}", False,
+                        )
 
-            if output.get("capture_drift") and all_ok:
+            for finish_event in output.get("finish_events", []):
+                battery = finish_event.get("battery")
+                if not successful.get(battery, False) or not finish_event.get("capture_drift"):
+                    continue
                 calibration = output.get("calibration", {})
                 drift_fields = {
                     "A": (
@@ -1083,7 +1093,6 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         ("d_p2", "drift_d_p2_mv"),
                     ),
                 }
-                battery = calibration.get("batterie")
                 for helper_suffix, attribute in drift_fields.get(battery, ()):
                     value = calibration.get(attribute)
                     if value is not None:

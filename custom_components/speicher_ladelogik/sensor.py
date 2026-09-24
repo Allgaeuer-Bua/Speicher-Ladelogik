@@ -17,6 +17,7 @@ from homeassistant.const import PERCENTAGE, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from .calibration_results import last_successful_result
 from .coordinator import SpeicherLadelogikCoordinator
 from .entity import SpeicherLadelogikEntity
 
@@ -368,6 +369,11 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 )
                 for key in drift_fields:
                     attributes[key] = calibration.get(key)
+                attributes[f"letztes_ergebnis_{name}"] = last_successful_result(
+                    self.coordinator.control,
+                    model,
+                    data.get(f"kalibrierung_letzter_erfolg_{name}_ts"),
+                )
             return attributes
         for model in self.coordinator.enabled_models:
             name = model.lower()

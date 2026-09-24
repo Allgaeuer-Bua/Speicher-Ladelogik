@@ -11,7 +11,7 @@ oder Speichern. Sie verwendet vorhandene Home-Assistant-Entitäten. Dadurch
 können Messwerte aus unterschiedlichen Integrationen und von verschiedenen
 Anbietern verwendet werden, sofern Bedeutung, Einheit und Vorzeichen passen.
 
-> **Version im Quellcode:** 1.1.1-beta.2 (Vorabversion zum Praxistest)
+> **Version im Quellcode:** 1.1.1-beta.3 (Vorabversion zum Praxistest)
 > **Erforderliche Home-Assistant-Version:** 2026.9.1 oder neuer
 
 ## Wofür ist die Integration gedacht?
@@ -125,6 +125,12 @@ bei Venus A/D die vorhandenen Pack-Sensoren.
 
 - getrennte Kalibrieranforderung je Speicher
 - Warteschlange für mehrere Speicher
+- optional **Zwei Speicher gleichzeitig**: Nur ein bereits auf 13 %
+  vorbereiteter zweiter Speicher kann während eines laufenden PV-Fensters
+  dazukommen. Für beide 500-W-Ladungen werden gemeinsam mindestens 1.200 W
+  gemessener Überschuss beim Start verlangt; bei anderer Kalibrierleistung
+  steigt die Grenze entsprechend. Die Läufe werden einzeln überwacht und
+  beendet. Ohne diese Option bleibt die Reihenfolge der Vormerkungen erhalten.
 - einstellbare Kalibrierleistung von **400 bis 1.500 W**
 - Berechnung des verfügbaren Fensters und der benötigten Dauer für heute und
   morgen
@@ -136,8 +142,8 @@ bei Venus A/D die vorhandenen Pack-Sensoren.
   verwendet
 - reale AC-Referenzenergie inklusive Wandlerverlusten: 3,77 kWh für Venus A
   mit zwei Modulen und 5,15 kWh für Venus E
-- kein zusätzlicher pauschaler Energieaufschlag; nur das Zeitfenster wird auf
-  volle 15 Minuten aufgerundet
+- kein zusätzlicher pauschaler Energieaufschlag; die Anzeige der benötigten
+  Dauer wird gerundet, der Start wird sekundengenau geprüft
 - ein abgelaufenes Prognosefenster wird bei weiterhin ausreichendem realem
   PV-Überschuss automatisch verlängert
 
@@ -179,6 +185,14 @@ heute**. Die Einspeiseleistung bei der Mittagsspitze ist ein Planungswert und
 keine feste Grenze am Netzanschluss. Verlaufsdiagramme werden durchgehend
 dargestellt, auch wenn ein Sensor zwischen zwei Werten längere Zeit keine
 Änderung gemeldet hat.
+
+Unter **Steuerung → Kalibrierung → Letztes Ergebnis** erscheinen für jeden
+Speicher die gemessene AC-Ladeenergie, die Übernahme des Messwerts in die
+Fensterplanung und die nach der oberen Ruhephase erfasste Zelldrift. Bei neu
+abgeschlossenen Läufen wird zusätzlich die Veränderung bei 100 % während der
+oberen Ruhephase angezeigt. Diese Spannungsänderung beweist kein aktives
+Top-Balancing und sagt nichts über die frühere Drift bei 13 % aus. Fehlende
+oder veraltete Messwerte bleiben leer.
 
 ## Installation über HACS
 

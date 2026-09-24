@@ -19,6 +19,7 @@ class SpeicherSwitchDescription(SwitchEntityDescription):
 
 
 SWITCHES = (
+    SpeicherSwitchDescription(key="kalibrierung_parallel", name="Zwei Kalibrierungen gleichzeitig", icon="mdi:battery-sync", control_key="kalibrierung_parallel"),
     SpeicherSwitchDescription(key="mittagsspitzen", name="Mittagsspitzen reduzieren", icon="mdi:chart-bell-curve", control_key="mittagsspitzen"),
     SpeicherSwitchDescription(key="handbetrieb_venus_a", name="Handbetrieb Venus A", icon="mdi:hand-back-right-outline", control_key="manuell_a_aktiv"),
     SpeicherSwitchDescription(key="handbetrieb_venus_d", name="Handbetrieb Venus D", icon="mdi:hand-back-right-outline", control_key="manuell_d_aktiv"),

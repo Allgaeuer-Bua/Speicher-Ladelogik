@@ -64,6 +64,8 @@ CONTROL_DEFAULTS: dict[str, Any] = {
     "kalibrierung_e_erfolg_bekannt": False,
     "kalibrierung_d_erfolg_bekannt": False,
     "kalibrierung_sitzung": "",
+    "kalibrierung_zweitsitzung": "",
+    "kalibrierung_parallel": False,
     "kalibrierung_vormerkungen": "",
     "sicherung": "",
     "kalibrierung_sicherung": "",

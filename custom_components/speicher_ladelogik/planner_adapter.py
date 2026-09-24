@@ -182,6 +182,8 @@ def calculate(
             "drift_entities": {
                 slot: _entities(slot, "drift") for slot in ("A", "D", "E")
             },
+            "parallel_calibration": bool(controls.get("kalibrierung_parallel", False)),
+            "parallel_session": controls.get("kalibrierung_zweitsitzung", ""),
         },
     )
     for command_key in ("commands", "proposed_commands"):
