@@ -581,7 +581,9 @@ class SpeicherLadelogikPanel extends HTMLElement {
       const value = `${this._decimal(raw, 2)}${dataset.tooltipUnit ?? model.unit}`;
       return `<div><i style="background:${dataset.color}"></i><span>${esc(dataset.name)}</span><strong>${esc(value)}</strong></div>`;
     }).join("");
-    const stamp = new Date(time).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const stamp = new Date(time).toLocaleString("de-DE", model.end - model.start > 86_400_000
+      ? { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }
+      : { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     tooltip.innerHTML = `<b>${esc(stamp)}</b>${rows}`;
     const localX = event.clientX - shellRect.left;
     tooltip.style.left = `${Math.max(50, Math.min(shellRect.width - 50, localX))}px`;
@@ -644,6 +646,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const efficiencyId = this._eid(`wirkungsgrad_venus_${suffix}`);
     const efficiencyKey = `efficiency${letter}`;
     const driftKey = `drift${letter}`;
+    const powerSeries = this._historySeries(`power_${suffix}`);
     const driftStates = this._sourceStates(`drift_${suffix}`);
     const driftSeries = driftStates.map((state, index) => {
       const toMv = String(state.attributes?.unit_of_measurement || "mV").toLowerCase() === "v" ? 1000 : 1;
@@ -657,9 +660,10 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const maxDrift = Math.max(20, ...driftSeries.flatMap((series) => series.points.map((point) => point.v)));
     return `<div class="battery-diagnostics">
       <div><strong>Wirkungsgrad und Leistung</strong>${this._chart([
-        { name: "Wirkungsgrad", color: "#48d88b", entityId: efficiencyId, points: this._historySeriesId(efficiencyId) },
-        { name: "Leistung", color: "#8ea8ff", entityId: this._sid(`power_${suffix}`), tooltipValue: (value) => Math.round(value * powerMax / 100), tooltipUnit: " W", points: this._historySeries(`power_${suffix}`).map((point) => ({ ...point, v: Math.abs(point.v) / powerMax * 100 })) },
-      ], { min: 0, max: 100, unit: " %", hours: this._historyHours[efficiencyKey] })}<small>Leistung auf 0–${powerMax} W skaliert; Kurve für genaue Werte antippen.</small>${this._historyButtons(efficiencyKey, true)}</div>
+        { name: "Wirkungsgrad", color: "#48d88b", entityId: efficiencyId, points: this._historySeriesId(efficiencyId).filter((point) => point.v > 0) },
+        { name: "Laden", color: "#8ea8ff", entityId: this._sid(`power_${suffix}`), tooltipValue: (value) => Math.round(value * powerMax / 100), tooltipUnit: " W", points: powerSeries.filter((point) => point.v < -25).map((point) => ({ ...point, v: -point.v / powerMax * 100 })) },
+        { name: "Entladen", color: "#b493ff", entityId: this._sid(`power_${suffix}`), tooltipValue: (value) => Math.round(value * powerMax / 100), tooltipUnit: " W", points: powerSeries.filter((point) => point.v > 25).map((point) => ({ ...point, v: point.v / powerMax * 100 })) },
+      ], { min: 0, max: 100, unit: " %", hours: this._historyHours[efficiencyKey] })}<small>Leistung auf 0–${powerMax} W skaliert; Blau = Laden, Violett = Entladen. Kurve für genaue Wattwerte antippen.</small>${this._historyButtons(efficiencyKey, true)}</div>
       <div><strong>Zelldrift</strong>${this._chart(driftSeries, { min: 0, max: maxDrift, unit: " mV", hours: this._historyHours[driftKey] })}${this._historyButtons(driftKey, true)}</div>
     </div>`;
   }
@@ -1351,7 +1355,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 }
 
-const PANEL_ELEMENT = "speicher-ladelogik-panel-1-2-0";
+const PANEL_ELEMENT = "speicher-ladelogik-panel-1-2-1";
 
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);
