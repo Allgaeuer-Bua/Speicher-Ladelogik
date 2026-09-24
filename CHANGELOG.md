@@ -1,5 +1,22 @@
 # Änderungsverlauf
 
+## 1.2.0
+
+- Die Änderungen der Vorabversion 1.1.1 einschließlich der getrennten Kalibrierergebnisse,
+  optionaler paralleler Kalibrierung und stabiler 15-Minuten-Fahrplanslots sind enthalten.
+- Anhaltende gemessene Netzeinspeisung kann bei unsicherer Tagesplanung eine
+  morgendliche Ladung vorziehen. Ohne konfiguriertes vorzeitiges Ladeziel endet
+  diese Absicherung bei 80 % je Speicher; ein starker Tag behält die
+  Mittagsspitzenplanung, solange die kurzfristige Prognose trägt.
+- Die redundante Mindestreserve entfällt. Das vorzeitige Ladeziel steht nun
+  je Speicher direkt bei den Fahrplanfunktionen. Die Betriebsart steht am
+  Ende der Steuerungsseite, Kalibrieraktionen direkt unter dem jeweiligen Speicher.
+- In der Einrichtung werden die Modelle für alle drei Speicher einheitlich
+  als Venus A, Venus D und Venus E angezeigt.
+- In der Speicheransicht werden pro Gerät Wirkungsgrad mit Ladeleistung sowie
+  Pack-Zelldrift im Verlauf angezeigt (heute, 7 und 30 Tage, soweit der
+  Home-Assistant-Verlauf Daten enthält).
+
 ## 1.1.1-beta.3
 
 - Die Kalibrierkarte zeigt je Speicher die AC-Energie des letzten erfolgreichen

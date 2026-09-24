@@ -88,8 +88,7 @@ _STABILITY_KEYS = tuple(
     "sonnenhoechststand_ts",
     "mittagsfenster_start_ts",
     "mittagsfenster_ende_ts",
-    "mindestreserve_pro_speicher_kwh",
-    "mindestreserve_offen",
+    "netzeinspeisung_seit_ts",
     "fahrplan_slot_start_ts",
     "fahrplan_slot_ende_ts",
     "fahrplan_slot_aktiv_venus_a",
@@ -235,31 +234,6 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     model, modules
                 )
 
-    def _migrate_storage_reserves(self, loaded_control: dict[str, Any]) -> None:
-        """Split the former shared reserve without changing its total energy."""
-        keys = [f"mindestreserve_{slot.lower()}_kwh" for slot in self.enabled_models]
-        if not keys or any(key in loaded_control for key in keys):
-            return
-
-        legacy = max(0.0, float(self._control.get("mindestreserve", 2.0)))
-        capacities = {
-            slot: max(
-                0.1,
-                float(self._control.get(f"nennkapazitaet_{slot.lower()}_kwh", 1.0)),
-            )
-            for slot in self.enabled_models
-        }
-        total_capacity = sum(capacities.values())
-        remaining = round(legacy, 1)
-        for index, slot in enumerate(self.enabled_models):
-            key = f"mindestreserve_{slot.lower()}_kwh"
-            if index == len(self.enabled_models) - 1:
-                value = remaining
-            else:
-                value = round(legacy * capacities[slot] / total_capacity, 1)
-                remaining = round(max(0.0, remaining - value), 1)
-            self._control[key] = value
-
     async def async_set_mode(self, mode: str) -> None:
         """Set the native operating mode after validating active control."""
         if mode not in {"Aus", "Beobachten", "Automatik"}:
@@ -388,7 +362,8 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._control["mode"] = "Beobachten"
             self._control["migrated_from_legacy"] = True
         self._sync_model_controls()
-        self._migrate_storage_reserves(loaded_control)
+        for obsolete in ("mindestreserve", "mindestreserve_a_kwh", "mindestreserve_d_kwh", "mindestreserve_e_kwh"):
+            self._control.pop(obsolete, None)
         self._state_loaded = True
         self._last_plan = self._stored_stability or None
         self._schedule_state_save()

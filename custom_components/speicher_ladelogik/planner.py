@@ -12,6 +12,7 @@ from . import persistence
 from .stability import (
     calibration_available_surplus,
     calibration_required_seconds,
+    confirmed_export,
     early_soc_candidates,
     peer_discharge_release,
     peer_grid_support,
@@ -34,7 +35,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
 
     output = {}
 
-    VERSION = "1.1.1-beta.3"
+    VERSION = "1.2.0"
     NOW = float(data.get("now", time.time()))
     DAY0 = float(data.get("day0", 0))
     DAY1 = float(data.get("day1", 0))
@@ -861,10 +862,6 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     eta = setting("ladewirkungsgrad", 90, 75, 100) / 100
     safety = setting("prognose_sicherheit", 90, 50, 100) / 100
     extra = setting("unplanbare_reserve", 1, 0, 4)
-    reserves = {
-        key: setting("mindestreserve_" + key.lower() + "_kwh", 1, 0, 20)
-        for key in BATTERY_KEYS
-    }
     early_soc_goals = {
         key: setting("fruehes_ladeziel_" + key.lower() + "_soc", 0, 0, 100)
         for key in BATTERY_KEYS
@@ -1501,16 +1498,6 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     target_energy = sum([bats[key]["target"] for key in BATTERY_KEYS])
     normal_stored = sum([bats[key]["stored"] for key in BATTERY_KEYS if caps[key] > 0])
     normal_target = sum([bats[key]["target"] for key in BATTERY_KEYS if caps[key] > 0])
-    reserve_targets = {
-        key: min(reserves[key], bats[key]["target"]) if caps[key] > 0 else 0
-        for key in BATTERY_KEYS
-    }
-    normal_reserve = sum(reserve_targets.values())
-    reserve_open_keys = [
-        key for key in BATTERY_KEYS
-        if reserve_targets[key] > 0
-        and bats[key]["stored"] + 0.02 < reserve_targets[key]
-    ]
     early_soc_keys = early_soc_candidates(caps, bats, early_soc_goals)
     need = sum(needs.values())
     max_total = sum(caps.values())
@@ -1611,6 +1598,24 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     peak_enabled = raw("input_boolean.speicher_ladelogik_mittagsspitzen") != "off"
     cal_draw = calibration_power * sum(s["p"] == "charge" for s in (session, secondary))
     normal_live = max(0, live_surplus - cal_draw)
+    export_confirmed, export_since = confirmed_export(
+        now_ts=NOW, grid_power_w=grid, live_surplus_w=normal_live,
+        prior_since_ts=number(prior_attributes.get("netzeinspeisung_seit_ts")),
+    )
+    # Prefer actual morning energy over a predicted afternoon on uncertain
+    # days. Leave capacity above the early target for the noon peak. Without
+    # a configured target, stop this automatic rescue at 80 % per device.
+    rescue_keys = [
+        key for key in BATTERY_KEYS
+        if caps[key] > 0 and bats[key]["lowest_soc"] is not None
+        and bats[key]["lowest_soc"] < min(
+            bats[key]["goal"], early_soc_goals[key] or 80,
+        )
+    ]
+    rescue_morning = (
+        export_confirmed and NOW < MIDDAY_END and bool(rescue_keys)
+        and (category != "stark" or short_factor < 0.7)
+    )
     if not live_valid:
         reason = "Keine verlässliche Live-Überschusserkennung"
         status = "Datenfehler"
@@ -1639,19 +1644,14 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             total = max_total
             status = "PV-Fallback"
             reason = "Prognose ungültig; AstraMeter darf realen Überschuss aufnehmen"
-        elif reserve_open_keys:
-            caps = {
-                key: planned_caps[key] if key in reserve_open_keys else 0
-                for key in BATTERY_KEYS
-            }
+        elif rescue_morning:
+            caps = {key: hard_caps[key] if key in rescue_keys else 0 for key in BATTERY_KEYS}
             max_total = sum(caps.values())
             start = min(start, NOW)
-            efficiency_mode = "Mindestreserve je Speicher sichern"
+            efficiency_mode = "Gemessenen Morgenüberschuss nutzen"
             total = max_total
-            status = "Mindestreserve"
-            reason = "Früh abzusichernde Energie zuerst für " + "/".join(
-                SLOT_NAMES[key] for key in reserve_open_keys
-            )
+            status = "Morgenüberschuss nutzen"
+            reason = "Netzeinspeisung seit mindestens 3 Minuten; reale Ladung hat Vorrang vor späterer PV-Prognose"
         elif scarce:
             caps = hard_caps
             max_total = sum(caps.values())
@@ -1748,12 +1748,6 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         or all(number(prior_early_goals.get(key), 0) == goal
                for key, goal in early_soc_goals.items())
     )
-    prior_reserves = prior_attributes.get("mindestreserve_pro_speicher_kwh")
-    reserves_unchanged = (
-        not isinstance(prior_reserves, dict)
-        or all(number(prior_reserves.get(key), 0) == value
-               for key, value in reserves.items())
-    )
     midday_window_unchanged = (
         number(prior_attributes.get("sonnenhoechststand_ts"), SOLAR_NOON)
         == SOLAR_NOON
@@ -1768,7 +1762,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         and prior_automatic
         and peak_setting_unchanged
         and early_goals_unchanged
-        and reserves_unchanged
+        and not rescue_morning
         and midday_window_unchanged
         and (not isinstance(prior_early_keys, list) or prior_early_keys == early_soc_keys)
     )
@@ -2120,11 +2114,12 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "sicher_speicherbar_fenster_rest_kwh": round(window_wh / 1000 * eta, 3),
         "deckungsfaktor": round(safe_rest / reported_need, 2) if reported_need > 0.001 else 99,
         "knapp": scarce, "gespeicherte_energie_kwh": round(stored, 4), "zielenergie_kwh": round(target_energy, 4),
-        "mindestreserve_pro_speicher_kwh": reserves,
-        "mindestreserve_offen": reserve_open_keys,
+        "netzeinspeisung_seit_ts": export_since,
+        "morgenueberschuss_aktiv": rescue_morning,
+        "morgenueberschuss_speicher": rescue_keys if rescue_morning else [],
         "restbedarf_kwh": round(reported_need, 4), "restbedarf_ac_kwh": round(reported_need / eta, 4),
         "fahrplanenergie_jetzt_kwh": round(stored - normal_stored + max(0, normal_target - window_wh / 1000 * eta), 3),
-        "mindestenergie_jetzt_kwh": round(stored - normal_stored + min(normal_target, max(normal_reserve, normal_target - window_wh / 1000 * eta)), 3),
+        "mindestenergie_jetzt_kwh": round(stored - normal_stored + min(normal_target, max(0, normal_target - window_wh / 1000 * eta)), 3),
         "energieluecke_kwh": round(normal_target - window_wh / 1000 * eta - normal_stored, 3),
         "soll_laden": sum(limits.values()) > 0, "soll_ladeleistung_gesamt_w": sum(limits.values()),
         "soll_ladegrenze_venus_a_w": limits.get("A", 0),

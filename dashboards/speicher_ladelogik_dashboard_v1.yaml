@@ -436,7 +436,6 @@ views:
           - type: entities
             show_header_toggle: false
             entities:
-              - entity: number.speicher_ladelogik_mindestreserve
               - entity: number.speicher_ladelogik_prognosesicherheit
               - entity: number.speicher_ladelogik_unplanbare_reserve
               - entity: number.speicher_ladelogik_planungswirkungsgrad

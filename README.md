@@ -11,7 +11,7 @@ oder Speichern. Sie verwendet vorhandene Home-Assistant-Entitäten. Dadurch
 können Messwerte aus unterschiedlichen Integrationen und von verschiedenen
 Anbietern verwendet werden, sofern Bedeutung, Einheit und Vorzeichen passen.
 
-> **Version im Quellcode:** 1.1.1-beta.3 (Vorabversion zum Praxistest)
+> **Version im Quellcode:** 1.2.0
 > **Erforderliche Home-Assistant-Version:** 2026.9.1 oder neuer
 
 ## Wofür ist die Integration gedacht?
@@ -100,13 +100,13 @@ bei Venus A/D die vorhandenen Pack-Sensoren.
 - Mittagsspitzenkappung mit einem einstellbaren Fenster relativ zum lokalen
   Sonnenhöchststand
 - Berücksichtigung von Prognosegüte, Reserve und verfügbarem Tagesfenster
-- optionales frühes SoC-Ladeziel je Speicher (0 % deaktiviert): Bei mindestens
-  200 W aktuellem PV-Überschuss werden Speicher unter ihrem Ziel zuerst
-  geladen; anschließend gilt der normale Fahrplan. Die Mindestreserve in kWh
-  ist für jeden Speicher einzeln einstellbar und kann auf 0 gesetzt werden.
-  So lässt sich gezielt priorisieren, welcher Speicher früh Energie sichern
-  soll. Beide Einstellungen ändern keine SoC-Gerätegrenzen und erzwingen
-  keinen Netzbezug.
+- optionales vorzeitiges Ladeziel je Speicher (0 % = kein festes Ziel): Bei
+  mindestens 200 W aktuellem PV-Überschuss werden Speicher unter ihrem Ziel
+  zuerst geladen. An unsicheren Tagen kann anhaltende gemessene Netzeinspeisung
+  auch ohne festes Ziel einen pausierten Vormittagsslot öffnen; die Automatik
+  hält dabei oberhalb von 80 % wieder Platz für die Mittagsspitze. SoC-Grenzen
+  des Geräts bleiben maßgeblich; die reale Leistung richtet sich nach dem
+  verfügbaren Überschuss.
 - stabile Leistungsgrenzen ohne unnötige Wiederholung identischer Schreibwerte
 - keine künstliche Reduzierung allein aufgrund eines SoC oberhalb von 90 %
 

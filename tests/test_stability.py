@@ -22,6 +22,20 @@ peer_discharge_release = STABILITY.peer_discharge_release
 peer_grid_support = STABILITY.peer_grid_support
 quarter_hour_window = STABILITY.quarter_hour_window
 early_soc_candidates = STABILITY.early_soc_candidates
+confirmed_export = STABILITY.confirmed_export
+
+
+def test_morning_export_needs_three_minutes_of_real_surplus() -> None:
+    ready, since = confirmed_export(now_ts=1000, grid_power_w=-900,
+                                    live_surplus_w=750, prior_since_ts=None)
+    assert (ready, since) == (False, 1000)
+    ready, since = confirmed_export(now_ts=1180, grid_power_w=-900,
+                                    live_surplus_w=750, prior_since_ts=since)
+    assert (ready, since) == (True, 1000)
+    assert confirmed_export(now_ts=1210, grid_power_w=300,
+                            live_surplus_w=750, prior_since_ts=since) == (False, None)
+    assert confirmed_export(now_ts=1210, grid_power_w=-900,
+                            live_surplus_w=50, prior_since_ts=since) == (False, None)
 
 
 def test_early_soc_goals_only_select_eligible_storages_below_their_goal() -> None:

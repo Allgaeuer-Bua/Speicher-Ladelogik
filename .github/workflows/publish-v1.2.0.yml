@@ -1,0 +1,52 @@
+name: Publish v1.2.0
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-v1.2.0.yml
+      - custom_components/speicher_ladelogik/manifest.json
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Check Python source and tests
+        run: |
+          python -m compileall -q custom_components tests
+          python - <<'PY'
+          import importlib.util
+          from pathlib import Path
+
+          count = 0
+          for path in sorted(Path("tests").glob("test_*.py")):
+              spec = importlib.util.spec_from_file_location(path.stem, path)
+              module = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(module)
+              for name in sorted(vars(module)):
+                  test = getattr(module, name)
+                  if name.startswith("test_") and callable(test):
+                      test()
+                      count += 1
+          print(f"{count} Python tests passed")
+          PY
+      - name: Check frontend
+        run: node --test tests/test_frontend_panel.mjs
+      - name: Publish stable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view v1.2.0 --repo "${{ github.repository }}" >/dev/null 2>&1 || \
+            gh release create v1.2.0 \
+              --repo "${{ github.repository }}" \
+              --target "${{ github.sha }}" \
+              --title "v1.2.0" \
+              --notes-file <(sed -n '/^## 1.2.0$/,/^## 1.1.1-beta.3$/p' CHANGELOG.md | sed '$d')

@@ -40,7 +40,7 @@ function createPanel() {
       entities: {
         betriebsart: "select.speicher_ladelogik_betriebsart",
         mittagsspitzen: "switch.speicher_ladelogik_mittagsspitzen",
-        mindestreserve_venus_a: "number.speicher_ladelogik_mindestreserve_venus_a",
+        fruehes_ladeziel_venus_a: "number.speicher_ladelogik_fruehes_ladeziel_venus_a",
         maximale_ladeleistung_venus_a: "number.speicher_ladelogik_maximale_ladeleistung_venus_a",
         maximale_entladeleistung_venus_a: "number.speicher_ladelogik_maximale_entladeleistung_venus_a",
         mittag_vorlauf: "number.speicher_ladelogik_mittag_vorlauf",
@@ -66,7 +66,7 @@ function createPanel() {
   panel._hass = {
     states: {
       "switch.speicher_ladelogik_mittagsspitzen": { state: "on", attributes: {} },
-      "number.speicher_ladelogik_mindestreserve_venus_a": { state: "1", attributes: { step: 0.1, unit_of_measurement: "kWh" } },
+      "number.speicher_ladelogik_fruehes_ladeziel_venus_a": { state: "70", attributes: { step: 1, unit_of_measurement: "%" } },
       "number.speicher_ladelogik_maximale_ladeleistung_venus_a": { state: "1500", attributes: { step: 50, unit_of_measurement: "W" } },
       "number.speicher_ladelogik_maximale_entladeleistung_venus_a": { state: "1500", attributes: { step: 50, unit_of_measurement: "W" } },
       "number.speicher_ladelogik_mittag_vorlauf": { state: "2", attributes: { step: 0.25, unit_of_measurement: "h" } },
@@ -115,7 +115,7 @@ test("panel controls call the matching Home Assistant services", async () => {
 
   await panel._setMode("Automatik");
   await panel._toggle("mittagsspitzen");
-  await panel._setNumber("mindestreserve_venus_a", "2.5");
+  await panel._setNumber("fruehes_ladeziel_venus_a", "75");
   await panel._setNumber("kalibrierleistung", "800");
   await panel._press("fehler_quittieren");
 
@@ -128,8 +128,8 @@ test("panel controls call the matching Home Assistant services", async () => {
       entity_id: "switch.speicher_ladelogik_mittagsspitzen",
     }],
     ["number", "set_value", {
-      entity_id: "number.speicher_ladelogik_mindestreserve_venus_a",
-      value: 2.5,
+      entity_id: "number.speicher_ladelogik_fruehes_ladeziel_venus_a",
+      value: 75,
     }],
     ["number", "set_value", {
       entity_id: "number.speicher_ladelogik_kalibrierleistung",
@@ -171,6 +171,30 @@ test("panel formats single-value drift sensors and register results", () => {
   );
 });
 
+test("battery diagnostics show measured efficiency, power and individual drift history", () => {
+  const { panel } = createPanel();
+  panel._panel.config.entities.wirkungsgrad_venus_a = "sensor.speicher_ladelogik_wirkungsgrad_venus_a";
+  panel._panel.config.sources.drift_a = ["sensor.pack_1_drift", "sensor.pack_2_drift"];
+  panel._hass.states["sensor.speicher_ladelogik_wirkungsgrad_venus_a"] = { state: "93", attributes: {} };
+  panel._hass.states["sensor.pack_1_drift"] = { entity_id: "sensor.pack_1_drift", state: "0.015", attributes: { unit_of_measurement: "V" } };
+  panel._hass.states["sensor.pack_2_drift"] = { entity_id: "sensor.pack_2_drift", state: "18", attributes: { unit_of_measurement: "mV" } };
+  panel._tab = "batteries";
+  assert.ok(panel._historySourceIds().includes("sensor.pack_2_drift"));
+  const markup = panel._batteryDiagnostics("A");
+  assert.match(markup, /Wirkungsgrad und Leistung/);
+  assert.match(markup, /Pack 1/);
+  assert.match(markup, /Pack 2/);
+  assert.match(markup, /30 Tage/);
+});
+
+test("control keeps calibration actions beside their storage and the operating mode last", () => {
+  const { panel } = createPanel();
+  const control = panel._control();
+  assert.ok(control.indexOf("Vormerkung löschen") < control.indexOf("Laufende Kalibrierung abbrechen"));
+  assert.ok(control.indexOf("Vorzeitiges Ladeziel") < control.indexOf("Betriebsart"));
+  assert.doesNotMatch(control, /Mindestreserve/);
+});
+
 test("overview replaces duplicate battery cards with daily history cards", () => {
   const { panel } = createPanel();
   const overview = panel._overview();
@@ -198,13 +222,11 @@ test("planning uses the remaining forecast and labels the battery fill need", ()
   assert.match(card, /Geplante Einspeisung zur PV-Spitze/);
 });
 
-test("number fields show whole steps as integers and retain fractional reserves", () => {
+test("number fields show whole steps as integers", () => {
   const { panel } = createPanel();
   panel._hass.states["number.speicher_ladelogik_kalibrierleistung"].state = "750.0";
   assert.match(panel._numberRow(["kalibrierleistung", "Ladeleistung", ""]), /value="750"/);
-  assert.match(panel._numberRow(["mindestreserve_venus_a", "Mindestreserve", ""]), /value="1"/);
-  panel._hass.states["number.speicher_ladelogik_mindestreserve_venus_a"].state = "2.5";
-  assert.match(panel._numberRow(["mindestreserve_venus_a", "Mindestreserve", ""]), /value="2\.5"/);
+  assert.match(panel._numberRow(["fruehes_ladeziel_venus_a", "Vorzeitiges Ladeziel", ""]), /value="70"/);
 });
 
 test("charts connect their lines across measurement gaps", () => {
@@ -361,7 +383,7 @@ test("calibration status explains empty and active states", () => {
 
 test("control settings explain the effect of planning thresholds", () => {
   const { panel } = createPanel();
-  const reserves = panel._numberCard("Planungsreserven", "mdi:shield-sun-outline", "planung");
+  const reserves = panel._numberCard("Planungsparameter", "mdi:shield-sun-outline", "planung");
   const classes = panel._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen");
   const power = panel._numberCard("Leistungsgrenzen", "mdi:battery-charging", "leistung");
   assert.match(reserves, /Was bedeuten diese Werte\?/);
@@ -383,7 +405,7 @@ test("control page starts with calibration, then manual mode, then the remaining
 });
 
 test("frontend element name matches the integration release version", () => {
-  assert.equal(panelElementName, "speicher-ladelogik-panel-1-1-1-beta-3");
+  assert.equal(panelElementName, "speicher-ladelogik-panel-1-2-0");
   assert.equal(registry.get(panelElementName), Panel);
   assert.equal(registry.has("speicher-ladelogik-panel-1-0-1"), false);
 });

@@ -9,6 +9,8 @@ PEER_GRID_IMPORT_RELEASE_W = 50.0
 PEER_GRID_IMPORT_CLEAR_W = 25.0
 PEER_GRID_DELAY_SECONDS = 15.0
 DECISION_SLOT_SECONDS = 15 * 60
+EXPORT_CONFIRM_SECONDS = 180.0
+EXPORT_START_W = 300.0
 
 DELIBERATE_ZERO_STATUSES = {
     "Datenfehler",
@@ -33,6 +35,21 @@ def early_soc_candidates(
         and batteries[key]["lowest_soc"] is not None
         and batteries[key]["lowest_soc"] < min(goals[key], batteries[key]["goal"])
     ]
+
+
+def confirmed_export(
+    *, now_ts: float, grid_power_w: float | None, live_surplus_w: float,
+    prior_since_ts: float | None,
+) -> tuple[bool, float | None]:
+    """Require sustained measured export before overriding a forecast pause.
+
+    Grid power is positive for import. The separate live-surplus check protects
+    against a stale or contradictory PV/house measurement.
+    """
+    if grid_power_w is None or grid_power_w > -EXPORT_START_W or live_surplus_w < EXPORT_START_W:
+        return False, None
+    since = prior_since_ts if prior_since_ts is not None and 0 <= now_ts - prior_since_ts < 900 else now_ts
+    return now_ts - since >= EXPORT_CONFIRM_SECONDS, since
 
 
 def calibration_available_surplus(
