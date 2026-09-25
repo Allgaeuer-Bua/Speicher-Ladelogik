@@ -116,9 +116,12 @@ PANEL_ENTITIES: Final = {
     "manuell_entladen_venus_d": ("number", "manuell_entladen_venus_d"),
     "manuell_laden_venus_e": ("number", "manuell_laden_venus_e"),
     "manuell_entladen_venus_e": ("number", "manuell_entladen_venus_e"),
-    "fruehes_ladeziel_venus_a": ("number", "fruehes_ladeziel_venus_a"),
-    "fruehes_ladeziel_venus_d": ("number", "fruehes_ladeziel_venus_d"),
-    "fruehes_ladeziel_venus_e": ("number", "fruehes_ladeziel_venus_e"),
+    **{
+        f"fruehes_ladeziel_venus_{slot}_{day_class}":
+            ("number", f"fruehes_ladeziel_venus_{slot}_{day_class}")
+        for slot in ("a", "d", "e")
+        for day_class in ("schwach", "wechselhaft", "mittel", "stark")
+    },
     "prognose_sicherheit": ("number", "prognose_sicherheit"),
     "unplanbare_reserve": ("number", "unplanbare_reserve"),
     "ladewirkungsgrad": ("number", "ladewirkungsgrad"),

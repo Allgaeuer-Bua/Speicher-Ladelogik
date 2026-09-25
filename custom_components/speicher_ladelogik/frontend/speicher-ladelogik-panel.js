@@ -49,7 +49,7 @@ const NUMBER_HELP = {
     ["Mindestwert für geplantes Laden", "Läuft eine reguläre Ladung mit mehr als 25 W an, hebt die Planung ihr Ziel nach Möglichkeit mindestens auf diesen Wert an. Der tatsächliche Verbrauch hängt weiterhin vom PV-Überschuss, vom Gerät und von der Regelung ab."],
   ],
   planung: [
-    ["Vorzeitiges Ladeziel je Speicher", "0 % deaktiviert das festgelegte Ziel. Bei anhaltender gemessener Einspeisung kann die Automatik an unsicheren Tagen auch ohne Ziel bis 80 % laden. Die untere SoC-Grenze des Geräts bleibt unverändert."],
+    ["Vorzeitiges Ladeziel je Speicher", "Für jede Tagesklasse und jeden Speicher getrennt. 0 % deaktiviert das zusätzliche SoC-Ziel und die Vormittagsabsicherung für diese Klasse. Der normale PV-Fahrplan darf weiterhin laden und bei Zeitknappheit früher starten. Die untere SoC-Grenze des Geräts bleibt unverändert."],
     ["Wolkenreserve", "Dieser kWh-Wert wird vom für den restlichen Tag erwarteten speicherbaren PV-Überschuss abgezogen. Höher bedeutet vorsichtiger planen."],
     ["Prognosesicherheit", "Nur dieser Prozentsatz der 15-Minuten-PV-Prognose fließt in die Planung ein. 90 % bedeutet: 10 % der prognostizierten Energie werden nicht fest eingeplant."],
     ["Planungswirkungsgrad", "Schätzt Ladeverluste zwischen AC-Eingang und gespeicherter Energie. Bei 90 % werden aus 1 kWh AC rechnerisch 0,9 kWh im Speicher."],
@@ -401,8 +401,35 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return sampled;
   }
 
-  _chartSegments(points) {
-    return points.length ? [points] : [];
+  _historySummary(points, hours, unitMultiplier = 1) {
+    const visible = points.filter((point) => Number.isFinite(point.v))
+      .map((point) => ({ t: point.t, v: point.v * unitMultiplier }));
+    if (hours <= 24) return visible;
+    const interval = (hours > 168 ? 60 : 10) * 60_000;
+    const groups = new Map();
+    for (const point of visible) {
+      const key = Math.floor(point.t / interval);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(point);
+    }
+    return [...groups.values()].flatMap((group) => {
+      const mean = group.reduce((sum, point) => sum + point.v, 0) / group.length;
+      const minimum = group.reduce((best, point) => point.v < best.v ? point : best);
+      const maximum = group.reduce((best, point) => point.v > best.v ? point : best);
+      const middle = { t: group[Math.floor(group.length / 2)].t, v: mean };
+      return [minimum, middle, maximum].sort((a, b) => a.t - b.t);
+    });
+  }
+
+  _chartSegments(points, gapMs = 0) {
+    if (!points.length) return [];
+    if (!gapMs) return [points];
+    const segments = [[points[0]]];
+    for (let index = 1; index < points.length; index += 1) {
+      if (points[index].t - points[index - 1].t > gapMs) segments.push([]);
+      segments.at(-1).push(points[index]);
+    }
+    return segments;
   }
 
   _mergeSeries(seriesList, reducer) {
@@ -492,7 +519,9 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const start = this._historyRangeStart(hours);
     const end = Date.now();
     const visible = datasets.map((dataset) => {
-      const segments = this._chartSegments(dataset.points.filter((point) => point.t >= start && point.t <= end));
+      const segments = this._chartSegments(
+        dataset.points.filter((point) => point.t >= start && point.t <= end), dataset.gapMs,
+      );
       const sampled = segments.map((points) => this._downsample(points, Math.max(4, Math.floor(240 / segments.length))));
       return { ...dataset, segments: sampled, points: sampled.flat() };
     }).filter((dataset) => dataset.points.length);
@@ -531,6 +560,9 @@ class SpeicherLadelogikPanel extends HTMLElement {
       const label = Math.abs(value) >= 10 ? Math.round(value) : this._decimal(value, 1);
       return `<line x1="${left}" y1="${position}" x2="${right}" y2="${position}" class="chart-grid-line"></line><text x="2" y="${position + 4}" class="chart-axis">${esc(label)}${esc(unit)}</text>`;
     }).join("");
+    const zeroLine = low < 0 && high > 0
+      ? `<line x1="${left}" y1="${y(0)}" x2="${right}" y2="${y(0)}" class="chart-zero-line"></line>`
+      : "";
     const lines = visible.map((dataset) => {
       const paths = dataset.segments.map((segment) => segment.map((point, index) => `${index ? "L" : "M"}${x(point.t).toFixed(1)},${y(point.v).toFixed(1)}`).join(" "));
       const path = paths.join(" ");
@@ -543,7 +575,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const legend = visible.map((dataset) => `<span${dataset.entityId ? ` class="entity-card" data-entity="${esc(dataset.entityId)}"` : ""}><i style="background:${dataset.color}"></i>${esc(dataset.name)}</span>`).join("");
     const chartId = `chart-${this._chartSerial++}`;
     this._chartModels.set(chartId, { datasets: visible, start, end, unit, left, right, width });
-    return `<div class="chart-shell" data-chart-id="${chartId}"><div class="chart-legend">${legend}</div><svg class="history-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">${ticks}${lines}<rect class="chart-hover-plane" x="${left}" y="${top}" width="${right - left}" height="${bottom - top}"></rect><text x="${left}" y="184" class="chart-axis">${startLabel}</text><text x="${right}" y="184" text-anchor="end" class="chart-axis">jetzt</text></svg><div class="chart-tooltip" role="status"></div></div>`;
+    return `<div class="chart-shell" data-chart-id="${chartId}"><div class="chart-legend">${legend}</div><svg class="history-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">${ticks}${zeroLine}${lines}<rect class="chart-hover-plane" x="${left}" y="${top}" width="${right - left}" height="${bottom - top}"></rect><text x="${left}" y="184" class="chart-axis">${startLabel}</text><text x="${right}" y="184" text-anchor="end" class="chart-axis">jetzt</text></svg><div class="chart-tooltip" role="status"></div></div>`;
   }
 
   _nearestPoint(points, time) {
@@ -642,11 +674,15 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _batteryDiagnostics(letter) {
     const suffix = letter.toLowerCase();
-    const powerMax = this._storageModel(letter) === "A" ? 1500 : 2500;
     const efficiencyId = this._eid(`wirkungsgrad_venus_${suffix}`);
     const efficiencyKey = `efficiency${letter}`;
     const driftKey = `drift${letter}`;
-    const powerSeries = this._historySeries(`power_${suffix}`);
+    const powerHours = this._historyHours[efficiencyKey] || 24;
+    const driftHours = this._historyHours[driftKey] || 24;
+    const powerSeries = this._historySummary(this._historySeries(`power_${suffix}`), powerHours, -0.001);
+    const efficiencySeries = this._historySummary(
+      this._historySeriesId(efficiencyId).filter((point) => point.v > 0), powerHours,
+    );
     const driftStates = this._sourceStates(`drift_${suffix}`);
     const driftSeries = driftStates.map((state, index) => {
       const toMv = String(state.attributes?.unit_of_measurement || "mV").toLowerCase() === "v" ? 1000 : 1;
@@ -654,17 +690,20 @@ class SpeicherLadelogikPanel extends HTMLElement {
         name: driftStates.length > 1 ? `Pack ${index + 1}` : "Zelldrift",
         color: ["#48d88b", "#8ea8ff", "#ffbd45", "#b493ff", "#ff8a8a", "#6dd7e2"][index % 6],
         entityId: state.entity_id,
-        points: this._historySeriesId(state.entity_id).map((point) => ({ ...point, v: point.v * toMv })),
+        points: this._historySummary(this._historySeriesId(state.entity_id), driftHours, toMv),
       };
     });
     const maxDrift = Math.max(20, ...driftSeries.flatMap((series) => series.points.map((point) => point.v)));
     return `<div class="battery-diagnostics">
-      <div><strong>Wirkungsgrad und Leistung</strong>${this._chart([
-        { name: "Wirkungsgrad", color: "#48d88b", entityId: efficiencyId, points: this._historySeriesId(efficiencyId).filter((point) => point.v > 0) },
-        { name: "Laden", color: "#8ea8ff", entityId: this._sid(`power_${suffix}`), tooltipValue: (value) => Math.round(value * powerMax / 100), tooltipUnit: " W", points: powerSeries.filter((point) => point.v < -25).map((point) => ({ ...point, v: -point.v / powerMax * 100 })) },
-        { name: "Entladen", color: "#b493ff", entityId: this._sid(`power_${suffix}`), tooltipValue: (value) => Math.round(value * powerMax / 100), tooltipUnit: " W", points: powerSeries.filter((point) => point.v > 25).map((point) => ({ ...point, v: point.v / powerMax * 100 })) },
-      ], { min: 0, max: 100, unit: " %", hours: this._historyHours[efficiencyKey] })}<small>Leistung auf 0–${powerMax} W skaliert; Blau = Laden, Violett = Entladen. Kurve für genaue Wattwerte antippen.</small>${this._historyButtons(efficiencyKey, true)}</div>
-      <div><strong>Zelldrift</strong>${this._chart(driftSeries, { min: 0, max: maxDrift, unit: " mV", hours: this._historyHours[driftKey] })}${this._historyButtons(driftKey, true)}</div>
+      <div><strong>AC-Leistung · Laden / Entladen</strong>${this._chart([
+        { name: "+ Laden / − Entladen", color: "#8ea8ff", entityId: this._sid(`power_${suffix}`), points: powerSeries },
+      ], { unit: " kW", hours: powerHours })}${this._historyButtons(efficiencyKey, true)}</div>
+      <div><strong>Wirkungsgrad</strong>${this._chart([
+        { name: "Wirkungsgrad", color: "#48d88b", entityId: efficiencyId, points: efficiencySeries,
+          gapMs: powerHours > 168 ? 2 * 3_600_000 : 30 * 60_000 },
+      ], { min: 0, max: 100, unit: " %", hours: powerHours })}</div>
+      <div><strong>Zelldrift je Pack</strong>${this._chart(driftSeries, { min: 0, max: maxDrift, unit: " mV", hours: driftHours })}${this._historyButtons(driftKey, true)}</div>
+      ${Math.max(powerHours, driftHours) > 24 ? `<small>${Math.max(powerHours, driftHours) > 168 ? "Stunden" : "10-Minuten"}-Mittel mit Messspitzen; keine Werte bei fehlenden Messungen ergänzt.</small>` : ""}
     </div>`;
   }
 
@@ -858,6 +897,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
           ${this._metric("Sollleistung", this._power(this._attr("planung", "soll_ladeleistung_gesamt_w")), "mdi:flash")}
         </div>
         <div class="slot-note">Live: PV-Prognose derzeit ${esc(this._percent(this._num(this._attr("planung", "prognose_kurzfristfaktor"), NaN) * 100))} bestätigt · Haus ${esc(this._power(this._attr("planung", "hausleistung_aktuell_w")))} · sicherer Überschuss ${esc(this._power(this._attr("planung", "ueberschuss_untergrenze_w")))}</div>
+        ${this._attr("planung", "pv_prognose_abweichung_bisher_kwh") != null ? `<div class="slot-note">PV bisher: ${esc(this._energy(this._attr("planung", "pv_real_bis_jetzt_kwh")))} gemessen · ${esc(this._energy(this._attr("planung", "prognose_bis_jetzt_kwh")))} prognostiziert</div>` : ""}
         <div class="window-label"><span>Ladefenster</span><small>Zeitraum für die geplante PV-Ladung</small></div>
         <div class="window-row"><span>${this._time(this._attr("planung", "ladefenster_start_ts"))}</span><div class="progress"><i style="width:${progress}%"></i></div><span>${this._time(this._attr("planung", "ladefenster_ende_ts"))}</span></div>
         <div class="storage-slots">
@@ -877,7 +917,11 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const start = this._time(this._attr("planung", "fahrplan_slot_start_ts"));
     const end = this._time(this._attr("planung", "fahrplan_slot_ende_ts"));
     const reason = this._attr("planung", `fahrplan_slot_grund_venus_${suffix}`, "—");
-    return `<div><strong>${esc(this._storageLabel(letter))}</strong><span>${active ? `${start}–${end} geplant` : "aktuell pausiert"}</span><small>${esc(reason)}</small></div>`;
+    const startReason = this._attr("planung", `fahrplan_slot_startgrund_venus_${suffix}`);
+    const currentGoal = this._attr("planung", "fruehe_soc_ziele_prozent", {})?.[letter] || 0;
+    const detail = active && startReason && String(reason).includes("beibehalten")
+      ? `${start} begonnen: ${startReason} · bis ${end} gehalten` : reason;
+    return `<div><strong>${esc(this._storageLabel(letter))}</strong><span>${active ? `${start}–${end} geplant` : "aktuell pausiert"}</span><small>${esc(detail)} · Vorzeitiges Ziel ${esc(currentGoal)} %</small></div>`;
   }
 
   _batteryCard(letter, full = false) {
@@ -913,8 +957,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
           ${this._metric("Wirkungsgrad", this._percent(efficiency, 1), "mdi:percent-outline")}
           ${this._metric("Restbedarf", this._energy(remaining), "mdi:battery-arrow-up-outline")}
           ${this._metric("Ladegrenze", this._power(chargeLimit), "mdi:battery-arrow-up-outline")}
-          ${this._metric("Entladegrenze", this._power(dischargeLimit), "mdi:battery-arrow-down-outline")}
           ${full ? this._metric("Heute geladen", this._historyEnergy(energy.charged), "mdi:battery-plus-outline") : ""}
+          ${this._metric("Entladegrenze", this._power(dischargeLimit), "mdi:battery-arrow-down-outline")}
           ${full ? this._metric("Heute entladen", this._historyEnergy(energy.discharged), "mdi:battery-minus-outline") : ""}
         </div>
         ${full ? this._batteryDetails(letter) + this._batteryDiagnostics(letter) : ""}
@@ -1102,12 +1146,15 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const restHint = restSeconds > 0
       ? ` · noch ca. ${Math.ceil(restSeconds / 60)} min`
       : "";
+    const chargeStart = this._attr("kalibrierung", "ladebeginn_voraussichtlich_ts");
+    const chargeHint = chargeStart && (phase.includes("Untere Ruhephase") || phase.includes("Wartet auf PV-Fenster"))
+      ? `<small>Kalibrierladung frühestens ${esc(this._time(chargeStart))} bei ausreichend PV</small>` : "";
     const statusText = reason && reason !== "—"
       ? reason : phase === "Bereit" ? "Kein Kalibrierauftrag aktiv" : phase;
     return `
       <section class="card span-full calibration-card">
         ${this._cardTitle("mdi:battery-sync-outline", "Kalibrierung", this._badge(cal?.state || "—", cal?.state === "Bereit" ? "good" : "warn"))}
-        <div class="cal-state"><div><span>Speicher</span><strong>${esc(batteryName)}</strong><small>Gerät des aktuellen Kalibrierauftrags</small></div><div><span>Status</span><strong>${esc(statusText)}</strong><small>Aktuelle Phase: ${esc(phase)}${esc(restHint)}</small></div><div><span>Energie</span><strong>${this._energy(this._attr("kalibrierung", "energie_ac_kwh"))}</strong><small>Bisher in diesem Kalibrierlauf geladene AC-Energie</small></div></div>
+        <div class="cal-state"><div><span>Speicher</span><strong>${esc(batteryName)}</strong><small>Gerät des aktuellen Kalibrierauftrags</small></div><div><span>Status</span><strong>${esc(statusText)}</strong><small>Aktuelle Phase: ${esc(phase)}${esc(restHint)}</small>${chargeHint}</div><div><span>Energie</span><strong>${this._energy(this._attr("kalibrierung", "energie_ac_kwh"))}</strong><small>Bisher in diesem Kalibrierlauf geladene AC-Energie</small></div></div>
         <div class="control-list calibration-setting">${this._numberRow(["kalibrierleistung", "Kalibrierleistung", "Leistung für die vollständige Kalibrierladung"])}${this._toggleRow("kalibrierung_parallel", "Zwei Speicher gleichzeitig", "Nur bei zwei vorbereiteten Speichern und ausreichend gemeinsamem PV-Überschuss", "mdi:battery-sync")}</div>
         ${(this._attr("kalibrierung", "laufende_laeufe", []) || []).length > 1 ? `<div class="cal-window-grid">${this._attr("kalibrierung", "laufende_laeufe", []).map((run) => `<div class="cal-result"><strong>${esc(this._storageLabel(run.batterie))}</strong><span>${esc(PHASE_LABELS[run.phase] || run.phase)} · ${esc(this._energy(run.energie_ac_kwh))}</span></div>`).join("")}</div>` : ""}
         <div class="cal-window-grid">
@@ -1121,8 +1168,13 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 
   _control() {
-    const earlyGoals = this._models().map((model) => this._numberRow([`fruehes_ladeziel_venus_${model.toLowerCase()}`, `${this._storageLabel(model)}: Vorzeitiges Ladeziel`, "Mit realem Überschuss vor der Mittagsspitze sichern; 0 % = kein festes Ziel"])).join("");
-    return `<main class="grid control-view">${this._calibrationCard()}<div class="control-columns manual-columns span-full">${this._models().map((model) => this._manualCard(model)).join("")}</div><section class="card span-full">${this._cardTitle("mdi:chart-bell-curve", "Fahrplanfunktionen")}${this._toggleRow("mittagsspitzen", "Mittagsspitzen reduzieren", "Speicherkapazität für die PV-Spitze freihalten", "mdi:chart-bell-curve")}${earlyGoals}${this._numberRow(["mittag_vorlauf", "Beginn vor Sonnenhöchststand", "Dynamischer Start des Mittagsfensters"])}${this._numberRow(["mittag_nachlauf", "Ende nach Sonnenhöchststand", "Dynamisches Ende des Mittagsfensters"])}</section><div class="control-columns span-full">${this._numberCard("Leistungsgrenzen", "mdi:battery-charging", "leistung")}${this._numberCard("Planungsparameter", "mdi:shield-sun-outline", "planung")}${this._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen")}</div>${this._modeControl()}</main>`;
+    const classes = [["schwach", "Schwach"], ["wechselhaft", "Wechselhaft"], ["mittel", "Mittel"], ["stark", "Stark"]];
+    const currentClass = this._attr("planung", "tagesklasse", "—");
+    const earlyGoals = this._models().map((model) => `<div class="early-goals"><strong>${esc(this._storageLabel(model))}</strong><div class="early-goal-grid">${classes.map(([key, label]) => this._numberRow([
+      `fruehes_ladeziel_venus_${model.toLowerCase()}_${key}`, label + (currentClass === key ? " · heute" : ""),
+      "0 % = kein zusätzliches SoC-Ziel; der normale PV-Fahrplan bleibt aktiv",
+    ])).join("")}</div></div>`).join("");
+    return `<main class="grid control-view">${this._calibrationCard()}<div class="control-columns manual-columns span-full">${this._models().map((model) => this._manualCard(model)).join("")}</div><section class="card span-full">${this._cardTitle("mdi:chart-bell-curve", "Fahrplanfunktionen")}${this._toggleRow("mittagsspitzen", "Mittagsspitzen reduzieren", "Speicherkapazität für die PV-Spitze freihalten", "mdi:chart-bell-curve")}<p class="control-explanation">Vorzeitiges Ladeziel je Tagesklasse · aktuell ${esc(currentClass)}. 0 % deaktiviert das zusätzliche Ziel und die Vormittagsabsicherung; der normale PV-Fahrplan bleibt aktiv.</p>${earlyGoals}${this._numberRow(["mittag_vorlauf", "Beginn vor Sonnenhöchststand", "Dynamischer Start des Mittagsfensters"])}${this._numberRow(["mittag_nachlauf", "Ende nach Sonnenhöchststand", "Dynamisches Ende des Mittagsfensters"])}</section><div class="control-columns span-full">${this._numberCard("Leistungsgrenzen", "mdi:battery-charging", "leistung")}${this._numberCard("Planungsparameter", "mdi:shield-sun-outline", "planung")}${this._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen")}</div>${this._modeControl()}</main>`;
   }
 
   _formatWriteResult(item) {
@@ -1196,6 +1248,9 @@ class SpeicherLadelogikPanel extends HTMLElement {
       .battery-pair{grid-template-columns:repeat(auto-fit,minmax(390px,1fr))}.comparison-grid{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}.control-columns.manual-columns{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}.action-groups{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}.storage-slots{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
       @media(max-width:720px){.battery-pair,.comparison-grid,.control-columns.manual-columns,.action-groups,.storage-slots{grid-template-columns:1fr}}
       .battery-diagnostics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:15px;padding-top:14px;border-top:1px solid var(--line)}.battery-diagnostics>div{min-width:0}.battery-diagnostics strong{font-size:12px}.battery-diagnostics small{display:block;color:var(--muted);font-size:10px}.battery-diagnostics .history-chart{height:180px}.cal-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}.cal-actions .action-btn{font-size:11px}
+      .battery-diagnostics{grid-template-columns:1fr}.battery-diagnostics>div{min-width:0}.battery-diagnostics .history-chart{height:185px}.chart-zero-line{stroke:rgba(192,215,207,.55);stroke-width:1.2;vector-effect:non-scaling-stroke}
+      .early-goals{margin:14px 0;padding:12px;border:1px solid var(--line);border-radius:10px}.early-goals>strong{display:block;margin-bottom:8px}.early-goal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 15px}.control-explanation{font-size:12px;color:var(--muted);line-height:1.5;margin:8px 0}.early-goal-grid .control-row{min-width:0}
+      @media(max-width:720px){.early-goal-grid{grid-template-columns:1fr}}
       @media(max-width:720px){.battery-diagnostics{grid-template-columns:1fr}}
       @media(prefers-reduced-motion:reduce){.flow-dots.active{animation-duration:3s}}
     `;
@@ -1355,7 +1410,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 }
 
-const PANEL_ELEMENT = "speicher-ladelogik-panel-1-2-1";
+const PANEL_ELEMENT = "speicher-ladelogik-panel-1-2-2";
 
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);

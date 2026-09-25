@@ -11,7 +11,7 @@ oder Speichern. Sie verwendet vorhandene Home-Assistant-Entitäten. Dadurch
 können Messwerte aus unterschiedlichen Integrationen und von verschiedenen
 Anbietern verwendet werden, sofern Bedeutung, Einheit und Vorzeichen passen.
 
-> **Version im Quellcode:** 1.2.1
+> **Version im Quellcode:** 1.2.2
 > **Erforderliche Home-Assistant-Version:** 2026.9.1 oder neuer
 
 ## Wofür ist die Integration gedacht?
@@ -100,13 +100,14 @@ bei Venus A/D die vorhandenen Pack-Sensoren.
 - Mittagsspitzenkappung mit einem einstellbaren Fenster relativ zum lokalen
   Sonnenhöchststand
 - Berücksichtigung von Prognosegüte, Reserve und verfügbarem Tagesfenster
-- optionales vorzeitiges Ladeziel je Speicher (0 % = kein festes Ziel): Bei
-  mindestens 200 W aktuellem PV-Überschuss werden Speicher unter ihrem Ziel
-  zuerst geladen. An unsicheren Tagen kann anhaltende gemessene Netzeinspeisung
-  auch ohne festes Ziel einen pausierten Vormittagsslot öffnen; die Automatik
-  hält dabei oberhalb von 80 % wieder Platz für die Mittagsspitze. SoC-Grenzen
-  des Geräts bleiben maßgeblich; die reale Leistung richtet sich nach dem
-  verfügbaren Überschuss.
+- optionales vorzeitiges Ladeziel je Speicher und Tagesklasse (`schwach`,
+  `wechselhaft`, `mittel`, `stark`): Bei mindestens 200 W aktuellem
+  PV-Überschuss wird ein Speicher unter seinem Ziel vorrangig geladen.
+  Bei gemessener Netzeinspeisung kann die Vormittagsabsicherung nur für
+  Speicher mit aktivem Ziel eingreifen. `0 %` deaktiviert beides in dieser
+  Tagesklasse; die reguläre PV-Ladeplanung bleibt aktiv. Bestehende Ziele
+  werden beim Update in alle vier Tagesklassen übernommen. SoC-Grenzen des
+  Geräts bleiben maßgeblich.
 - stabile Leistungsgrenzen ohne unnötige Wiederholung identischer Schreibwerte
 - keine künstliche Reduzierung allein aufgrund eines SoC oberhalb von 90 %
 
@@ -182,9 +183,9 @@ Home-Assistant-Entität. Das mitgelieferte YAML-Dashboard im Verzeichnis
 
 Die Tagesplanung zeigt die noch erwartete PV-Erzeugung als **Restprognose
 heute**. Die Einspeiseleistung bei der Mittagsspitze ist ein Planungswert und
-keine feste Grenze am Netzanschluss. Verlaufsdiagramme werden durchgehend
-dargestellt, auch wenn ein Sensor zwischen zwei Werten längere Zeit keine
-Änderung gemeldet hat.
+keine feste Grenze am Netzanschluss. SoC und Leistung bleiben zwischen
+Messwerten verbunden. Der Wirkungsgrad bleibt bei längeren Messpausen
+ohne erfundene Zwischenwerte.
 
 Unter **Steuerung → Kalibrierung → Letztes Ergebnis** erscheinen für jeden
 Speicher die gemessene AC-Ladeenergie, die Übernahme des Messwerts in die

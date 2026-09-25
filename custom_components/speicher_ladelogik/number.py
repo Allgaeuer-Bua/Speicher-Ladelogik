@@ -16,6 +16,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import SpeicherLadelogikCoordinator
 from .entity import SpeicherLadelogikEntity
+from .runtime import EARLY_DAY_CLASSES
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -45,20 +46,15 @@ NUMBERS = (
     SpeicherNumberDescription(key="manuell_entladen_venus_d", name="Handbetrieb Entladen Venus D", control_key="manuell_entladen_d_w", minimum=0, maximum=2500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
     SpeicherNumberDescription(key="manuell_laden_venus_e", name="Handbetrieb Laden Venus E", control_key="manuell_laden_e_w", minimum=0, maximum=2500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
     SpeicherNumberDescription(key="manuell_entladen_venus_e", name="Handbetrieb Entladen Venus E", control_key="manuell_entladen_e_w", minimum=0, maximum=2500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
-    SpeicherNumberDescription(
-        key="fruehes_ladeziel_venus_a", name="Vorzeitiges Ladeziel Venus A",
-        control_key="fruehes_ladeziel_a_soc", minimum=0, maximum=100,
-        step=1, native_unit_of_measurement=PERCENTAGE,
-    ),
-    SpeicherNumberDescription(
-        key="fruehes_ladeziel_venus_d", name="Vorzeitiges Ladeziel Venus D",
-        control_key="fruehes_ladeziel_d_soc", minimum=0, maximum=100,
-        step=1, native_unit_of_measurement=PERCENTAGE,
-    ),
-    SpeicherNumberDescription(
-        key="fruehes_ladeziel_venus_e", name="Vorzeitiges Ladeziel Venus E",
-        control_key="fruehes_ladeziel_e_soc", minimum=0, maximum=100,
-        step=1, native_unit_of_measurement=PERCENTAGE,
+    *(
+        SpeicherNumberDescription(
+            key=f"fruehes_ladeziel_venus_{slot}_{day_class}",
+            name=f"Vorzeitiges Ladeziel Venus {slot.upper()} – {day_class.title()}",
+            control_key=f"fruehes_ladeziel_{slot}_{day_class}_soc",
+            minimum=0, maximum=100, step=1,
+            native_unit_of_measurement=PERCENTAGE,
+        )
+        for slot in ("a", "d", "e") for day_class in EARLY_DAY_CLASSES
     ),
     SpeicherNumberDescription(key="prognose_sicherheit", name="Prognosesicherheit", control_key="prognose_sicherheit", minimum=50, maximum=100, step=1, native_unit_of_measurement=PERCENTAGE),
     SpeicherNumberDescription(key="unplanbare_reserve", name="Unplanbare Reserve", control_key="unplanbare_reserve", minimum=0, maximum=20, step=0.1, native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR),

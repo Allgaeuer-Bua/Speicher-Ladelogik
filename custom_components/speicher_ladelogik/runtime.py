@@ -84,6 +84,11 @@ CONTROL_DEFAULTS: dict[str, Any] = {
     "migrated_from_legacy": False,
 }
 
+EARLY_DAY_CLASSES = ("schwach", "wechselhaft", "mittel", "stark")
+for _slot in ("a", "d", "e"):
+    for _day_class in EARLY_DAY_CLASSES:
+        CONTROL_DEFAULTS[f"fruehes_ladeziel_{_slot}_{_day_class}_soc"] = 0.0
+
 
 HELPER_TO_CONTROL: dict[str, str] = {
     "input_boolean.speicher_ladelogik_mittagsspitzen": "mittagsspitzen",

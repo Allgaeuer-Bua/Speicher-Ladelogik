@@ -41,6 +41,8 @@ function createPanel() {
         betriebsart: "select.speicher_ladelogik_betriebsart",
         mittagsspitzen: "switch.speicher_ladelogik_mittagsspitzen",
         fruehes_ladeziel_venus_a: "number.speicher_ladelogik_fruehes_ladeziel_venus_a",
+        fruehes_ladeziel_venus_a_stark: "number.speicher_ladelogik_fruehes_ladeziel_venus_a_stark",
+        fruehes_ladeziel_venus_e_mittel: "number.speicher_ladelogik_fruehes_ladeziel_venus_e_mittel",
         maximale_ladeleistung_venus_a: "number.speicher_ladelogik_maximale_ladeleistung_venus_a",
         maximale_entladeleistung_venus_a: "number.speicher_ladelogik_maximale_entladeleistung_venus_a",
         mittag_vorlauf: "number.speicher_ladelogik_mittag_vorlauf",
@@ -67,6 +69,8 @@ function createPanel() {
     states: {
       "switch.speicher_ladelogik_mittagsspitzen": { state: "on", attributes: {} },
       "number.speicher_ladelogik_fruehes_ladeziel_venus_a": { state: "70", attributes: { step: 1, unit_of_measurement: "%" } },
+      "number.speicher_ladelogik_fruehes_ladeziel_venus_a_stark": { state: "0", attributes: { step: 1, unit_of_measurement: "%" } },
+      "number.speicher_ladelogik_fruehes_ladeziel_venus_e_mittel": { state: "50", attributes: { step: 1, unit_of_measurement: "%" } },
       "number.speicher_ladelogik_maximale_ladeleistung_venus_a": { state: "1500", attributes: { step: 50, unit_of_measurement: "W" } },
       "number.speicher_ladelogik_maximale_entladeleistung_venus_a": { state: "1500", attributes: { step: 50, unit_of_measurement: "W" } },
       "number.speicher_ladelogik_mittag_vorlauf": { state: "2", attributes: { step: 0.25, unit_of_measurement: "h" } },
@@ -187,7 +191,9 @@ test("battery diagnostics show measured efficiency, power and individual drift h
   panel._tab = "batteries";
   assert.ok(panel._historySourceIds().includes("sensor.pack_2_drift"));
   const markup = panel._batteryDiagnostics("A");
-  assert.match(markup, /Wirkungsgrad und Leistung/);
+  assert.match(markup, /AC-Leistung · Laden \/ Entladen/);
+  assert.match(markup, /<strong>Wirkungsgrad<\/strong>/);
+  assert.match(markup, /chart-zero-line/);
   assert.match(markup, /Pack 1/);
   assert.match(markup, /Pack 2/);
   assert.match(markup, /Laden/);
@@ -201,6 +207,45 @@ test("control keeps calibration actions beside their storage and the operating m
   assert.ok(control.indexOf("Vormerkung löschen") < control.indexOf("Laufende Kalibrierung abbrechen"));
   assert.ok(control.indexOf("Vorzeitiges Ladeziel") < control.indexOf("Betriebsart"));
   assert.doesNotMatch(control, /Mindestreserve/);
+  assert.match(control, /fruehes_ladeziel_venus_a_stark/);
+  assert.match(control, /fruehes_ladeziel_venus_e_mittel/);
+  assert.match(control, /0 % deaktiviert das zusätzliche Ziel und die Vormittagsabsicherung/);
+});
+
+test("long storage history summarizes intervals while preserving power peaks", () => {
+  const { panel } = createPanel();
+  const now = Date.now();
+  const points = [
+    { t: now - 3_000_000, v: 500 },
+    { t: now - 2_900_000, v: 2500 },
+    { t: now - 2_800_000, v: -750 },
+  ];
+  const summary = panel._historySummary(points, 168);
+  assert.ok(summary.some((point) => point.v === 2500));
+  assert.ok(summary.some((point) => point.v === -750));
+  assert.equal(panel._historySummary(points, 24).length, points.length);
+  assert.equal(panel._chartSegments([
+    { t: now - 3_000_000, v: 92 },
+    { t: now, v: 93 },
+  ], 30 * 60_000).length, 2);
+});
+
+test("held loading slot shows the start reason and calibration shows earliest charging time", () => {
+  const { panel } = createPanel();
+  panel._panel.config.entities.planung = "sensor.speicher_ladelogik_planung";
+  panel._hass.states["sensor.speicher_ladelogik_planung"] = {
+    state: "Sollwert wird gehalten", attributes: {
+      fahrplan_slot_aktiv_venus_a: true,
+      fahrplan_slot_start_ts: 1_800_000_000,
+      fahrplan_slot_ende_ts: 1_800_000_900,
+      fahrplan_slot_grund_venus_a: "Aktiven 15-Minuten-Ladeslot beibehalten",
+      fahrplan_slot_startgrund_venus_a: "Gemessenen Morgenüberschuss nutzen",
+    },
+  };
+  assert.match(panel._storageSlot("A", "a"), /Gemessenen Morgenüberschuss nutzen/);
+  panel._hass.states["sensor.speicher_ladelogik_kalibrierung"].state = "Kalibrierung A: empty_rest";
+  panel._hass.states["sensor.speicher_ladelogik_kalibrierung"].attributes.ladebeginn_voraussichtlich_ts = 1_800_000_000;
+  assert.match(panel._calibrationCard(), /Kalibrierladung frühestens/);
 });
 
 test("overview replaces duplicate battery cards with daily history cards", () => {
@@ -413,7 +458,7 @@ test("control page starts with calibration, then manual mode, then the remaining
 });
 
 test("frontend element name matches the integration release version", () => {
-  assert.equal(panelElementName, "speicher-ladelogik-panel-1-2-1");
+  assert.equal(panelElementName, "speicher-ladelogik-panel-1-2-2");
   assert.equal(registry.get(panelElementName), Panel);
   assert.equal(registry.has("speicher-ladelogik-panel-1-0-1"), false);
 });

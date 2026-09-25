@@ -22,6 +22,8 @@ peer_discharge_release = STABILITY.peer_discharge_release
 peer_grid_support = STABILITY.peer_grid_support
 quarter_hour_window = STABILITY.quarter_hour_window
 early_soc_candidates = STABILITY.early_soc_candidates
+morning_rescue_candidates = STABILITY.morning_rescue_candidates
+migrate_legacy_day_class_goals = STABILITY.migrate_legacy_day_class_goals
 confirmed_export = STABILITY.confirmed_export
 
 
@@ -52,6 +54,28 @@ def test_early_soc_goals_only_select_eligible_storages_below_their_goal() -> Non
     assert early_soc_candidates(caps, batteries, goals) == []
     goals["E"] = 50
     assert early_soc_candidates(caps, batteries, goals) == []
+
+
+def test_zero_target_disables_measured_morning_rescue_for_each_storage() -> None:
+    batteries = {
+        "A": {"goal": 100, "lowest_soc": 16},
+        "E": {"goal": 100, "lowest_soc": 16},
+    }
+    caps = {"A": 1500, "E": 2500}
+    assert morning_rescue_candidates(caps, batteries, {"A": 0, "E": 0}) == []
+    assert morning_rescue_candidates(caps, batteries, {"A": 0, "E": 50}) == ["E"]
+    batteries["E"]["lowest_soc"] = 50
+    assert morning_rescue_candidates(caps, batteries, {"A": 0, "E": 50}) == []
+
+
+def test_existing_early_goals_migrate_once_per_class() -> None:
+    control = {"fruehes_ladeziel_a_soc": 70, "fruehes_ladeziel_d_soc": 0,
+               "fruehes_ladeziel_e_soc": 45, "fruehes_ladeziel_a_stark_soc": 0}
+    migrate_legacy_day_class_goals(control, {"fruehes_ladeziel_a_stark_soc": 0},
+                                   ("schwach", "mittel", "stark"))
+    assert control["fruehes_ladeziel_a_schwach_soc"] == 70
+    assert control["fruehes_ladeziel_e_mittel_soc"] == 45
+    assert control["fruehes_ladeziel_a_stark_soc"] == 0
 
 
 def test_calibration_surplus_restores_its_own_draw() -> None:

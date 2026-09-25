@@ -14,6 +14,7 @@ from .stability import (
     calibration_required_seconds,
     confirmed_export,
     early_soc_candidates,
+    morning_rescue_candidates,
     peer_discharge_release,
     peer_grid_support,
     quarter_hour_window,
@@ -35,7 +36,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
 
     output = {}
 
-    VERSION = "1.2.1"
+    VERSION = "1.2.2"
     NOW = float(data.get("now", time.time()))
     DAY0 = float(data.get("day0", 0))
     DAY1 = float(data.get("day1", 0))
@@ -862,10 +863,6 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     eta = setting("ladewirkungsgrad", 90, 75, 100) / 100
     safety = setting("prognose_sicherheit", 90, 50, 100) / 100
     extra = setting("unplanbare_reserve", 1, 0, 4)
-    early_soc_goals = {
-        key: setting("fruehes_ladeziel_" + key.lower() + "_soc", 0, 0, 100)
-        for key in BATTERY_KEYS
-    }
     weak = setting("schwacher_tag", 25, 5, 50)
     middle = max(weak + 1, setting("mittlerer_tag", 50, 20, 100))
     strong = max(middle + 1, setting("starker_tag", 85, 50, 200))
@@ -1132,6 +1129,14 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     else:
         category = "stark"
         preferred = ELEVEN
+    early_soc_goals = {
+        key: setting(
+            "fruehes_ladeziel_" + key.lower() + "_" + category + "_soc",
+            setting("fruehes_ladeziel_" + key.lower() + "_soc", 0, 0, 100),
+            0, 100,
+        )
+        for key in BATTERY_KEYS
+    }
 
     direct_surplus = max(0, pv_live - live_load) if pv_live is not None and live_load is not None else None
     live_valid = grid is not None and (direct_surplus is not None or balance_surplus is not None
@@ -1604,14 +1609,8 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     )
     # Prefer actual morning energy over a predicted afternoon on uncertain
     # days. Leave capacity above the early target for the noon peak. Without
-    # a configured target, stop this automatic rescue at 80 % per device.
-    rescue_keys = [
-        key for key in BATTERY_KEYS
-        if caps[key] > 0 and bats[key]["lowest_soc"] is not None
-        and bats[key]["lowest_soc"] < min(
-            bats[key]["goal"], early_soc_goals[key] or 80,
-        )
-    ]
+    # a configured target, there is no separate morning rescue for this storage.
+    rescue_keys = morning_rescue_candidates(caps, bats, early_soc_goals)
     rescue_morning = (
         export_confirmed and NOW < MIDDAY_END and bool(rescue_keys)
         and (category != "stark" or short_factor < 0.7)
@@ -2070,6 +2069,9 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "prognose_heute_roh_kwh": round(raw_total, 3), "prognose_heute_erwartet_kwh": round(expected_total, 3),
         "prognose_rest_erwartet_kwh": round(expected_rest, 3),
         "prognose_bis_jetzt_kwh": round(past_wh / 1000, 3), "pv_real_bis_jetzt_kwh": actual_today if daily_ok else None,
+        "pv_prognose_abweichung_bisher_kwh": (
+            round(actual_today - past_wh / 1000, 3) if daily_ok else None
+        ),
         "pv_real_bis_jetzt_roh": raw(DAILY), "pv_real_bis_jetzt_einheit": "kWh",
         "pv_real_tageswert_plausibel": daily_ok, "prognose_jetzt_w": round(now_forecast),
         "pv_real_jetzt_roh": raw(PV), "pv_real_jetzt_w": pv,
@@ -2168,6 +2170,11 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         name = key.lower()
         plan["fahrplan_slot_aktiv_venus_" + name] = automatic_slot_active[key]
         plan["fahrplan_slot_grund_venus_" + name] = automatic_limit_reason[key]
+        old_start_reason = prior_attributes.get("fahrplan_slot_startgrund_venus_" + name)
+        plan["fahrplan_slot_startgrund_venus_" + name] = (
+            old_start_reason if decision_slot_locked and automatic_slot_active[key]
+            and old_start_reason else automatic_reason if automatic_slot_active[key] else None
+        )
     for key in BATTERY_KEYS:
         name = key.lower()
         plan["soc_venus_" + name] = bats[key]["soc"]
@@ -2241,6 +2248,13 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             else max(0, FULL_REST_SECONDS - (NOW - (session["f"] or NOW)))
             if session["p"] in ["rest", "full_rest"]
             else 0
+        ),
+        "ladebeginn_voraussichtlich_ts": (
+            max(session["t"] + EMPTY_REST_SECONDS, session["n"],
+                previews_today[session["b"]]["start"])
+            if session["p"] == "empty_rest" and session["b"] in previews_today
+            and session["n"] <= DAY0 and previews_today[session["b"]]["ok"]
+            else session["s"] if session["p"] == "wait" and session["s"] else None
         ),
         "peer_entladesperre_freigegeben": bool(
             session["p"] == "drain" and (session["h"] or session["v"])
@@ -2332,6 +2346,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     plan["kalibrier_reserviert_w"] = cal_draw
     plan["normaler_restbedarf_kwh"] = round(need, 4)
     plan["fruehe_soc_ziele_prozent"] = early_soc_goals
+    plan["fruehes_soc_ziel_tagesklasse"] = category
     plan["fruehes_soc_ziel_offen"] = early_soc_keys
     for key in BATTERY_KEYS:
         name = key.lower()
