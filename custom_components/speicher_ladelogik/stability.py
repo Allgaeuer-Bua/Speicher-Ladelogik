@@ -229,7 +229,10 @@ def stable_charge_limit(
         return raw, False, "Höhere Leistung erforderlich"
     if raw > 0:
         if previous > raw:
-            return previous, True, "Bisherigen Fahrplanwert beibehalten"
+            # The active quarter-hour is locked above. Once a new decision is
+            # allowed, follow a lower planned cap instead of carrying an old
+            # high register value across every subsequent charging slot.
+            return raw, False, "Niedrigere geplante Leistung übernehmen"
         return raw, False, "Fahrplanwert aktiv"
     if previous > 0:
         return previous, True, "Bei kurzer Überschusspause beibehalten"

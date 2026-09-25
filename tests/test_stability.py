@@ -274,8 +274,8 @@ def test_limit_is_kept_during_short_surplus_pause() -> None:
     assert held is True
 
 
-def test_lower_nonzero_limit_does_not_cause_an_extra_write() -> None:
-    value, held, _ = stable_charge_limit(
+def test_lower_nonzero_limit_is_applied_in_next_slot() -> None:
+    value, held, reason = stable_charge_limit(
         raw_limit=500,
         previous_limit=1100,
         current_cap=1500,
@@ -285,8 +285,25 @@ def test_lower_nonzero_limit_does_not_cause_an_extra_write() -> None:
         planner_status="Fahrplanladen",
         safety_stop=False,
     )
-    assert value == 1100
-    assert held is True
+    assert value == 500
+    assert held is False
+    assert "Niedrigere" in reason
+
+
+def test_lower_limit_is_held_only_inside_active_slot() -> None:
+    kwargs = dict(
+        raw_limit=1100,
+        previous_limit=1500,
+        current_cap=1500,
+        eligible=True,
+        target_reached=False,
+        within_window=True,
+        planner_status="Fahrplanladen",
+        safety_stop=False,
+        slot_was_active=True,
+    )
+    assert stable_charge_limit(**kwargs, decision_locked=True)[:2] == (1500, True)
+    assert stable_charge_limit(**kwargs, decision_locked=False)[:2] == (1100, False)
 
 
 def test_hardware_cap_reduction_is_applied() -> None:
