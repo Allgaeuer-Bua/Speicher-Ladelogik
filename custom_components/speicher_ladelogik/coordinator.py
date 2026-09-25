@@ -59,7 +59,8 @@ from .control import (
 )
 from .helpers import as_number, conversion_metrics, is_usable_state, power_in_watts
 from .planner_adapter import calculate
-from .runtime import CONTROL_DEFAULTS, HELPER_TO_CONTROL
+from .runtime import CONTROL_DEFAULTS, EARLY_DAY_CLASSES, HELPER_TO_CONTROL
+from .stability import migrate_legacy_day_class_goals
 from .storage import (
     MODEL_DEFAULT_MODULES,
     MODEL_MAXIMUM_W,
@@ -94,6 +95,9 @@ _STABILITY_KEYS = tuple(
     "fahrplan_slot_aktiv_venus_a",
     "fahrplan_slot_aktiv_venus_d",
     "fahrplan_slot_aktiv_venus_e",
+    "fahrplan_slot_startgrund_venus_a",
+    "fahrplan_slot_startgrund_venus_d",
+    "fahrplan_slot_startgrund_venus_e",
 )
 
 
@@ -361,6 +365,9 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     break
             self._control["mode"] = "Beobachten"
             self._control["migrated_from_legacy"] = True
+        # Existing installations had one goal per storage. Copy the stored
+        # value to each day class only once; later class edits remain intact.
+        migrate_legacy_day_class_goals(self._control, loaded_control, EARLY_DAY_CLASSES)
         self._sync_model_controls()
         for obsolete in ("mindestreserve", "mindestreserve_a_kwh", "mindestreserve_d_kwh", "mindestreserve_e_kwh"):
             self._control.pop(obsolete, None)

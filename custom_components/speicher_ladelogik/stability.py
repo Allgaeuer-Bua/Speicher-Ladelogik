@@ -37,6 +37,32 @@ def early_soc_candidates(
     ]
 
 
+def morning_rescue_candidates(
+    caps: dict[str, float],
+    batteries: dict[str, dict[str, Any]],
+    goals: dict[str, float],
+) -> list[str]:
+    """Use measured morning surplus only below an explicitly selected target."""
+    return [
+        key for key, cap in caps.items()
+        if cap > 0 and goals.get(key, 0) > 0
+        and batteries[key]["lowest_soc"] is not None
+        and batteries[key]["lowest_soc"] < min(batteries[key]["goal"], goals[key])
+    ]
+
+
+def migrate_legacy_day_class_goals(
+    control: dict[str, Any], persisted: dict[str, Any], day_classes: tuple[str, ...],
+) -> None:
+    """Keep the previous storage target in every class on first upgrade."""
+    for slot in ("a", "d", "e"):
+        legacy = control[f"fruehes_ladeziel_{slot}_soc"]
+        for day_class in day_classes:
+            key = f"fruehes_ladeziel_{slot}_{day_class}_soc"
+            if key not in persisted:
+                control[key] = legacy
+
+
 def confirmed_export(
     *, now_ts: float, grid_power_w: float | None, live_surplus_w: float,
     prior_since_ts: float | None,

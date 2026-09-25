@@ -1,5 +1,21 @@
 # Änderungsverlauf
 
+## 1.2.2
+
+- Vorzeitiges Ladeziel je Speicher für schwache, wechselhafte, mittlere und starke
+  Tage getrennt einstellbar. Vorhandene Ziele werden je Klasse übernommen.
+  Bei 0 % greift auch die Vormittagsabsicherung für diesen Speicher nicht ein;
+  der normale PV-Fahrplan bleibt aktiv. Die gerade verwendete Klasse und die
+  Ziele sind in der Tagesplanung sichtbar.
+- Ein aktiver Ladeslot zeigt seinen ursprünglichen Startgrund auch dann noch,
+  wenn der Sollwert für den Rest des 15-Minuten-Slots gehalten wird.
+- In der Speicheransicht Leistung in kW mit Lade-/Entladevorzeichen und
+  Nulllinie, Wirkungsgrad separat sowie Pack-Zelldrift darunter. Längere
+  Zeiträume fassen Messwerte zusammen und erhalten Leistungsspitzen.
+- Die Modellauswahl in den gemeinsamen Datenquellen ist kompakt; in der unteren
+  Ruhephase zeigt die Kalibrierung den frühestmöglichen Ladebeginn an.
+- Die Tagesplanung vergleicht bisher gemessene und prognostizierte PV-Energie.
+
 ## 1.2.1
 
 - Wirkungsgrad und AC-Leistung zeigen Laden und Entladen als getrennte

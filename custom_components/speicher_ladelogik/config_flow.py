@@ -131,7 +131,7 @@ class SpeicherLadelogikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             {"value": "D", "label": "Venus D"},
                             {"value": "E", "label": "Venus E"},
                         ],
-                        mode=SelectSelectorMode.LIST,
+                        mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
                 vol.Required("storage_2_model", default="E"): SelectSelector(
@@ -142,7 +142,7 @@ class SpeicherLadelogikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             {"value": "D", "label": "Venus D"},
                             {"value": "E", "label": "Venus E"},
                         ],
-                        mode=SelectSelectorMode.LIST,
+                        mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
                 vol.Required("storage_3_model", default="none"): SelectSelector(
@@ -153,7 +153,7 @@ class SpeicherLadelogikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             {"value": "D", "label": "Venus D"},
                             {"value": "E", "label": "Venus E"},
                         ],
-                        mode=SelectSelectorMode.LIST,
+                        mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
                 vol.Required(CONF_PV_AC, default=DEFAULTS[CONF_PV_AC]): _entity(
@@ -303,19 +303,19 @@ class SpeicherLadelogikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                                 {"value": "D", "label": "Venus D"},
                                 {"value": "E", "label": "Venus E"},
                             ],
-                            mode=SelectSelectorMode.LIST,
+                            mode=SelectSelectorMode.DROPDOWN,
                         )
                     ),
                     vol.Required("storage_2_model", default=models[1]): SelectSelector(
                         SelectSelectorConfig(
                             options=optional_models,
-                            mode=SelectSelectorMode.LIST,
+                            mode=SelectSelectorMode.DROPDOWN,
                         )
                     ),
                     vol.Required("storage_3_model", default=models[2]): SelectSelector(
                         SelectSelectorConfig(
                             options=optional_models,
-                            mode=SelectSelectorMode.LIST,
+                            mode=SelectSelectorMode.DROPDOWN,
                         )
                     ),
                 }
