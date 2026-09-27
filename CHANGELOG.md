@@ -1,5 +1,50 @@
 # Änderungsverlauf
 
+## 1.2.3
+
+- Niedrigere positive Ladegrenzen werden spätestens im folgenden 15-Minuten-Slot
+  übernommen. Ein zuvor erhöhter Wert bleibt nicht mehr unbegrenzt hängen.
+- Die Planung prüft zuerst einen früheren Beginn mit bevorzugter Leistung.
+  Falls höhere Leistung benötigt wird, werden unnötige Erhöhungen anderer
+  Speicher wieder entfernt. Die konservative Lade-Endphase bleibt berücksichtigt.
+  Unter Diagnose ist die Entstehung jeder automatischen Ladegrenze mit Zeitpunkt,
+  Restbedarf, Fenster und simulierter Fehlmenge nachvollziehbar.
+- Vorzeitige SoC-Ziele je Tagesklasse erreichen nun tatsächlich den Planer;
+  ausdrücklich eingestellte 0 % bleiben erhalten. Tagesgrenzen, Planungswirkungsgrad,
+  Wolkenreserve und Mindestplanleistung verwenden die angebotenen Einstellbereiche.
+  Ungeordnete Tagesgrenzen werden beim Ändern mit einer Erklärung abgelehnt.
+- Ausgeschaltete Mittagsspitzenkappung begrenzt die Planung nicht mehr auf das
+  Mittagsfenster. Tagesklassen und das verfügbare PV-Fenster bleiben berücksichtigt.
+- Kalibrierung zählt die eigene Ladeleistung nicht nochmals als verfügbaren
+  PV-Überschuss; auch zwei parallele Läufe teilen sich dieselbe Energiebilanz.
+- Ruhezeiten vor und nach der Kalibrierladung sind unabhängig von 0 bis 240 Minuten
+  einstellbar (5-Minuten-Schritte, Standard jeweils 90 Minuten). Änderungen gelten
+  auch für laufende Ruhephasen. Die untere Restzeit fließt in den frühesten
+  Ladebeginn ein; die obere Ruhephase benötigt kein PV-Fenster.
+- Dashboard und eine gemeinsame Home-Assistant-Mitteilung zeigen alle laufenden
+  und vorgemerkten Kalibrieraufträge mit den konfigurierten Speichernamen.
+  Ruheende, möglicher Ladebeginn sowie geschätztes Lade- und Ruheende bleiben
+  unterscheidbar. Interne Speicherplatzbuchstaben erscheinen nicht als Modellname.
+- Pro Speicher wird eine geschätzte Lade-/Entladezeit bis zur jeweiligen SoC-Grenze
+  mit Uhrzeit angezeigt. Grundlage ist die geglättete gemessene AC-Leistung;
+  kurze Packwechsel werden überbrückt, Stillstand oder veraltete Werte zeigen
+  keine vermeintlich sichere Ankunftszeit. Kalibrierenergie enthält Verluste bereits.
+- Die Rückgabe von Lade- und Entladegrenzen ist auch für den internen Speicherplatz
+  D eindeutig. Beim Wechsel zu Aus/Beobachten werden Kalibrier- und normale
+  Sicherungswerte vollständig zurückgegeben; ausstehende Rückgaben bleiben bei
+  Fehlern und Neustarts erhalten. Bestehende Freigabe- und Schreibfehlerprüfungen
+  gelten weiter.
+- Gesamt-SoC verwendet die tatsächlichen Modulkapazitäten. Diagrammgrenzen und
+  Bezeichnungen folgen dem physischen Modell. W/kW werden in Live-Anzeige und
+  Verlauf einheitlich umgerechnet.
+- Energie aus Verlaufsdaten wird nicht über unbekannte Messintervalle
+  hochgerechnet. Unvollständige Tageswerte sind markiert; Diagrammlinien bleiben
+  wie gewünscht durchgehend.
+- Python-Regressionstests laufen zusätzlich bei jedem Pull Request. Die geprüften
+  Fälle umfassen Leistungsauswahl, Slotwechsel, parallele Kalibrierung, Rückgabe
+  nach Schreibfehler/Neustart, Restzeiten, Sensorattribute und Dashboarddaten.
+
+
 ## 1.2.2
 
 - Vorzeitiges Ladeziel je Speicher für schwache, wechselhafte, mittlere und starke

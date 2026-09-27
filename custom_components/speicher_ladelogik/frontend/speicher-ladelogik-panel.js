@@ -172,12 +172,16 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 
   _num(value, fallback = 0) {
+    if (value === null || value === undefined || value === "") return fallback;
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : fallback;
   }
 
   _entityNum(entity, fallback = 0) {
-    return this._num(entity?.state, fallback);
+    const value = this._num(entity?.state, NaN);
+    if (!Number.isFinite(value)) return fallback;
+    const unit = String(entity?.attributes?.unit_of_measurement || "").toLowerCase();
+    return value * (unit === "kw" ? 1000 : unit === "mw" ? 1_000_000 : 1);
   }
 
   _power(value) {
@@ -277,7 +281,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   _statusLabel(value) {
     const text = String(value ?? "—");
     const match = text.match(/^Kalibrierung\s+([ADE]):\s*([a-z_]+)$/i);
-    if (match) return `Kalibrierung ${match[1].toUpperCase()}: ${PHASE_LABELS[match[2].toLowerCase()] || match[2]}`;
+    if (match) return `Kalibrierung ${this._storageLabel(match[1].toUpperCase())}: ${PHASE_LABELS[match[2].toLowerCase()] || match[2]}`;
     return PHASE_LABELS[text.toLowerCase()] || text;
   }
 
@@ -339,7 +343,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       end_time: new Date().toISOString(),
       entity_ids: entityIds,
       minimal_response: true,
-      no_attributes: true,
+      no_attributes: false,
       significant_changes_only: true,
     }).then((history) => {
       this._history = history || {};
@@ -365,27 +369,35 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return [];
   }
 
-  _historySeries(key) {
+  _historySeries(key, includeGaps = false) {
     const entityId = this._sid(key);
-    return this._historySeriesId(entityId);
+    return this._historySeriesId(entityId, includeGaps);
   }
 
-  _historySeriesId(entityId) {
+  _historySeriesId(entityId, includeGaps = false) {
     if (!entityId) return [];
     if (!this._historySeriesCache.has(entityId)) {
+      let attributes = this._hass?.states?.[entityId]?.attributes || {};
       const historyPoints = this._historyRaw(entityId).map((item) => {
-        const value = this._num(item.state ?? item.s, NaN);
+        attributes = item.attributes || item.a || attributes;
+        const value = this._entityNum({ state: item.state ?? item.s, attributes }, NaN);
         const stamp = item.last_updated ?? item.last_changed ?? item.lu ?? item.lc;
         const time = typeof stamp === "number" ? stamp * 1000 : Date.parse(stamp);
         return { t: time, v: value };
-      }).filter((point) => Number.isFinite(point.t) && Number.isFinite(point.v));
+      }).filter((point) => Number.isFinite(point.t));
       historyPoints.sort((left, right) => left.t - right.t);
       this._historySeriesCache.set(entityId, historyPoints.filter((point, index) => !index || point.t !== historyPoints[index - 1].t));
     }
     const points = [...this._historySeriesCache.get(entityId)];
     const current = this._hass?.states?.[entityId];
-    if (this._available(current)) points.push({ t: Date.now(), v: this._entityNum(current, 0) });
-    return points;
+    if (current) {
+      const changed = Date.parse(current.last_updated || current.last_changed);
+      if (Number.isFinite(changed) && (!points.length || changed > points.at(-1).t)) {
+        points.push({ t: changed, v: this._entityNum(current, NaN) });
+      }
+      points.push({ t: Date.now(), v: this._entityNum(current, NaN) });
+    }
+    return includeGaps ? points : points.filter((point) => Number.isFinite(point.v));
   }
 
   _downsample(points, maximum = 240) {
@@ -456,12 +468,21 @@ class SpeicherLadelogikPanel extends HTMLElement {
     );
   }
 
+  _capacity(slot) {
+    const suffix = slot.toLowerCase();
+    const planned = this._num(this._attr("planung", `nennkapazitaet_venus_${suffix}_kwh`), NaN);
+    if (planned > 0) return planned;
+    const model = this._storageModel(slot);
+    const modules = this._entityNum(this._state(`venus_${suffix}_packs`), model === "A" ? 2 : 1);
+    return this._entityNum(this._state(`nennkapazitaet_venus_${suffix}`),
+      model === "A" ? modules * 2.08 : model === "D" ? modules * 2.56 : 5.12);
+  }
+
   _combinedSoc() {
-    const defaults = { A: 4.16, D: 5.12, E: 5.12 };
     const available = this._models().map((model) => {
       const suffix = model.toLowerCase();
       return {
-        cap: this._entityNum(this._state(`nennkapazitaet_venus_${suffix}`), defaults[model]),
+        cap: this._capacity(model),
         series: this._historySeries(`soc_${suffix}`),
       };
     }).filter((item) => item.series.length);
@@ -482,27 +503,39 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const start = this._dayStart().getTime();
     const end = Date.now();
     let wattHours = 0;
+    let known = false;
     for (let index = 0; index < series.length - 1; index += 1) {
       const from = Math.max(start, series[index].t);
       const to = Math.min(end, series[index + 1].t);
-      if (to <= from) continue;
+      if (to <= from || !Number.isFinite(series[index].v)) continue;
+      known = true;
       wattHours += selector(series[index].v) * (to - from) / 3_600_000;
     }
-    return wattHours / 1000;
+    return known ? wattHours / 1000 : null;
   }
 
   _positiveEnergy(key) {
-    return this._integrateEnergy(this._historySeries(key), (value) => Math.max(0, value));
+    return this._integrateEnergy(this._historySeries(key, true), (value) => Math.max(0, value));
   }
 
   _negativeEnergy(key) {
-    return this._integrateEnergy(this._historySeries(key), (value) => Math.max(0, -value));
+    return this._integrateEnergy(this._historySeries(key, true), (value) => Math.max(0, -value));
+  }
+
+  _energyIncomplete(keys) {
+    const start = this._dayStart().getTime();
+    return keys.some((key) => {
+      const points = this._historySeries(key, true);
+      return points.length < 2 || points[0].t > start || points.some((point, index) =>
+        index < points.length - 1 && points[index + 1].t > start && !Number.isFinite(point.v));
+    });
   }
 
   _batteryEnergy(suffix) {
     return {
       charged: this._negativeEnergy(`power_${suffix}`),
       discharged: this._positiveEnergy(`power_${suffix}`),
+      incomplete: this._energyIncomplete([`power_${suffix}`]),
     };
   }
 
@@ -653,7 +686,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       ${this._energyRow("Haus", values.house, "#8bd8e9", maximum)}
       ${this._energyRow("Netzbezug", values.imported, "#9a45ff", maximum)}
       ${this._energyRow("Netzeinspeisung", values.exported, "#ff942f", maximum)}
-    </div></section>`;
+    </div>${this._energyIncomplete(["pv", "house", "grid", ...this._models().map((model) => `power_${model.toLowerCase()}`)]) ? '<p class="slot-note">Teilwerte: Messlücken oder fehlender Tagesbeginn. Energie in unbekannten Zeiträumen wird nicht hochgerechnet.</p>' : ""}</section>`;
   }
 
   _overviewSocCard() {
@@ -665,7 +698,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   _batteryHistory(letter) {
     const suffix = letter.toLowerCase();
     const historyKey = `battery${letter}`;
-    const limit = letter === "A" ? 1.5 : 2.5;
+    const limit = this._storageModel(letter) === "A" ? 1.5 : 2.5;
     return `<div class="battery-history"><div class="battery-history-title">SoC und Leistungsverlauf</div><div class="battery-chart-wrap">${this._chart([
       { name: "Leistung", color: "#8ea8ff", entityId: this._sid(`power_${suffix}`), points: this._historySeries(`power_${suffix}`).map((point) => ({ ...point, v: point.v / 1000 })) },
       { name: "SoC", color: "#48d88b", entityId: this._sid(`soc_${suffix}`), tooltipValue: (value) => (value + limit) / (limit * 2) * 100, tooltipUnit: " %", points: this._historySeries(`soc_${suffix}`).map((point) => ({ ...point, v: point.v / 100 * limit * 2 - limit })) },
@@ -775,22 +808,12 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const mode = this._attr("status", "betriebsart", this._state("betriebsart")?.state || "—");
     const valid = status?.state === "Bereit";
     const writes = Boolean(this._attr("status", "schreibzugriffe_aktiv", false));
-    const defaults = { A: 4.16, D: 5.12, E: 5.12 };
-    const batteries = this._models().map((model) => {
-      const suffix = model.toLowerCase();
-      return {
-        soc: this._entityNum(this._source(`soc_${suffix}`), this._num(this._attr("status", `soc_venus_${suffix}`, 0))),
-        cap: this._entityNum(this._state(`nennkapazitaet_venus_${suffix}`), defaults[model]),
-      };
-    });
-    const totalCapacity = batteries.reduce((sum, battery) => sum + battery.cap, 0);
-    const combined = Math.max(0, Math.min(100,
-      batteries.reduce((sum, battery) => sum + battery.soc * battery.cap, 0)
-      / Math.max(0.1, totalCapacity)));
+    const combined = this._combinedCurrentSoc();
     const planStatus = this._statusLabel(this._state("planung")?.state || "—");
     const calibrationState = this._state("kalibrierung")?.state || "—";
     const calibrationBattery = this._attr("kalibrierung", "batterie", null);
-    const calibration = calibrationBattery && !["Bereit", "—"].includes(calibrationState)
+    const jobs = this._calibrationJobs();
+    const calibration = jobs.length ? jobs.map((job) => `${job.name || this._storageLabel(job.batterie)}: ${job.phase_label || PHASE_LABELS[job.phase] || job.phase}`).join(" · ") : calibrationBattery && !["Bereit", "—"].includes(calibrationState)
       ? `${this._storageLabel(calibrationBattery)}: ${calibrationState}` : calibrationState;
     const peak = this._isOn("mittagsspitzen");
     return `
@@ -802,7 +825,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
           </div>
           <div class="status-table">
             ${this._statusLine("Betriebsart", mode, mode === "Automatik" ? "good" : "warn")}
-            ${this._statusLine("Regelung", writes ? "Schreibzugriffe aktiv" : "Beobachten", writes ? "good" : "neutral")}
+            ${this._statusLine("Regelung", this._attr("planung", "rueckgabe_ausstehend", false) ? "Grenzwerte werden zurückgegeben" : writes ? "Schreibzugriffe aktiv" : "Beobachten", writes ? "good" : "neutral")}
             ${this._statusLine("Fahrplan", planStatus, "accent")}
             ${this._statusLine("Mittagsspitze", peak ? "Aktiv" : "Aus", peak ? "good" : "neutral")}
             ${this._statusLine("Kalibrierung", calibration, calibration === "Bereit" ? "neutral" : "warn")}
@@ -816,14 +839,13 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 
   _combinedCurrentSoc() {
-    const defaults = { A: 4.16, D: 5.12, E: 5.12 };
     const batteries = this._models().map((model) => {
       const suffix = model.toLowerCase();
       return {
-        soc: this._entityNum(this._source(`soc_${suffix}`), this._num(this._attr("status", `soc_venus_${suffix}`, 0))),
-        cap: this._entityNum(this._state(`nennkapazitaet_venus_${suffix}`), defaults[model]),
+        soc: this._entityNum(this._source(`soc_${suffix}`), this._num(this._attr("status", `soc_venus_${suffix}`), NaN)),
+        cap: this._capacity(model),
       };
-    });
+    }).filter((battery) => Number.isFinite(battery.soc));
     const totalCapacity = batteries.reduce((sum, battery) => sum + battery.cap, 0);
     return Math.max(0, Math.min(100,
       batteries.reduce((sum, battery) => sum + battery.soc * battery.cap, 0)
@@ -904,6 +926,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
           ${this._models().map((model) => this._storageSlot(model, model.toLowerCase())).join("")}
         </div>
         <div class="slot-note"><ha-icon icon="mdi:lock-clock"></ha-icon> Entscheidung fixiert bis ${this._time(lockedUntil)}</div>
+        ${this._calibrationJobsCard()}
         ${this._peakDetails()}
       </section>`;
   }
@@ -952,6 +975,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
           </div>
           ${full ? this._batteryHistory(letter) : ""}
         </div>
+        <div class="cal-result" data-live-estimate="${suffix}">${this._remainingTime(letter)}</div>
         <div class="metric-pairs compact">
           ${this._metric("Verlust", this._power(loss), "mdi:lightning-bolt-outline")}
           ${this._metric("Wirkungsgrad", this._percent(efficiency, 1), "mdi:percent-outline")}
@@ -961,8 +985,41 @@ class SpeicherLadelogikPanel extends HTMLElement {
           ${this._metric("Entladegrenze", this._power(dischargeLimit), "mdi:battery-arrow-down-outline")}
           ${full ? this._metric("Heute entladen", this._historyEnergy(energy.discharged), "mdi:battery-minus-outline") : ""}
         </div>
+        ${full && energy.incomplete ? '<p class="slot-note">Heutige Energie unvollständig: Messlücken oder fehlender Tagesbeginn.</p>' : ""}
         ${full ? this._batteryDetails(letter) + this._batteryDiagnostics(letter) : ""}
       </section>`;
+  }
+
+  _remainingTime(letter) {
+    const estimate = this._attr("planung", `restzeit_venus_${letter.toLowerCase()}`, {});
+    if (!Number.isFinite(estimate.restzeit_s)) {
+      const hint = estimate.modus === "pausiert" ? "Derzeit kein Lade- oder Entladefluss"
+        : estimate.modus === "messen" ? "Leistung wird erfasst" : "Keine verlässliche Leistungsmessung";
+      return `<strong>Restzeit —</strong><small>${hint}</small>`;
+    }
+    const minutes = Math.ceil(estimate.restzeit_s / 60);
+    const duration = minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`;
+    const label = estimate.modus === "laden" ? "Ladezeit" : "Entladezeit";
+    return `<strong>${label} bis ${esc(this._percent(estimate.ziel_soc))}: ca. ${duration}</strong><span>Voraussichtlich ${esc(this._dateTime(estimate.ziel_ts))}</span><small>Bei derzeitiger, geglätteter Leistung ${esc(this._power(estimate.leistung_geglaettet_w))}</small>`;
+  }
+
+  _calibrationJobs() {
+    return this._attr("kalibrierung", "auftraege", this._attr("planung", "kalibrierauftraege", [])) || [];
+  }
+
+  _calibrationJobsCard() {
+    const jobs = this._calibrationJobs();
+    if (!jobs.length) return "";
+    return `<div class="cal-window-grid">${jobs.map((job) => {
+      const phase = job.phase_label || PHASE_LABELS[job.phase] || job.phase;
+      const times = [];
+      if (job.ruhe_ende_ts) times.push(`Ruhephase bis ${this._dateTime(job.ruhe_ende_ts)} · noch ca. ${Math.max(0, Math.ceil((job.ruhe_ende_ts - Date.now() / 1000) / 60))} min`);
+      if (job.ladebeginn_voraussichtlich_ts) times.push(`Ladebeginn frühestens ${this._dateTime(job.ladebeginn_voraussichtlich_ts)} bei ausreichend PV`);
+      if (job.voll_voraussichtlich_ts) times.push(`Voraussichtlich voll ${this._dateTime(job.voll_voraussichtlich_ts)}`);
+      if (job.freigabe_voraussichtlich_ts) times.push(`Freigabe nach Ruhephase ca. ${this._dateTime(job.freigabe_voraussichtlich_ts)}`);
+      if (job.phase === "queued" && job.fruehestens_ts) times.push(`Vorgemerkt ab ${this._dateTime(job.fruehestens_ts)}`);
+      return `<div class="cal-result"><strong>${esc(job.name || this._storageLabel(job.batterie))}</strong><span>${esc(phase)}</span><small>${esc(job.grund || "")}</small>${job.energie_ac_kwh != null ? `<span>Geladen: ${esc(this._energy(job.energie_ac_kwh))}</span>` : ""}${times.map((time) => `<small>${esc(time)}</small>`).join("")}</div>`;
+    }).join("")}</div>`;
   }
 
   _batteryDetails(letter) {
@@ -1154,9 +1211,9 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return `
       <section class="card span-full calibration-card">
         ${this._cardTitle("mdi:battery-sync-outline", "Kalibrierung", this._badge(cal?.state || "—", cal?.state === "Bereit" ? "good" : "warn"))}
-        <div class="cal-state"><div><span>Speicher</span><strong>${esc(batteryName)}</strong><small>Gerät des aktuellen Kalibrierauftrags</small></div><div><span>Status</span><strong>${esc(statusText)}</strong><small>Aktuelle Phase: ${esc(phase)}${esc(restHint)}</small>${chargeHint}</div><div><span>Energie</span><strong>${this._energy(this._attr("kalibrierung", "energie_ac_kwh"))}</strong><small>Bisher in diesem Kalibrierlauf geladene AC-Energie</small></div></div>
-        <div class="control-list calibration-setting">${this._numberRow(["kalibrierleistung", "Kalibrierleistung", "Leistung für die vollständige Kalibrierladung"])}${this._toggleRow("kalibrierung_parallel", "Zwei Speicher gleichzeitig", "Nur bei zwei vorbereiteten Speichern und ausreichend gemeinsamem PV-Überschuss", "mdi:battery-sync")}</div>
-        ${(this._attr("kalibrierung", "laufende_laeufe", []) || []).length > 1 ? `<div class="cal-window-grid">${this._attr("kalibrierung", "laufende_laeufe", []).map((run) => `<div class="cal-result"><strong>${esc(this._storageLabel(run.batterie))}</strong><span>${esc(PHASE_LABELS[run.phase] || run.phase)} · ${esc(this._energy(run.energie_ac_kwh))}</span></div>`).join("")}</div>` : ""}
+        ${this._calibrationJobs().length ? this._calibrationJobsCard() : `<div class="cal-state"><div><span>Speicher</span><strong>${esc(batteryName)}</strong><small>Gerät des aktuellen Kalibrierauftrags</small></div><div><span>Status</span><strong>${esc(statusText)}</strong><small>Aktuelle Phase: ${esc(phase)}${esc(restHint)}</small>${chargeHint}</div><div><span>Energie</span><strong>${this._energy(this._attr("kalibrierung", "energie_ac_kwh"))}</strong><small>Bisher in diesem Kalibrierlauf geladene AC-Energie</small></div></div>`}
+        <div class="control-list calibration-setting">${this._numberRow(["kalibrierleistung", "Kalibrierleistung", "Leistung für die vollständige Kalibrierladung"])}${this._numberRow(["kalibrierung_ruhe_unten", "Ruhezeit vor dem Laden", "Ab Erreichen des unteren SoC; gilt auch für laufende Ruhephasen"])}${this._numberRow(["kalibrierung_ruhe_oben", "Ruhezeit nach dem Laden", "Ab bestätigten 100 %; benötigt kein PV-Fenster"])}${this._toggleRow("kalibrierung_parallel", "Zwei Speicher gleichzeitig", "Nur bei zwei vorbereiteten Speichern und ausreichend gemeinsamem PV-Überschuss", "mdi:battery-sync")}</div>
+
         <div class="cal-window-grid">
           ${this._models().map((model) => {
             const suffix = model.toLowerCase();
@@ -1197,12 +1254,18 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const missing = this._attr("status", "fehlende_entitaeten", []) || [];
     const results = (this._attr("status", "letzte_schreibergebnisse", []) || []).map((item) => this._formatWriteResult(item));
     const dataErrors = this._attr("planung", "datenfehler_aktuell", []) || [];
+    const decisions = this._models().map((slot) => {
+      const decision = this._attr("planung", `leistungsentscheidung_venus_${slot.toLowerCase()}`);
+      if (!decision) return null;
+      return `${this._storageLabel(slot)} · ${this._dateTime(decision.zeit_ts)}: bevorzugt ${this._power(decision.bevorzugt_w)}, geplant ${this._power(decision.roh_w)}, gehalten ${this._power(decision.stabil_w)} · Restbedarf ${this._energy(decision.restbedarf_kwh)} · Fenster ${this._time(decision.fenster_start_ts)}–${this._time(decision.simulation_ende_ts)} · Fehlmenge bei bevorzugter Leistung ${this._energy(decision.fehlmenge_bevorzugt_kwh)} · ${decision.grund}`;
+    }).filter(Boolean);
     return `
       <main class="grid diagnostics-view">
         <section class="card span-6">${this._cardTitle("mdi:database-check-outline", "Datenquellen")}${this._diagLine("Gemeinsame Daten", this._state("daten_gemeinsam")?.state)}${this._models().map((model) => this._diagLine(this._storageLabel(model), this._state(`daten_venus_${model.toLowerCase()}`)?.state)).join("")}${this._diagLine("Verfügbare Quellen", `${this._attr("status", "quellen_verfuegbar", 0)} / ${this._attr("status", "quellen_gesamt", 0)}`)}</section>
         <section class="card span-6">${this._cardTitle("mdi:timeline-check-outline", "Planung", this._badge(this._attr("status", "planung_aktiv", false) ? "Bereit" : "Fehler", this._attr("status", "planung_aktiv", false) ? "good" : "bad"))}${this._diagLine("Planungsstatus", this._attr("status", "planung_aktiv", false) ? "Aktiv" : "Aus")}${this._diagLine("Planungsfehler", this._attr("status", "planungsfehler", "Keiner") || "Keiner")}${this._diagLine("Letzter Schreibzugriff", this._dateTime(this._attr("status", "letzter_schreibzugriff_ts")))}${this._diagLine("Letzter Schreibfehler", this._attr("status", "letzter_schreibfehler", "Keiner") || "Keiner")}</section>
         ${this._listCard("Aktuelle Hinweise", "mdi:alert-circle-outline", [...warnings, ...dataErrors], "Keine aktuellen Warnungen", "span-6")}
         ${this._listCard("Fehlende Entitäten", "mdi:database-remove-outline", missing, "Keine Entität fehlt", "span-6")}
+        ${this._listCard("Entstehung der Ladegrenzen", "mdi:timeline-clock-outline", decisions, "Noch keine Entscheidung gespeichert", "span-full")}
         ${this._listCard("Letzte Schreibergebnisse", "mdi:pencil-outline", results, "Noch keine Schreibzugriffe", "span-full")}
         <section class="card span-full ack-card">${this._cardTitle("mdi:shield-lock-open-outline", "Schreibsperren und Quittierung")}<p>Die Quittierung setzt die internen Schreibfehlerzähler der konfigurierten Speicher zurück. Fehlende oder ungültige Sensorwerte werden dadurch nicht verändert.</p><div class="ack-state">${this._diagLine("Schreibzugriffe", this._attr("status", "schreibzugriffe_aktiv", false) ? "Aktiv" : "Gesperrt")}${this._diagLine("Letzter Schreibfehler", this._attr("status", "letzter_schreibfehler", "Keiner"))}</div><div class="ack-row">${this._actionButton("fehler_quittieren", "mdi:check-decagram-outline", "Schreibfehler quittieren")}</div></section>
       </main>`;
@@ -1410,7 +1473,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 }
 
-const PANEL_ELEMENT = "speicher-ladelogik-panel-1-2-2";
+const PANEL_ELEMENT = "speicher-ladelogik-panel-1-2-3";
 
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);

@@ -151,7 +151,7 @@ test("panel uses the Venus AC sign convention and translates calibration phases"
   assert.deepEqual(panel._batteryMode(-945), { label: "Lädt", tone: "charge" });
   assert.deepEqual(panel._batteryMode(945), { label: "Entlädt", tone: "discharge" });
   assert.deepEqual(panel._batteryMode(0), { label: "Bereit", tone: "idle" });
-  assert.equal(panel._statusLabel("Kalibrierung A: drain"), "Kalibrierung A: Entladen auf 13 %");
+  assert.equal(panel._statusLabel("Kalibrierung A: drain"), "Kalibrierung Venus A: Entladen auf 13 %");
 });
 
 test("panel formats single-value drift sensors and register results", () => {
@@ -426,12 +426,12 @@ test("calibration status explains empty and active states", () => {
   card = panel._calibrationCard();
   assert.match(card, /Venus A/);
   assert.match(card, /Ladung mit 500 W/);
-  assert.match(card, /Aktuelle Phase: Kalibrierung A: Kalibrierladung/);
+  assert.match(card, /Aktuelle Phase: Kalibrierung Venus A: Kalibrierladung/);
 
   panel._hass.states["sensor.speicher_ladelogik_kalibrierung"].state = "Kalibrierung A: full_rest";
   panel._hass.states["sensor.speicher_ladelogik_kalibrierung"].attributes.ruhe_verbleibend_s = 3599;
   card = panel._calibrationCard();
-  assert.match(card, /Aktuelle Phase: Kalibrierung A: Obere Ruhephase · noch ca. 60 min/);
+  assert.match(card, /Aktuelle Phase: Kalibrierung Venus A: Obere Ruhephase · noch ca. 60 min/);
 });
 
 test("control settings explain the effect of planning thresholds", () => {
@@ -458,7 +458,7 @@ test("control page starts with calibration, then manual mode, then the remaining
 });
 
 test("frontend element name matches the integration release version", () => {
-  assert.equal(panelElementName, "speicher-ladelogik-panel-1-2-2");
+  assert.equal(panelElementName, "speicher-ladelogik-panel-1-2-3");
   assert.equal(registry.get(panelElementName), Panel);
   assert.equal(registry.has("speicher-ladelogik-panel-1-0-1"), false);
 });
@@ -556,4 +556,80 @@ test("duplicate physical models keep independent slot labels", () => {
   assert.equal(panel._storageLabel("A"), "Keller E 1");
   assert.match(panel._storageSlot("D", "d"), /Garage E 2/);
   assert.match(panel._batteryCard("E"), /Werkstatt E 3/);
+});
+
+test("live and historical kW values use the same watts basis", () => {
+  const { panel } = createPanel();
+  panel._hass.states["sensor.venus_a_power"] = { state: "-1.3", attributes: { unit_of_measurement: "kW" } };
+  panel._history = { "sensor.venus_a_power": [
+    { s: "-1.1", lu: 1_800_000_000, a: { unit_of_measurement: "kW" } },
+    { s: "-1.3", lu: 1_800_000_060 },
+  ] };
+  assert.equal(panel._entityNum(panel._source("power_a")), -1300);
+  assert.deepEqual(panel._historySeries("power_a").slice(0, 2).map(p => p.v), [-1100, -1300]);
+  assert.match(panel._batteryCard("A"), /1,3 kW/);
+  assert.equal(panel._num(null, NaN).toString(), "NaN");
+});
+
+test("energy integration excludes unavailable intervals while plots stay connected", () => {
+  const { panel } = createPanel();
+  const start = panel._dayStart().getTime();
+  const originalNow = Date.now;
+  Date.now = () => start + 3 * 3_600_000;
+  try {
+    panel._history = { "sensor.venus_a_power": [
+      { s: "-1000", lu: start / 1000 },
+      { s: "unavailable", lu: start / 1000 + 3600 },
+      { s: "0", lu: start / 1000 + 7200 },
+    ] };
+    panel._hass.states["sensor.venus_a_power"] = { state: "0", attributes: {} };
+    assert.equal(panel._batteryEnergy("a").charged, 1);
+    assert.equal(panel._batteryEnergy("a").incomplete, true);
+    assert.equal(panel._historySeries("power_a").every(p => Number.isFinite(p.v)), true);
+    assert.match(panel._batteryCard("A", true), /Energie unvollständig/);
+    assert.match(panel._energyTodayCard(), /Teilwerte/);
+  } finally { Date.now = originalNow; }
+});
+
+test("overall SoC weights actual module capacities and model drives chart scale", () => {
+  const { panel } = createPanel();
+  panel._panel.config.entities.planung = "sensor.plan";
+  panel._hass.states["sensor.plan"] = { state: "Laden", attributes: { nennkapazitaet_venus_a_kwh: 12.48, nennkapazitaet_venus_e_kwh: 5.12 } };
+  panel._hass.states["sensor.venus_a_soc"].state = "100";
+  panel._hass.states["sensor.venus_e_soc"].state = "0";
+  assert.ok(Math.abs(panel._combinedCurrentSoc() - 70.90909) < .001);
+  panel._panel.config.storage_models = { A: "E", E: "A" };
+  let range;
+  panel._chart = (_series, options) => { range = options; return ""; };
+  panel._batteryHistory("A");
+  assert.equal(range.max, 2.5);
+});
+
+test("all calibration jobs share their names, phases and rest clocks across tabs", () => {
+  const { panel } = createPanel();
+  panel._panel.config.storage_models = { A: "A", D: "E" };
+  panel._panel.config.storage_labels = { D: "Venus E Keller" };
+  const jobs = [
+    { batterie: "A", name: "Venus A", phase: "charge", phase_label: "Kalibrierladung", energie_ac_kwh: 1.2 },
+    { batterie: "D", name: "Venus E Keller", phase: "empty_rest", phase_label: "Untere Ruhephase", ruhe_ende_ts: Date.now() / 1000 + 900, ladebeginn_voraussichtlich_ts: Date.now() / 1000 + 900 },
+  ];
+  panel._hass.states[panel._eid("kalibrierung")].attributes.auftraege = jobs;
+  for (const html of [panel._calibrationCard(), panel._planningCard(), panel._systemCard()]) {
+    assert.match(html, /Venus A/);
+    assert.match(html, /Venus E Keller/);
+    assert.match(html, /Untere Ruhephase/);
+  }
+  assert.match(panel._calibrationCard(), /Ruhephase bis/);
+  assert.match(panel._calibrationCard(), /Ladebeginn frühestens/);
+  assert.equal(panel._statusLabel("Kalibrierung D: drain"), "Kalibrierung Venus E Keller: Entladen auf 13 %");
+});
+
+test("remaining-time card distinguishes actual estimate from an unknown or paused flow", () => {
+  const { panel } = createPanel();
+  panel._panel.config.entities.planung = "sensor.plan";
+  panel._hass.states["sensor.plan"] = { state: "Laden", attributes: { restzeit_venus_a: { modus: "laden", restzeit_s: 4500, ziel_ts: Date.now() / 1000 + 4500, ziel_soc: 100, leistung_geglaettet_w: 500 } } };
+  assert.match(panel._remainingTime("A"), /Ladezeit bis 100 %: ca. 1 h 15 min/);
+  panel._hass.states["sensor.plan"].attributes.restzeit_venus_a = { modus: "pausiert" };
+  assert.match(panel._remainingTime("A"), /Restzeit —/);
+  assert.doesNotMatch(panel._remainingTime("A"), /Voraussichtlich/);
 });

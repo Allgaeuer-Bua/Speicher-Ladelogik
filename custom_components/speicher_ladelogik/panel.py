@@ -134,6 +134,8 @@ PANEL_ENTITIES: Final = {
     "mittag_nachlauf": ("number", "mittag_nachlauf"),
     "min_effiziente_leistung": ("number", "min_effiziente_leistung"),
     "kalibrierleistung": ("number", "kalibrierleistung"),
+    "kalibrierung_ruhe_unten": ("number", "kalibrierung_ruhe_unten"),
+    "kalibrierung_ruhe_oben": ("number", "kalibrierung_ruhe_oben"),
     "venus_a_packs": ("number", "venus_a_packs"),
     "venus_d_packs": ("number", "venus_d_packs"),
     "venus_e_packs": ("number", "venus_e_packs"),
