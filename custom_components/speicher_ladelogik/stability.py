@@ -84,10 +84,12 @@ def calibration_available_surplus(
     *,
     running: bool,
 ) -> float:
-    """Return surplus before a running calibration's own measured draw."""
-    if not running or actual_charge_w is None:
-        return max(0.0, float(live_surplus_w))
-    return max(0.0, float(live_surplus_w)) + max(0.0, float(actual_charge_w))
+    """The PV/house and grid/battery balances already exclude battery draw.
+
+    Keep the call signature compatible; never add measured charging a second
+    time, which would classify grid-supported charging as available PV.
+    """
+    return max(0.0, float(live_surplus_w))
 
 
 def target_latch(
@@ -229,7 +231,10 @@ def stable_charge_limit(
         return raw, False, "Höhere Leistung erforderlich"
     if raw > 0:
         if previous > raw:
-            return previous, True, "Bisherigen Fahrplanwert beibehalten"
+            # The active quarter-hour is locked above. Once a new decision is
+            # allowed, follow a lower planned cap instead of carrying an old
+            # high register value across every subsequent charging slot.
+            return raw, False, "Niedrigere geplante Leistung übernehmen"
         return raw, False, "Fahrplanwert aktiv"
     if previous > 0:
         return previous, True, "Bei kurzer Überschusspause beibehalten"

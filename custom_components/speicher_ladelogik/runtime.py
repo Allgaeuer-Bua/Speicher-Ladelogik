@@ -47,6 +47,9 @@ CONTROL_DEFAULTS: dict[str, Any] = {
     "mittag_nachlauf_h": 4.0,
     "min_effiziente_leistung": 800.0,
     "kalibrierleistung_w": 500.0,
+    "kalibrierung_ruhe_unten_min": 90.0,
+    "kalibrierung_ruhe_oben_min": 90.0,
+    "rueckgabe_ausstehend": False,
     "venus_a_packs": 2.0,
     "venus_d_packs": 2.0,
     "venus_e_packs": 1.0,
@@ -162,6 +165,12 @@ HELPER_TO_CONTROL: dict[str, str] = {
 }
 
 
+for _key in CONTROL_DEFAULTS:
+    if (_key.startswith("fruehes_ladeziel_")
+            or _key in {"kalibrierung_ruhe_unten_min", "kalibrierung_ruhe_oben_min"}):
+        HELPER_TO_CONTROL[f"input_number.speicher_ladelogik_{_key}"] = _key
+
+
 @dataclass(slots=True)
 class PlannerState:
     """Small State-compatible object used for internal planner values."""
@@ -180,7 +189,8 @@ def planner_states(control: dict[str, Any]) -> dict[str, PlannerState]:
     """Expose native controls to the proven planner without HA input helpers."""
     mode = str(control.get("mode", "Beobachten"))
     # Beobachten calculates the complete automatic plan but never writes it.
-    planner_mode = "Automatik" if mode in {"Beobachten", "Automatik"} else "Aus"
+    planner_mode = ("Automatik" if mode in {"Beobachten", "Automatik"}
+                    and not control.get("rueckgabe_ausstehend") else "Aus")
     result: dict[str, PlannerState] = {
         "input_select.speicher_ladelogik_betriebsart": PlannerState(planner_mode),
         "input_boolean.speicher_ladelogik_aktiv": PlannerState(

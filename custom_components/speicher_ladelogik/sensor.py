@@ -248,6 +248,9 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "regelung_aktiv",
                 "daten_gueltig",
                 "daten_gueltig_gemeinsam",
+                "rueckgabe_ausstehend",
+                "kalibrierauftraege",
+                "fruehes_soc_ziel_tagesklasse",
                 "normaler_fahrplan_status",
                 "normaler_fahrplan_grund",
                 "pv_planungswert_w",
@@ -256,6 +259,9 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "netto_ueberschuss_w",
                 "effizienzmodus",
                 "sollwertstrategie",
+                "pv_prognose_abweichung_bisher_kwh",
+                "pv_real_bis_jetzt_kwh",
+                "prognose_bis_jetzt_kwh",
                 "prognose_heute_erwartet_kwh",
                 "prognose_rest_erwartet_kwh",
                 "prognose_morgen_kwh",
@@ -302,6 +308,12 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
             )
             attributes = {key: plan.get(key) for key in keys}
             model_fields = (
+                "restzeit_venus_{name}",
+                "leistungsentscheidung_venus_{name}",
+                "nennkapazitaet_venus_{name}_kwh",
+                "kapazitaet_venus_{name}_kwh",
+                "soc_venus_{name}",
+                "ac_leistung_venus_{name}_roh_w",
                 "daten_gueltig_venus_{name}",
                 "restbedarf_venus_{name}_kwh",
                 "untere_geraetegrenze_venus_{name}_prozent",
@@ -336,6 +348,14 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
         if self.entity_description.key == "kalibrierung":
             calibration = data.get("calibration", {})
             keys = (
+                "auftraege",
+                "laufende_laeufe",
+                "vormerkungen",
+                "ruhedauer_unten_min",
+                "ruhedauer_oben_min",
+                "ruhe_verbleibend_s",
+                "ladebeginn_voraussichtlich_ts",
+                "parallel_erlaubt",
                 "phase",
                 "batterie",
                 "grund",
@@ -357,6 +377,9 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
             for model in self.coordinator.enabled_models:
                 name = model.lower()
                 for key in (
+                    f"{name}_vorgemerkt",
+                    f"{name}_fruehestens_ts",
+                    f"{name}_laden_gesperrt",
                     f"kalibrieren_{name}_sicher",
                     f"{name}_pruefhinweise",
                     f"heute_{name}",

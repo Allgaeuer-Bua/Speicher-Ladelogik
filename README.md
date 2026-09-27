@@ -11,7 +11,7 @@ oder Speichern. Sie verwendet vorhandene Home-Assistant-Entitäten. Dadurch
 können Messwerte aus unterschiedlichen Integrationen und von verschiedenen
 Anbietern verwendet werden, sofern Bedeutung, Einheit und Vorzeichen passen.
 
-> **Version im Quellcode:** 1.2.2
+> **Version im Quellcode:** 1.2.3
 > **Erforderliche Home-Assistant-Version:** 2026.9.1 oder neuer
 
 ## Wofür ist die Integration gedacht?
@@ -29,6 +29,10 @@ PV-Erzeugung, Hausverbrauch, Netzbilanz und Ladezuständen:
 Die Planung arbeitet in verbindlichen 15-Minuten-Slots. Sicherheitsstopps,
 manuelle Eingriffe und ungültige Sensordaten wirken trotzdem sofort. Kleine
 Messwertschwankungen führen dadurch nicht ständig zu neuen Schaltentscheidungen.
+Beim Wechsel zu Aus oder Beobachten werden zuvor gesicherte Grenzwerte
+zurückgegeben. Eine noch ausstehende Rückgabe wird angezeigt und nach Fehlern
+oder Neustart fortgesetzt; dabei gelten weiterhin die Gerätefreigaben und
+Schreibfehlersperren.
 
 ## Unterstützte Speicher
 
@@ -52,7 +56,8 @@ Handsteuerung, Kalibrierung und Fehlerbehandlung.
 
 - Home Assistant **2026.9.1** oder neuer
 - [HACS](https://www.hacs.xyz/) für die komfortable Installation
-- Recorder-/Verlaufsdaten für die Diagramme im Dashboard
+- Recorder-/Verlaufsdaten für die Diagramme im Dashboard; Tagesenergien aus dem
+  Verlauf sind bei Messlücken oder fehlendem Tagesbeginn als Teilwerte markiert
 - bereits in Home Assistant vorhandene Mess- und Steuerentitäten
 
 ### Gemeinsame Datenquellen
@@ -96,7 +101,10 @@ bei Venus A/D die vorhandenen Pack-Sensoren.
 - getrennte Planung für jeden konfigurierten Speicher
 - bevorzugte sowie maximale automatische Ladeleistung je Speicher
 - maximale automatische Entladeleistung je Speicher
-- dynamisch erforderliche Zwischenstufen in 50-W-Schritten
+- zuerst früherer Ladebeginn mit bevorzugter Leistung, bei Bedarf gezielt höhere
+  Zwischenstufen in 50-W-Schritten je Speicher
+- niedrigere positive Planwerte spätestens im nächsten 15-Minuten-Slot
+- Diagnose der ursprünglichen Leistungsentscheidung mit Uhrzeit und Restbedarf
 - Mittagsspitzenkappung mit einem einstellbaren Fenster relativ zum lokalen
   Sonnenhöchststand
 - Berücksichtigung von Prognosegüte, Reserve und verfügbarem Tagesfenster
@@ -133,6 +141,13 @@ bei Venus A/D die vorhandenen Pack-Sensoren.
   steigt die Grenze entsprechend. Die Läufe werden einzeln überwacht und
   beendet. Ohne diese Option bleibt die Reihenfolge der Vormerkungen erhalten.
 - einstellbare Kalibrierleistung von **400 bis 1.500 W**
+- getrennte Ruhezeiten vor und nach dem Laden: **0–240 Minuten**, in
+  5-Minuten-Schritten, standardmäßig jeweils **90 Minuten**. Eine Änderung
+  wirkt auch auf eine bereits laufende Ruhephase. Die untere Ruhe beginnt bei
+  erreichtem Entladeziel; die obere bei bestätigten 100 % und ruhendem Speicher.
+  Nur die Ladung benötigt ein ausreichendes PV-Fenster.
+- alle aktiven und vorgemerkten Aufträge gemeinsam in Dashboard und HA-Mitteilung;
+  Ruheende, möglicher Ladebeginn und voraussichtliche Freigabe sind getrennt sichtbar
 - Berechnung des verfügbaren Fensters und der benötigten Dauer für heute und
   morgen
 - Entladevorbereitung durch den natürlichen Hausverbrauch
@@ -150,6 +165,10 @@ bei Venus A/D die vorhandenen Pack-Sensoren.
 
 ### Überwachung und Benachrichtigungen
 
+- geschätzte Lade- und Entladezeit je Speicher aus geglätteter tatsächlicher
+  AC-Leistung, mit Ziel-SoC und Uhrzeit. Es ist eine Fortschreibung der aktuellen
+  Leistung, keine Vorhersage des künftigen Hausverbrauchs oder PV-Ertrags.
+  Eine kurze Anlaufmessung sowie veraltete Werte oder Stillstand ergeben keine ETA.
 - momentaner Lade- und Entladewirkungsgrad
 - berechnete Verlustleistung je Speicher
 - farbliche Zelldrift-Bewertung:
