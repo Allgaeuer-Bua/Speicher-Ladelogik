@@ -46,6 +46,69 @@ def test_native_day_class_settings_reach_the_real_planner():
     assert out['plan']['fruehe_soc_ziele_prozent'] == {'A': 60., 'E': 0.}
 
 
+def test_weak_morning_does_not_turn_a_sunny_day_into_a_weak_class():
+    controls = copy.deepcopy(runtime.CONTROL_DEFAULTS)
+    controls.update(mode='Automatik', fruehes_ladeziel_a_stark_soc=50.,
+                    fruehes_ladeziel_e_stark_soc=50.,
+                    bevorzugte_ladeleistung_a_w=1100,
+                    bevorzugte_ladeleistung_e_w=1300)
+    hass, payload = fx.scenario(primary_phase='idle', secondary_phase='idle', pv=6000)
+    set_value(hass, 'sensor.pv_produktion_tag', .2)
+    for direction in ('sw', 'so', 'no'):
+        entity = f'sensor.{direction}_energy_production_today'
+        buckets = {datetime.fromtimestamp(fx.DAY + index * 900, timezone.utc).isoformat():
+                   (100 if 24 <= index < 28 else 750 if 28 <= index < 72 else 0)
+                   for index in range(96)}
+        hass.states.states[entity] = fx.state(33.4, fx.NOW, unit='kWh', wh_period_15m=buckets)
+    with patch.dict(sys.modules, STUBS):
+        hass.states.states.update(runtime.planner_states(controls))
+    out = run(hass, payload)['plan']
+    assert out['prognose_heute_roh_kwh'] > 90
+    assert out['prognose_heute_erwartet_kwh'] > 85
+    assert out['tagesklasse'] == 'stark'
+    assert out['fahrplan_ladegrenze_roh_venus_a_w'] <= 1100
+    assert out['fahrplan_ladegrenze_roh_venus_e_w'] <= 1300
+
+
+def test_recovery_after_missing_data_may_resume_in_the_same_slot():
+    hass, payload = fx.scenario(primary_phase='idle', secondary_phase='idle', pv=6000)
+    payload['prior_plan'] = {
+        'version': '1.2.3', 'berechnet_ts': fx.NOW - 20,
+        'betriebsart': 'Automatik', 'regelung_aktiv': True,
+        'daten_gueltig': False,
+        'fahrplan_slot_start_ts': int(fx.NOW // 900) * 900,
+        'fahrplan_slot_aktiv_venus_a': False,
+        'fahrplan_ladegrenze_stabil_venus_a_w': 0,
+    }
+    controls = copy.deepcopy(runtime.CONTROL_DEFAULTS)
+    controls.update(mode='Automatik', fruehes_ladeziel_a_stark_soc=50.)
+    with patch.dict(sys.modules, STUBS):
+        hass.states.states.update(runtime.planner_states(controls))
+    plan = run(hass, payload)['plan']
+    assert plan['fahrplan_slot_verriegelt'] is False
+    assert plan['fahrplan_ladegrenze_stabil_venus_a_w'] > 0
+
+
+def test_venus_e_in_internal_d_slot_uses_its_own_preferred_limit():
+    hass, payload = fx.scenario(primary_phase='idle', secondary_phase='idle', pv=6000)
+    for field, old_id in ENTITIES['E'].items():
+        if old_id in hass.states.states:
+            hass.states.states[ENTITIES['D'][field]] = hass.states.states.pop(old_id)
+    payload.update(battery_keys=['A', 'D'], slot_models={'A': 'A', 'D': 'E'},
+                   slot_names={'A': 'Venus A', 'D': 'Venus E'})
+    controls = copy.deepcopy(runtime.CONTROL_DEFAULTS)
+    controls.update(mode='Automatik', fruehes_ladeziel_a_stark_soc=50.,
+                    fruehes_ladeziel_d_stark_soc=50.,
+                    bevorzugte_ladeleistung_a_w=1100,
+                    bevorzugte_ladeleistung_d_w=1300)
+    with patch.dict(sys.modules, STUBS):
+        hass.states.states.update(runtime.planner_states(controls))
+    plan = run(hass, payload)['plan']
+    assert plan['fruehe_soc_ziele_prozent'] == {'A': 50., 'D': 50.}
+    assert plan['fahrplan_ladegrenze_roh_venus_a_w'] == 1100
+    assert plan['fahrplan_ladegrenze_roh_venus_d_w'] == 1300
+
+
 def test_calibration_pauses_on_real_import_despite_own_charging_draw():
     hass, payload = fx.scenario(pv=1000, live_load=900, secondary_phase='idle')
     set_value(hass, 'sensor.stromzahler_leistung', 400)

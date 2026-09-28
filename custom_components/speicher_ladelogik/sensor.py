@@ -244,6 +244,7 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
             plan = data.get("plan", {})
             keys = (
                 "version",
+                "berechnet_ts",
                 "betriebsart",
                 "regelung_aktiv",
                 "daten_gueltig",
@@ -262,10 +263,15 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "pv_prognose_abweichung_bisher_kwh",
                 "pv_real_bis_jetzt_kwh",
                 "prognose_bis_jetzt_kwh",
+                "prognose_heute_roh_kwh",
                 "prognose_heute_erwartet_kwh",
                 "prognose_rest_erwartet_kwh",
+                "prognose_tagesfaktor",
+                "prognose_korrektur_vertrauen",
                 "prognose_morgen_kwh",
                 "tagesklasse",
+                "tagesklasse_kandidat",
+                "tagesklasse_kandidat_seit_ts",
                 "ladefenster_start_ts",
                 "ladefenster_ende_ts",
                 "sonnenhoechststand_ts",
