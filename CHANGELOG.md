@@ -1,5 +1,20 @@
 # Änderungsverlauf
 
+## 1.2.4
+
+- Eine schwache Messung am frühen Morgen reduziert die restliche Tagesprognose
+  nicht mehr schlagartig. Die Korrektur gewinnt erst mit mehr Messdaten Gewicht
+  und klingt für spätere Prognoseintervalle ab. Rohprognose, Korrekturfaktor und
+  dessen Messgrundlage sind in den Planungsattributen sichtbar.
+- Wechsel der Tagesklasse benötigen einen Abstand zum Grenzwert und 15 Minuten
+  Bestätigung. Vorzeitige SoC-Ziele gelten bis zum Beginn des Mittagsfensters.
+- Ein vorzeitiges SoC-Ziel verwendet zuerst die bevorzugte Ladeleistung des
+  jeweiligen Speichers. Nur wenn diese für das Ziel vor dem Mittagsfenster nicht
+  reicht, steigt die Grenze bis zur eingestellten Maximalleistung.
+- Nach einem Sicherheitsstopp wegen ungültiger Daten darf ein wieder gültiger
+  Plan noch im laufenden 15-Minuten-Slot neu entscheiden. Der Sicherheitsstopp
+  selbst setzt die Ladegrenze weiterhin sofort auf null.
+
 ## 1.2.3
 
 - Niedrigere positive Ladegrenzen werden spätestens im folgenden 15-Minuten-Slot

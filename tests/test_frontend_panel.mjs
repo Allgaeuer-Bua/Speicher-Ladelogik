@@ -458,7 +458,7 @@ test("control page starts with calibration, then manual mode, then the remaining
 });
 
 test("frontend element name matches the integration release version", () => {
-  assert.equal(panelElementName, "speicher-ladelogik-panel-1-2-3");
+  assert.equal(panelElementName, "speicher-ladelogik-panel-1-2-4");
   assert.equal(registry.get(panelElementName), Panel);
   assert.equal(registry.has("speicher-ladelogik-panel-1-0-1"), false);
 });

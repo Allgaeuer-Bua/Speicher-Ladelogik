@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from math import ceil
 from typing import Any
 
 PEER_DISCHARGE_RELEASE_PERCENT = 14.0
@@ -11,6 +12,10 @@ PEER_GRID_DELAY_SECONDS = 15.0
 DECISION_SLOT_SECONDS = 15 * 60
 EXPORT_CONFIRM_SECONDS = 180.0
 EXPORT_START_W = 300.0
+FORECAST_EVIDENCE_START_WH = 750.0
+FORECAST_EVIDENCE_FULL_WH = 5000.0
+DAY_CLASS_CONFIRM_SECONDS = 15 * 60
+DAY_CLASS_MARGIN_KWH = 2.0
 
 DELIBERATE_ZERO_STATUSES = {
     "Datenfehler",
@@ -19,6 +24,79 @@ DELIBERATE_ZERO_STATUSES = {
     "Ziel erreicht",
     "Zurückhalten",
 }
+
+
+def forecast_day_factor(actual_kwh: float | None, past_wh: float) -> tuple[float, float]:
+    """Use a measured PV shortfall gradually after enough predicted morning energy."""
+    if actual_kwh is None or past_wh <= FORECAST_EVIDENCE_START_WH:
+        return 1.0, 0.0
+    confidence = min(1.0, (past_wh - FORECAST_EVIDENCE_START_WH)
+                     / (FORECAST_EVIDENCE_FULL_WH - FORECAST_EVIDENCE_START_WH))
+    observed = max(0.2, min(1.0, actual_kwh * 1000 / past_wh))
+    return 1.0 - (1.0 - observed) * confidence, confidence
+
+
+def forecast_factor(short_factor: float, day_factor: float, horizon_seconds: float) -> float:
+    """Trust current output near term, but restore the independent later forecast.
+
+    A cloudy morning is evidence for the next hours, not for the whole day.
+    """
+    hours = max(0.0, horizon_seconds) / 3600
+    if hours < 2:
+        return short_factor + (day_factor - short_factor) * hours / 2
+    if hours < 4:
+        return day_factor + (1.0 - day_factor) * (hours - 2) / 2
+    return 1.0
+
+
+def stable_day_class(
+    expected_kwh: float, boundaries: tuple[float, float, float],
+    now_ts: float, day_start_ts: float, prior: dict[str, Any],
+) -> tuple[str, str | None, float | None]:
+    """Confirm a class change across a small deadband for a full planning slot."""
+    weak, middle, strong = boundaries
+    classes = ("schwach", "wechselhaft", "mittel", "stark")
+    desired = ("schwach" if expected_kwh <= weak else
+               "wechselhaft" if expected_kwh < middle else
+               "mittel" if expected_kwh < strong else "stark")
+    previous = prior.get("tagesklasse")
+    previous_ts = prior.get("berechnet_ts")
+    if previous not in classes or not isinstance(previous_ts, (int, float)) \
+            or not day_start_ts <= previous_ts <= now_ts or now_ts - previous_ts > 3600:
+        return desired, None, None
+    current_index, desired_index = classes.index(previous), classes.index(desired)
+    if current_index == desired_index:
+        return previous, None, None
+    boundary = (weak, middle, strong)
+    if desired_index > current_index:
+        crossed = expected_kwh >= boundary[current_index] + DAY_CLASS_MARGIN_KWH
+    else:
+        crossed = expected_kwh <= boundary[current_index - 1] - DAY_CLASS_MARGIN_KWH
+    if not crossed:
+        return previous, None, None
+    since = prior.get("tagesklasse_kandidat_seit_ts")
+    if prior.get("tagesklasse_kandidat") != desired or not isinstance(since, (int, float)) \
+            or since > now_ts or since < day_start_ts:
+        return previous, desired, now_ts
+    if now_ts - since < DAY_CLASS_CONFIRM_SECONDS:
+        return previous, desired, since
+    return desired, None, None
+
+
+def early_goal_limits(
+    keys: list[str], batteries: dict[str, dict[str, Any]], preferred: dict[str, float],
+    maximum: dict[str, float], goals: dict[str, float], efficiency: float, seconds_left: float,
+) -> dict[str, int]:
+    """Select efficient caps unless an early target requires more before noon."""
+    limits = {key: 0 for key in maximum}
+    for key in keys:
+        battery = batteries[key]
+        target_soc = min(battery["goal"], goals[key])
+        missing_kwh = battery["nominal"] * max(0, target_soc - battery["lowest_soc"]) / 100
+        required_w = missing_kwh * 3600000 / max(900, seconds_left) / max(0.01, efficiency)
+        selected = max(preferred[key], required_w)
+        limits[key] = int(min(maximum[key], ceil(selected / 50) * 50))
+    return limits
 
 
 def early_soc_candidates(

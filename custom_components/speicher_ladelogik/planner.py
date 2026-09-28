@@ -13,12 +13,16 @@ from .stability import (
     calibration_available_surplus,
     calibration_required_seconds,
     confirmed_export,
+    early_goal_limits,
     early_soc_candidates,
+    forecast_day_factor,
+    forecast_factor,
     morning_rescue_candidates,
     peer_discharge_release,
     peer_grid_support,
     quarter_hour_window,
     stable_charge_limit,
+    stable_day_class,
     target_latch,
 )
 from .storage import (
@@ -36,7 +40,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
 
     output = {}
 
-    VERSION = "1.2.3"
+    VERSION = "1.2.4"
     NOW = float(data.get("now", time.time()))
     DAY0 = float(data.get("day0", 0))
     DAY1 = float(data.get("day1", 0))
@@ -1108,29 +1112,33 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         past_wh = past_wh + row["wh"] * fraction
         if row["t"] <= NOW < row["t"] + 900:
             now_forecast = row["wh"] * 4
-    day_factor = max(0.2, min(1, actual_today * 1000 / past_wh)) if daily_ok and past_wh >= 750 else 1
+    day_factor, forecast_confidence = forecast_day_factor(
+        actual_today if daily_ok else None, past_wh
+    )
     short_factor = max(0.2, min(1, pv_estimate / now_forecast)) if pv_estimate is not None and now_forecast >= 1000 else 1
 
     rows = []
+    corrected_rest_wh = 0
     for row in today["rows"]:
-        horizon = max(0, min(1, (row["t"] - NOW) / 7200))
-        factor = (short_factor * (1 - horizon) + day_factor * horizon) * safety
+        correction = forecast_factor(short_factor, day_factor, row["t"] - NOW)
+        factor = correction * safety
         rows.append({"t": row["t"], "wh": row["wh"] * factor})
+        remaining_fraction = max(0, min(1, (row["t"] + 900 - NOW) / 900))
+        corrected_rest_wh += row["wh"] * correction * remaining_fraction
     raw_total = sum([row["wh"] for row in today["rows"]]) / 1000
     raw_rest = max(0, raw_total - past_wh / 1000)
-    expected_total = (actual_today if daily_ok else past_wh / 1000) + raw_rest * day_factor
-    expected_rest = raw_rest * day_factor
-    if expected_total <= weak:
-        category = "schwach"
+    expected_rest = corrected_rest_wh / 1000
+    expected_total = (actual_today if daily_ok else past_wh / 1000) + expected_rest
+    category, category_candidate, category_candidate_since = stable_day_class(
+        expected_total, (weak, middle, strong), NOW, DAY0, prior_attributes
+    )
+    if category == "schwach":
         preferred = DAY0
-    elif expected_total < middle:
-        category = "wechselhaft"
-        preferred = NINE - 7200 * (middle - expected_total) / (middle - weak)
-    elif expected_total < strong:
-        category = "mittel"
-        preferred = NINE + (ELEVEN - NINE) * (expected_total - middle) / (strong - middle)
+    elif category == "wechselhaft":
+        preferred = NINE - 7200 * max(0, min(1, (middle - expected_total) / (middle - weak)))
+    elif category == "mittel":
+        preferred = NINE + (ELEVEN - NINE) * max(0, min(1, (expected_total - middle) / (strong - middle)))
     else:
-        category = "stark"
         preferred = ELEVEN
     early_soc_goals = {
         key: setting(
@@ -1513,7 +1521,10 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     target_energy = sum([bats[key]["target"] for key in BATTERY_KEYS])
     normal_stored = sum([bats[key]["stored"] for key in BATTERY_KEYS if caps[key] > 0])
     normal_target = sum([bats[key]["target"] for key in BATTERY_KEYS if caps[key] > 0])
-    early_soc_keys = early_soc_candidates(caps, bats, early_soc_goals)
+    early_soc_keys = (
+        early_soc_candidates(caps, bats, early_soc_goals)
+        if NOW < MIDDAY_START else []
+    )
     need = sum(needs.values())
     max_total = sum(caps.values())
 
@@ -1607,7 +1618,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     # Prefer actual morning energy over a predicted afternoon on uncertain
     # days. Leave capacity above the early target for the noon peak. Without
     # a configured target, there is no separate morning rescue for this storage.
-    rescue_keys = morning_rescue_candidates(caps, bats, early_soc_goals)
+    rescue_keys = morning_rescue_candidates(caps, bats, early_soc_goals) if NOW < MIDDAY_START else []
     rescue_morning = (
         export_confirmed and NOW < MIDDAY_END and bool(rescue_keys)
         and (category != "stark" or short_factor < 0.7)
@@ -1623,16 +1634,17 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             # Charge batteries below their own early goal before deferring
             # energy to the noon window. Other batteries resume the ordinary
             # schedule as soon as every early goal is reached.
-            caps = {
-                key: hard_caps[key] if key in early_soc_keys else 0
-                for key in BATTERY_KEYS
-            }
+            caps = early_goal_limits(
+                early_soc_keys, bats,
+                {key: BATTERIES[key]["preferred"] for key in BATTERY_KEYS},
+                hard_caps, early_soc_goals, eta, MIDDAY_START - NOW,
+            )
             max_total = sum(caps.values())
             start = min(start, NOW)
             total = max_total
             status = "Frühes SoC-Ziel"
             reason = "PV-Überschuss zuerst für Venus " + "/".join(early_soc_keys)
-            efficiency_mode = "Frühes SoC-Ziel je Speicher"
+            efficiency_mode = "Vorzeitiges SoC-Ziel mit bedarfsgerechter Leistung"
         elif not today["ok"]:
             caps = hard_caps
             max_total = sum(caps.values())
@@ -1756,6 +1768,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         prior_slot_start_ts is not None
         and int(prior_slot_start_ts) == slot_start_ts
         and prior_automatic
+        and flag(prior_attributes.get("daten_gueltig", True))
         and peak_setting_unchanged
         and early_goals_unchanged
         and not rescue_morning
@@ -2065,6 +2078,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "prognose_intervalle_ok": today["ok"], "prognose_morgen_intervalle_ok": tomorrow["ok"],
         "prognose_heute_roh_kwh": round(raw_total, 3), "prognose_heute_erwartet_kwh": round(expected_total, 3),
         "prognose_rest_erwartet_kwh": round(expected_rest, 3),
+        "prognose_korrektur_vertrauen": round(forecast_confidence, 3),
         "prognose_bis_jetzt_kwh": round(past_wh / 1000, 3), "pv_real_bis_jetzt_kwh": actual_today if daily_ok else None,
         "pv_prognose_abweichung_bisher_kwh": (
             round(actual_today - past_wh / 1000, 3) if daily_ok else None
@@ -2100,6 +2114,8 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "ueberschuss_direkt_w": round(direct_surplus) if direct_surplus is not None else None,
         "ueberschuss_bilanz_w": round(balance_surplus) if balance_surplus is not None else None,
         "tagesklasse": category,
+        "tagesklasse_kandidat": category_candidate,
+        "tagesklasse_kandidat_seit_ts": category_candidate_since,
         "solarfenster_start_ts": solar_start, "solarfenster_ende_ts": solar_end,
         "sonnenhoechststand_ts": SOLAR_NOON,
         "mittagsfenster_start_ts": MIDDAY_START,

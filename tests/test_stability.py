@@ -15,6 +15,10 @@ STABILITY = module_from_spec(SPEC)
 SPEC.loader.exec_module(STABILITY)
 
 stable_charge_limit = STABILITY.stable_charge_limit
+forecast_day_factor = STABILITY.forecast_day_factor
+forecast_factor = STABILITY.forecast_factor
+stable_day_class = STABILITY.stable_day_class
+early_goal_limits = STABILITY.early_goal_limits
 calibration_available_surplus = STABILITY.calibration_available_surplus
 calibration_required_seconds = STABILITY.calibration_required_seconds
 target_latch = STABILITY.target_latch
@@ -38,6 +42,41 @@ def test_morning_export_needs_three_minutes_of_real_surplus() -> None:
                             live_surplus_w=750, prior_since_ts=since) == (False, None)
     assert confirmed_export(now_ts=1210, grid_power_w=-900,
                             live_surplus_w=50, prior_since_ts=since) == (False, None)
+
+
+def test_forecast_correction_needs_evidence_and_does_not_discount_the_afternoon() -> None:
+    assert forecast_day_factor(.15, 750) == (1, 0)
+    emerging, confidence = forecast_day_factor(.16, 800)
+    assert .98 < emerging < 1 and 0 < confidence < .02
+    factor, confidence = forecast_day_factor(1, 5000)
+    assert abs(factor - .2) < 1e-9 and confidence == 1
+    assert abs(forecast_factor(.2, factor, 0) - .2) < 1e-9
+    assert forecast_factor(.2, factor, 4 * 3600) == 1
+    assert forecast_factor(.2, factor, 8 * 3600) == 1
+
+
+def test_day_class_crossing_requires_margin_and_fifteen_minutes() -> None:
+    prior = {"tagesklasse": "mittel", "berechnet_ts": 1000}
+    assert stable_day_class(49, (25, 50, 85), 1010, 0, prior) == ("mittel", None, None)
+    held = stable_day_class(45, (25, 50, 85), 1010, 0, prior)
+    assert held == ("mittel", "wechselhaft", 1010)
+    prior.update(tagesklasse_kandidat=held[1], tagesklasse_kandidat_seit_ts=held[2])
+    assert stable_day_class(46, (25, 50, 85), 1500, 0, prior)[0] == "mittel"
+    prior["berechnet_ts"] = 1900
+    assert stable_day_class(46, (25, 50, 85), 1910, 0, prior)[0] == "wechselhaft"
+
+
+def test_early_target_uses_preferred_limit_when_it_is_sufficient() -> None:
+    batteries = {"A": {"nominal": 4.16, "lowest_soc": 30, "goal": 100},
+                 "D": {"nominal": 5.12, "lowest_soc": 30, "goal": 100}}
+    result = early_goal_limits(["A", "D"], batteries,
+        {"A": 1100, "D": 1300}, {"A": 1500, "D": 2500},
+        {"A": 50, "D": 50}, .9, 7200)
+    assert result == {"A": 1100, "D": 1300}
+    urgent = early_goal_limits(["A"], batteries,
+        {"A": 1100, "D": 1300}, {"A": 1500, "D": 2500},
+        {"A": 100, "D": 50}, .9, 3600)
+    assert urgent == {"A": 1500, "D": 0}
 
 
 def test_early_soc_goals_only_select_eligible_storages_below_their_goal() -> None:
