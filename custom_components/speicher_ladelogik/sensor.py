@@ -289,6 +289,8 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "mittagsspitzen_aktiv",
                 "mittagsspitzen_planbar",
                 "einspeiseziel_w",
+                "mittagsspitze_live_freigabe_w",
+                "mittagsspitze_live_seit_ts",
                 "spitzenfenster_start_ts",
                 "spitzenfenster_ende_ts",
                 "spitzenplan_voll_ts",
@@ -339,7 +341,9 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "ac_leistung_venus_{name}_status",
                 "ac_leistung_venus_{name}_alter_min",
                 "fahrplan_slot_aktiv_venus_{name}",
+                "fahrplan_slot_verriegelt_venus_{name}",
                 "fahrplan_slot_grund_venus_{name}",
+                "fahrplan_slot_startgrund_venus_{name}",
             )
             for model in self.coordinator.enabled_models:
                 name = model.lower()

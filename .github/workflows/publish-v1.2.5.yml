@@ -1,11 +1,11 @@
-name: Publish v1.2.4
+name: Publish v1.2.5
 
 on:
   push:
     branches:
       - main
     paths:
-      - .github/workflows/publish-v1.2.4.yml
+      - .github/workflows/publish-v1.2.5.yml
       - custom_components/speicher_ladelogik/manifest.json
 
 permissions:
@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Verify release version
-        run: python -c 'import json; assert json.load(open("custom_components/speicher_ladelogik/manifest.json"))["version"] == "1.2.4"'
+        run: python -c 'import json; assert json.load(open("custom_components/speicher_ladelogik/manifest.json"))["version"] == "1.2.5"'
       - name: Check Python source and tests
         run: |
           python -m compileall -q custom_components tests
@@ -46,9 +46,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view v1.2.4 --repo "${{ github.repository }}" >/dev/null 2>&1 || \
-            gh release create v1.2.4 \
+          gh release view v1.2.5 --repo "${{ github.repository }}" >/dev/null 2>&1 || \
+            gh release create v1.2.5 \
               --repo "${{ github.repository }}" \
               --target "${{ github.sha }}" \
-              --title "v1.2.4" \
-              --notes-file <(sed -n '/^## 1.2.4$/,/^## 1.2.2$/p' CHANGELOG.md | sed '$d')
+              --title "v1.2.5" \
+              --notes-file <(sed -n '/^## 1.2.5$/,/^## 1.2.4$/p' CHANGELOG.md | sed '$d')

@@ -911,7 +911,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return `
       <section class="card plan-card span-5 entity-card" data-entity="${esc(this._eid("planung"))}">
         ${this._cardTitle("mdi:timeline-clock-outline", "Tagesplanung", this._badge(stateLabel, "accent"))}
-        <div class="decision"><strong>${esc(this._attr("planung", "normaler_fahrplan_status", state?.state || "—"))}</strong><p>${esc(reason)}</p></div>
+        <div class="decision"><strong>${esc(stateLabel)}</strong><p>${esc(reason)}</p></div>
         <div class="metric-pairs">
           ${this._metric("Restprognose heute", this._energy(this._attr("planung", "prognose_rest_erwartet_kwh")), "mdi:weather-sunny")}
           ${this._metric("Prognose morgen", this._energy(this._attr("planung", "prognose_morgen_kwh")), "mdi:weather-sunset-up")}
@@ -937,6 +937,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _storageSlot(letter, suffix) {
     const active = Boolean(this._attr("planung", `fahrplan_slot_aktiv_venus_${suffix}`, false));
+    const goalReached = Boolean(this._attr("planung", `ziel_venus_${suffix}_erreicht`, false));
     const start = this._time(this._attr("planung", "fahrplan_slot_start_ts"));
     const end = this._time(this._attr("planung", "fahrplan_slot_ende_ts"));
     const reason = this._attr("planung", `fahrplan_slot_grund_venus_${suffix}`, "—");
@@ -944,7 +945,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const currentGoal = this._attr("planung", "fruehe_soc_ziele_prozent", {})?.[letter] || 0;
     const detail = active && startReason && String(reason).includes("beibehalten")
       ? `${start} begonnen: ${startReason} · bis ${end} gehalten` : reason;
-    return `<div><strong>${esc(this._storageLabel(letter))}</strong><span>${active ? `${start}–${end} geplant` : "aktuell pausiert"}</span><small>${esc(detail)} · Vorzeitiges Ziel ${esc(currentGoal)} %</small></div>`;
+    return `<div><strong>${esc(this._storageLabel(letter))}</strong><span>${goalReached ? "Ziel erreicht" : active ? `${start}–${end} geplant` : "aktuell pausiert"}</span><small>${esc(detail)} · Vorzeitiges Ziel ${esc(currentGoal)} %</small></div>`;
   }
 
   _batteryCard(letter, full = false) {
@@ -1099,8 +1100,9 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _comparison(letter, suffix) {
     const active = Boolean(this._attr("planung", `fahrplan_slot_aktiv_venus_${suffix}`, false));
+    const goalReached = Boolean(this._attr("planung", `ziel_venus_${suffix}_erreicht`, false));
     const reason = this._attr("planung", `fahrplan_slot_grund_venus_${suffix}`, "—");
-    return `<div class="comparison"><div><strong>${esc(this._storageLabel(letter))}</strong>${this._badge(active ? "Ladeslot" : "Pausenslot", active ? "good" : "neutral")}</div><p>${esc(reason)}</p></div>`;
+    return `<div class="comparison"><div><strong>${esc(this._storageLabel(letter))}</strong>${this._badge(goalReached ? "Ziel erreicht" : active ? "Ladeslot" : "Pausenslot", active || goalReached ? "good" : "neutral")}</div><p>${esc(reason)}</p></div>`;
   }
 
   _modeControl() {
@@ -1257,7 +1259,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const decisions = this._models().map((slot) => {
       const decision = this._attr("planung", `leistungsentscheidung_venus_${slot.toLowerCase()}`);
       if (!decision) return null;
-      return `${this._storageLabel(slot)} · ${this._dateTime(decision.zeit_ts)}: bevorzugt ${this._power(decision.bevorzugt_w)}, geplant ${this._power(decision.roh_w)}, gehalten ${this._power(decision.stabil_w)} · Restbedarf ${this._energy(decision.restbedarf_kwh)} · Fenster ${this._time(decision.fenster_start_ts)}–${this._time(decision.simulation_ende_ts)} · Fehlmenge bei bevorzugter Leistung ${this._energy(decision.fehlmenge_bevorzugt_kwh)} · ${decision.grund}`;
+      return `${this._storageLabel(slot)} · ${this._dateTime(decision.zeit_ts)}: bevorzugt ${this._power(decision.bevorzugt_w)}, geplant ${this._power(decision.roh_w)}, gehalten ${this._power(decision.stabil_w)} · Restbedarf ${this._energy(decision.restbedarf_kwh)} · Fenster ${this._time(decision.fenster_start_ts)}–${this._time(decision.simulation_ende_ts)} · Fehlmenge bei bevorzugter Leistung ${this._energy(decision.fehlmenge_bevorzugt_kwh)} · ${decision.grund}${decision.sollwert_grund ? ` · ${decision.fahrplan_status}: ${decision.fahrplan_grund} · ${decision.sollwert_grund}` : ""}`;
     }).filter(Boolean);
     return `
       <main class="grid diagnostics-view">
@@ -1473,7 +1475,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 }
 
-const PANEL_ELEMENT = "speicher-ladelogik-panel-1-2-4";
+const PANEL_ELEMENT = "speicher-ladelogik-panel-1-2-5";
 
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);

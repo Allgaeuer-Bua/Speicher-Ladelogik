@@ -1,5 +1,34 @@
 # Änderungsverlauf
 
+## 1.2.5
+
+- Im Mittagsfenster darf bestätigte reale Einspeisung oberhalb des geplanten
+  Einspeiseziels einen prognostizierten Pausenslot vorzeitig beenden. Dafür muss
+  mindestens drei Minuten ausreichender Spielraum bestehen (400 W oder die
+  kleinere verfügbare Ladegrenze). Messlücken über 90 Sekunden setzen diese
+  Bestätigung zurück. So bleibt ein fast voller Speicher bei tatsächlich hoher
+  Mittagsspitze nicht allein wegen eines späteren Prognoseintervalls stehen.
+- Bereits laufende 15-Minuten-Slots behalten ihre Leistungsgrenze. Die neue
+  Live-Freigabe entsperrt ausschließlich pausierte, gültige und freigegebene
+  Speicher; Gerätegrenzen und Sicherheitsstopps gelten weiterhin.
+- Speicher mit erreichtem SoC-Ziel zählen trotz stehen gebliebenem Registerwert
+  nicht als aktive Ladeslots oder als geplante Gesamtleistung. Übersicht und
+  Speichervergleich zeigen „Ziel erreicht“. Die Tagesplanung zeigt den aktuellen
+  Entscheidungsstatus auch bei gehaltenen Grenzwerten.
+- Vorzeitige Ladeziele berücksichtigen die tatsächlichen Defizite der einzelnen
+  Packs und den Gesamt-SoC. Ein einzelner niedriger Pack wird nicht mehr als
+  Ladezustand aller Packs gerechnet.
+- Die normale Leistungssuche erhöht bei nicht erreichbarem Ziel die Grenzen
+  nicht, wenn Maximalleistung laut Simulation keinen zusätzlichen Ertrag bringt,
+  beispielsweise wegen einer begrenzten Lade-Endphase. Die Diagnose benennt
+  dieses Ergebnis, statt eine ausreichende bevorzugte Leistung vorzutäuschen.
+- Gespeicherte Leistungsentscheidungen enthalten den Planungsstatus, den
+  konkreten Halte-/Stoppgrund und Datenfehler. Slot-Startgründe werden vollständig
+  an das Dashboard übergeben.
+- Regressionen prüfen den 99-%-Fall, den internen D-Speicherplatz für Venus E,
+  die Bestätigung realer Überschüsse, aktive Slot-Sperren, unterschiedlich volle
+  Packs, Leistungsgrenzen in der Endphase und die Anzeige voller Speicher.
+
 ## 1.2.4
 
 - Eine schwache Messung am frühen Morgen reduziert die restliche Tagesprognose
