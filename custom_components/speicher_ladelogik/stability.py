@@ -92,7 +92,10 @@ def early_goal_limits(
     for key in keys:
         battery = batteries[key]
         target_soc = min(battery["goal"], goals[key])
-        missing_kwh = battery["nominal"] * max(0, target_soc - battery["lowest_soc"]) / 100
+        packs = battery.get("packs") or [battery["lowest_soc"]]
+        pack_deficit = sum(max(0, target_soc - soc) for soc in packs) / len(packs)
+        aggregate_deficit = max(0, target_soc - battery.get("soc", battery["lowest_soc"]))
+        missing_kwh = battery["nominal"] * max(pack_deficit, aggregate_deficit) / 100
         required_w = missing_kwh * 3600000 / max(900, seconds_left) / max(0.01, efficiency)
         selected = max(preferred[key], required_w)
         limits[key] = int(min(maximum[key], ceil(selected / 50) * 50))
@@ -153,6 +156,22 @@ def confirmed_export(
     if grid_power_w is None or grid_power_w > -EXPORT_START_W or live_surplus_w < EXPORT_START_W:
         return False, None
     since = prior_since_ts if prior_since_ts is not None and 0 <= now_ts - prior_since_ts < 900 else now_ts
+    return now_ts - since >= EXPORT_CONFIRM_SECONDS, since
+
+
+def confirmed_peak_export(
+    *, now_ts: float, headroom_w: float, minimum_w: float,
+    prior_since_ts: float | None, prior_sample_ts: float | None,
+) -> tuple[bool, float | None]:
+    """Confirm export above the peak target for three minutes without long gaps."""
+    if minimum_w <= 0 or headroom_w < minimum_w:
+        return False, None
+    continuous = (
+        prior_since_ts is not None and prior_sample_ts is not None
+        and prior_since_ts <= prior_sample_ts <= now_ts
+        and now_ts - prior_sample_ts <= 90
+    )
+    since = prior_since_ts if continuous else now_ts
     return now_ts - since >= EXPORT_CONFIRM_SECONDS, since
 
 

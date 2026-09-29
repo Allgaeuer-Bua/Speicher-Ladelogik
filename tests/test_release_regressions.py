@@ -109,6 +109,90 @@ def test_venus_e_in_internal_d_slot_uses_its_own_preferred_limit():
     assert plan['fahrplan_ladegrenze_roh_venus_d_w'] == 1300
 
 
+def test_confirmed_live_peak_can_fill_last_percent_during_forecast_pause():
+    """A sunny live reading must not strand A at 99 % until a later forecast slot."""
+    hass, payload = fx.scenario(primary_phase='idle', secondary_phase='idle',
+                                pv=14390, live_load=278)
+    payload.update(midday_start=fx.NOW - 3600, midday_end=fx.NOW + 9000,
+                   solar_noon=fx.NOW + 3600, nine=fx.NOW - 7200,
+                   eleven=fx.NOW - 3600)
+    set_value(hass, 'sensor.stromzahler_leistung', -14112)
+    set_value(hass, 'sensor.marstek_venus_a_soc_batterie', 99)
+    for pack in (1, 2):
+        set_value(hass, f'sensor.marstek_venus_a_soc_batteriepack_{pack}', 99)
+    set_value(hass, 'sensor.marstek_venus_e_soc', 100)
+    set_value(hass, 'number.marstek_venus_e_ladeleistung', 1300)
+    for direction in ('sw', 'so', 'no'):
+        entity = f'sensor.{direction}_energy_production_today'
+        buckets = {
+            datetime.fromtimestamp(fx.DAY + index * 900, timezone.utc).isoformat():
+            (130 if index <= 28 else 1200 if index < 48 else 100)
+            for index in range(96)
+        }
+        hass.states.states[entity] = fx.state(30, fx.NOW, unit='kWh',
+                                              wh_period_15m=buckets)
+    controls = copy.deepcopy(runtime.CONTROL_DEFAULTS)
+    controls.update(mode='Automatik', bevorzugte_ladeleistung_a_w=1100,
+                    fruehes_ladeziel_a_stark_soc=0.)
+    with patch.dict(sys.modules, STUBS):
+        hass.states.states.update(runtime.planner_states(controls))
+    payload['prior_plan'] = {
+        'version': '1.2.4', 'berechnet_ts': fx.NOW - 20,
+        'betriebsart': 'Automatik', 'regelung_aktiv': True,
+        'daten_gueltig': True, 'mittagsspitzen_aktiv': True,
+        'netzeinspeisung_seit_ts': fx.NOW - 240,
+        'mittagsspitze_live_seit_ts': fx.NOW - 240,
+        'fahrplan_slot_start_ts': int(fx.NOW // 900) * 900,
+        'fahrplan_slot_aktiv_venus_a': False,
+        'fahrplan_ladegrenze_stabil_venus_a_w': 0,
+        'fahrplan_slot_aktiv_venus_e': True,
+        'fahrplan_ladegrenze_stabil_venus_e_w': 1300,
+    }
+    set_value(hass, 'sensor.stromzahler_leistung', -300)
+    paused = run(hass, payload)['plan']
+    assert paused['mittagsspitzen_planbar'] is True
+    assert paused['spitzenfenster_start_ts'] > fx.NOW
+    assert paused['fahrplan_ladegrenze_stabil_venus_a_w'] == 0
+    assert paused['soll_ladegrenze_venus_e_w'] == 1300
+    assert paused['fahrplan_slot_aktiv_venus_e'] is False
+    assert paused['soll_ladeleistung_gesamt_w'] == 0
+    set_value(hass, 'sensor.stromzahler_leistung', -14112)
+    payload['prior_plan']['mittagsspitze_live_seit_ts'] = None
+    unconfirmed = run(hass, payload)['plan']
+    assert unconfirmed['fahrplan_ladegrenze_stabil_venus_a_w'] == 0
+    payload['prior_plan']['mittagsspitze_live_seit_ts'] = fx.NOW - 240
+    plan = run(hass, payload)['plan']
+    assert plan['ziel_venus_a_erreicht'] is False
+    assert plan['ziel_venus_e_erreicht'] is True
+    assert plan['mittagsspitze_live_freigabe_w'] >= 400
+    assert plan['fahrplan_slot_verriegelt'] is False
+    assert plan['fahrplan_ladegrenze_stabil_venus_a_w'] == 1100
+    assert plan['soll_ladeleistung_gesamt_w'] == 1100
+    assert plan['verteilungsmodus'] == 'nur A'
+    assert plan['leistungsentscheidung_venus_a']['fahrplan_status'] == 'Gemessene Mittagsspitze nutzen'
+
+    # A running slot keeps its original cap even while a live peak is confirmed.
+    payload['prior_plan'].update(fahrplan_slot_aktiv_venus_a=True,
+                                fahrplan_ladegrenze_stabil_venus_a_w=1500)
+    active = run(hass, payload)['plan']
+    assert active['fahrplan_slot_verriegelt_venus_a'] is True
+    assert active['fahrplan_ladegrenze_stabil_venus_a_w'] == 1500
+
+    # Physical Venus E also works in the legacy internal D slot.
+    for field, old_id in ENTITIES['E'].items():
+        if old_id in hass.states.states:
+            hass.states.states[ENTITIES['D'][field]] = hass.states.states.pop(old_id)
+    payload.update(battery_keys=['A', 'D'], slot_models={'A': 'A', 'D': 'E'},
+                   slot_names={'A': 'Venus A', 'D': 'Venus E'})
+    payload['prior_plan'].update(fahrplan_slot_aktiv_venus_a=False,
+        fahrplan_ladegrenze_stabil_venus_a_w=0, fahrplan_ladegrenze_stabil_venus_d_w=1300)
+    mapped = run(hass, payload)['plan']
+    assert mapped['soll_ladegrenze_venus_a_w'] == 1100
+    assert mapped['soll_ladegrenze_venus_d_w'] == 1300
+    assert mapped['fahrplan_slot_aktiv_venus_d'] is False
+    assert mapped['soll_ladeleistung_gesamt_w'] == 1100
+
+
 def test_calibration_pauses_on_real_import_despite_own_charging_draw():
     hass, payload = fx.scenario(pv=1000, live_load=900, secondary_phase='idle')
     set_value(hass, 'sensor.stromzahler_leistung', 400)
@@ -166,6 +250,20 @@ def test_sunny_caps_only_raise_the_storage_that_needs_more_power():
         batteries, {'A': 1100, 'E': 1300}, {'A': 1500, 'E': 2500}, 1000, .9, 11.25 * 3600)
     assert caps == {'A': 1150, 'E': 1300}
     assert result['finish'] is not None
+
+
+def test_maximum_caps_are_not_selected_when_the_end_phase_cannot_use_them():
+    selected = [n for n in calculate.body if isinstance(n, ast.FunctionDef)
+                and n.name in ('split_power', 'simulate', 'minimum_working_caps')]
+    scope = {'BATTERY_KEYS': ['A', 'E'], 'BATTERIES': {'A': {'tail': 500}, 'E': {'tail': 1100}}}
+    exec(compile(ast.Module(body=selected, type_ignores=[]), 'planner.py', 'exec'), scope)
+    batteries = {'A': {'need': .0416, 'nominal': 4.16, 'goal': 100, 'target': 3.6608},
+                 'E': {'need': 0, 'nominal': 5.12, 'goal': 100, 'target': 4.5056}}
+    caps, result = scope['minimum_working_caps'](
+        [{'t': 0, 'wh': 4000}], 0, 60, batteries, {'A': 1100, 'E': 0},
+        {'A': 1500, 'E': 0}, 500, .9, 0)
+    assert result['finish'] is None  # One minute is too short, even at 1500 W.
+    assert caps == {'A': 1100, 'E': 0}
 
 
 def test_disabling_peak_shaving_removes_the_noon_window_constraint():

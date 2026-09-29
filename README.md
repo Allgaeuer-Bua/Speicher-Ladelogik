@@ -11,7 +11,7 @@ oder Speichern. Sie verwendet vorhandene Home-Assistant-Entitäten. Dadurch
 können Messwerte aus unterschiedlichen Integrationen und von verschiedenen
 Anbietern verwendet werden, sofern Bedeutung, Einheit und Vorzeichen passen.
 
-> **Version im Quellcode:** 1.2.4
+> **Version im Quellcode:** 1.2.5
 > **Erforderliche Home-Assistant-Version:** 2026.9.1 oder neuer
 
 ## Wofür ist die Integration gedacht?
@@ -117,6 +117,8 @@ bei Venus A/D die vorhandenen Pack-Sensoren.
   werden beim Update in alle vier Tagesklassen übernommen. SoC-Grenzen des
   Geräts bleiben maßgeblich.
 - stabile Leistungsgrenzen ohne unnötige Wiederholung identischer Schreibwerte
+- bestätigte reale Einspeisung oberhalb des geplanten Einspeiseziels kann im
+  Mittagsfenster pausierte Speicher freigeben; bereits laufende Slots bleiben stabil
 - keine künstliche Reduzierung allein aufgrund eines SoC oberhalb von 90 %
 
 ### Speichersteuerung

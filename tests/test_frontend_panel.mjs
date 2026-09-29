@@ -248,6 +248,22 @@ test("held loading slot shows the start reason and calibration shows earliest ch
   assert.match(panel._calibrationCard(), /Kalibrierladung frühestens/);
 });
 
+test("full storages show their completed target instead of an active or paused slot", () => {
+  const { panel } = createPanel();
+  panel._panel.config.entities.planung = "sensor.speicher_ladelogik_planung";
+  panel._hass.states["sensor.speicher_ladelogik_planung"] = {
+    state: "Sollwert wird gehalten", attributes: {
+      normaler_fahrplan_status: "Platz für Mittagsspitze halten",
+      ziel_venus_e_erreicht: true,
+      fahrplan_slot_aktiv_venus_e: false,
+      fahrplan_slot_grund_venus_e: "Geräteziel erreicht; Registerwert bleibt stehen",
+    },
+  };
+  assert.match(panel._storageSlot("E", "e"), /Ziel erreicht/);
+  assert.doesNotMatch(panel._comparison("E", "e"), /Pausenslot|Ladeslot/);
+  assert.match(panel._planningCard(), /<strong>Sollwert wird gehalten<\/strong>/);
+});
+
 test("overview replaces duplicate battery cards with daily history cards", () => {
   const { panel } = createPanel();
   const overview = panel._overview();
@@ -458,7 +474,7 @@ test("control page starts with calibration, then manual mode, then the remaining
 });
 
 test("frontend element name matches the integration release version", () => {
-  assert.equal(panelElementName, "speicher-ladelogik-panel-1-2-4");
+  assert.equal(panelElementName, "speicher-ladelogik-panel-1-2-5");
   assert.equal(registry.get(panelElementName), Panel);
   assert.equal(registry.has("speicher-ladelogik-panel-1-0-1"), false);
 });

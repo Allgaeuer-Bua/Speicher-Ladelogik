@@ -29,6 +29,22 @@ early_soc_candidates = STABILITY.early_soc_candidates
 morning_rescue_candidates = STABILITY.morning_rescue_candidates
 migrate_legacy_day_class_goals = STABILITY.migrate_legacy_day_class_goals
 confirmed_export = STABILITY.confirmed_export
+confirmed_peak_export = STABILITY.confirmed_peak_export
+
+
+def test_live_peak_requires_continuous_headroom_above_its_own_target():
+    args = dict(headroom_w=900, minimum_w=400)
+    assert confirmed_peak_export(now_ts=1000, prior_since_ts=None,
+                                 prior_sample_ts=980, **args) == (False, 1000)
+    assert confirmed_peak_export(now_ts=1180, prior_since_ts=1000,
+                                 prior_sample_ts=1160, **args) == (True, 1000)
+    assert confirmed_peak_export(now_ts=1180, prior_since_ts=1000,
+                                 prior_sample_ts=1000, **args) == (False, 1180)
+    assert confirmed_peak_export(now_ts=1180, prior_since_ts=1200,
+                                 prior_sample_ts=1160, **args) == (False, 1180)
+    assert confirmed_peak_export(now_ts=1180, prior_since_ts=1000,
+                                 prior_sample_ts=1160, headroom_w=399,
+                                 minimum_w=400) == (False, None)
 
 
 def test_morning_export_needs_three_minutes_of_real_surplus() -> None:
@@ -77,6 +93,14 @@ def test_early_target_uses_preferred_limit_when_it_is_sufficient() -> None:
         {"A": 1100, "D": 1300}, {"A": 1500, "D": 2500},
         {"A": 100, "D": 50}, .9, 3600)
     assert urgent == {"A": 1500, "D": 0}
+
+
+def test_early_target_does_not_treat_every_pack_as_the_lowest_pack():
+    batteries = {"A": {"nominal": 4.16, "lowest_soc": 30, "soc": 40,
+                         "packs": [50, 30], "goal": 100}}
+    result = early_goal_limits(["A"], batteries, {"A": 1100}, {"A": 1500},
+                              {"A": 50}, .9, 1800)
+    assert result == {"A": 1100}  # 0.416 kWh, rather than 0.832 kWh missing.
 
 
 def test_early_soc_goals_only_select_eligible_storages_below_their_goal() -> None:

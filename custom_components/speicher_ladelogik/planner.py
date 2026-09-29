@@ -13,6 +13,7 @@ from .stability import (
     calibration_available_surplus,
     calibration_required_seconds,
     confirmed_export,
+    confirmed_peak_export,
     early_goal_limits,
     early_soc_candidates,
     forecast_day_factor,
@@ -40,7 +41,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
 
     output = {}
 
-    VERSION = "1.2.4"
+    VERSION = "1.2.5"
     NOW = float(data.get("now", time.time()))
     DAY0 = float(data.get("day0", 0))
     DAY1 = float(data.get("day1", 0))
@@ -448,6 +449,10 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             charge_after,
         )
         if hard_result["finish"] is None:
+            # More register power cannot fix a PV-limited interval or the
+            # device's simulated end phase. Do not raise caps without benefit.
+            if hard_result["missing"] >= preferred_result["missing"] - 0.000001:
+                return preferred_caps.copy(), preferred_result
             return hard_caps.copy(), hard_result
 
         low = 0.0
@@ -1560,15 +1565,18 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         normal_rows, NOW, simulation_end, simulation_bats, efficient_caps,
         hard_caps, load, eta, start,
     )
-    if need <= 0 or caps == efficient_caps:
+    if need > 0 and efficiency_sim["finish"] is None:
+        efficiency_mode = (
+            "Ladeziel trotz Maximalleistung knapp"
+            if caps != efficient_caps else "Mehr Leistung bringt laut Prognose keinen Vorteil"
+        )
+    elif need <= 0 or caps == efficient_caps:
         efficiency_mode = (
             "Früher beginnen mit bevorzugter Leistung"
             if early else "Bevorzugte Leistung reicht aus"
         )
-    elif efficiency_sim["finish"] is not None:
-        efficiency_mode = "Dynamisch erforderliche Leistung"
     else:
-        efficiency_mode = "Automatische Maximalleistung erforderlich"
+        efficiency_mode = "Dynamisch erforderliche Leistung"
     planned_caps = caps.copy()
     max_total = sum(caps.values())
     safe_rest = 0
@@ -1608,6 +1616,9 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     status = "Keine PV-Ladechance"
     total = 0
     peak = {"ok": False, "target": 0, "start": None, "end": None, "finish": None}
+    peak_live_headroom = 0
+    peak_live_override = False
+    peak_live_since = None
     peak_enabled = raw("input_boolean.speicher_ladelogik_mittagsspitzen") != "off"
     cal_draw = calibration_power * sum(s["p"] == "charge" for s in (session, secondary))
     normal_live = max(0, live_surplus - cal_draw)
@@ -1676,6 +1687,23 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 start = peak["start"] if peak["start"] is not None else preferred
                 status = "Mittagsspitzen reduzieren" if total >= 50 else "Platz für Mittagsspitze halten"
                 reason = "Ladung auf die höchsten prognostizierten Überschüsse konzentriert; Ladeziel und Endphase eingeplant"
+                # The forecast can postpone the next slot even while the meter
+                # confirms that the current export already exceeds its planned
+                # peak target. Use only the measured headroom above that target;
+                # AstraMeter still controls the actual draw at the grid point.
+                if MIDDAY_START <= NOW < MIDDAY_END and grid is not None:
+                    peak_live_headroom = max(0, min(normal_live, -grid) - peak["target"])
+                    peak_live_override, peak_live_since = confirmed_peak_export(
+                        now_ts=NOW, headroom_w=peak_live_headroom,
+                        minimum_w=min(400, max_total),
+                        prior_since_ts=number(prior_attributes.get("mittagsspitze_live_seit_ts")),
+                        prior_sample_ts=number(prior_attributes.get("berechnet_ts")),
+                    )
+                    if peak_live_override:
+                        total = min(max_total, peak_live_headroom)
+                        start = min(start, NOW)
+                        status = "Gemessene Mittagsspitze nutzen"
+                        reason = "Bestätigte Einspeisung über dem geplanten Einspeiseziel; freien Überschuss jetzt speichern"
             elif start <= NOW:
                 quota_wh = need / eta * 1000
                 total = current_opportunity * min(1, quota_wh / max(1, window_wh))
@@ -1691,8 +1719,10 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                         SLOT_NAMES[key] + " " + str(caps[key]) + " W"
                         for key in BATTERY_KEYS if caps[key] > 0
                     )
-                elif efficiency_mode == "Automatische Maximalleistung erforderlich":
+                elif efficiency_mode == "Ladeziel trotz Maximalleistung knapp":
                     reason = "Ladeziel ist selbst mit den automatischen Maximalgrenzen knapp"
+                elif efficiency_mode == "Mehr Leistung bringt laut Prognose keinen Vorteil":
+                    reason = "PV-Angebot oder Lade-Endphase begrenzen die Aufnahme; bevorzugte Ladegrenzen bleiben bestehen"
                 elif early and preferred > NOW:
                     reason = "Spätere Ertragsfenster reichen nicht; Ladebeginn vorgezogen"
                 else:
@@ -1776,6 +1806,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         and (not isinstance(prior_early_keys, list) or prior_early_keys == early_soc_keys)
     )
     within_charge_window = start <= NOW < end
+    slot_locked_by_key = {}
     for key in BATTERY_KEYS:
         name = key.lower()
         previous_limit = number(
@@ -1793,6 +1824,12 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             or not bats[key]["owns"]
             or failure_counts[key] >= 3
         )
+        # Live export may start a paused storage, but must not unlock an
+        # already active slot and reintroduce rapid positive cap changes.
+        slot_locked_by_key[key] = decision_slot_locked and not (
+            peak_live_override and previous_limit <= 0
+            and automatic_limits_raw[key] > 0 and eligible and not safety_stop
+        )
         stable_limit, limit_held, limit_reason = stable_charge_limit(
             raw_limit=automatic_limits_raw[key],
             previous_limit=previous_limit,
@@ -1802,7 +1839,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             within_window=within_charge_window,
             planner_status=automatic_status,
             safety_stop=safety_stop,
-            decision_locked=decision_slot_locked,
+            decision_locked=slot_locked_by_key[key],
             slot_was_active=flag(
                 prior_attributes.get(
                     "fahrplan_slot_aktiv_venus_" + name,
@@ -1815,7 +1852,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         automatic_limit_reason[key] = limit_reason
     limits = automatic_limits.copy()
     automatic_slot_active = {
-        key: automatic_limits[key] > 0
+        key: automatic_limits[key] > 0 and not bats[key]["target_met"]
         for key in BATTERY_KEYS
     }
 
@@ -1838,7 +1875,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     else:
         status = automatic_status
         reason = automatic_reason
-        if sum(automatic_limits_raw.values()) == 0 and sum(automatic_limits.values()) > 0:
+        if sum(automatic_limits_raw.values()) == 0 and any(automatic_slot_active.values()):
             status = "Sollwert wird gehalten"
             reason = "Grenzwert bleibt gesetzt; AstraMeter begrenzt die reale Leistung am Netzanschlusspunkt"
 
@@ -2067,6 +2104,11 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     if not release_ready:
         warnings.append("Rückgabe eines Speichers wartet auf dessen Steuerbarkeit; anderer Speicher arbeitet weiter")
     reported_need = sum([bats[key]["need"] for key in BATTERY_KEYS])
+    effective_limits = {
+        key: limit if (not bats[key]["target_met"] or manual_active_by_key[key]
+                       or key in cal["charge"]) else 0
+        for key, limit in limits.items()
+    }
 
     plan = {
         "version": VERSION, "status": status, "berechnet_ts": NOW,
@@ -2136,13 +2178,14 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "fahrplanenergie_jetzt_kwh": round(stored - normal_stored + max(0, normal_target - window_wh / 1000 * eta), 3),
         "mindestenergie_jetzt_kwh": round(stored - normal_stored + min(normal_target, max(0, normal_target - window_wh / 1000 * eta)), 3),
         "energieluecke_kwh": round(normal_target - window_wh / 1000 * eta - normal_stored, 3),
-        "soll_laden": sum(limits.values()) > 0, "soll_ladeleistung_gesamt_w": sum(limits.values()),
+        "soll_laden": sum(effective_limits.values()) > 0,
+        "soll_ladeleistung_gesamt_w": sum(effective_limits.values()),
         "soll_ladegrenze_venus_a_w": limits.get("A", 0),
         "soll_ladegrenze_venus_d_w": limits.get("D", 0),
         "soll_ladegrenze_venus_e_w": limits.get("E", 0),
         "verteilungsmodus": (
-            "geteilt" if sum(value > 0 for value in limits.values()) > 1
-            else next(("nur " + key for key, value in limits.items() if value > 0), "aus")
+            "geteilt" if sum(value > 0 for value in effective_limits.values()) > 1
+            else next(("nur " + key for key, value in effective_limits.items() if value > 0), "aus")
         ),
         "manuell_aktiv": manual_active,
         "manuell_a_aktiv": manual_active_by_key.get("A", False),
@@ -2172,7 +2215,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     plan["fahrplan_entscheidung_fixiert_bis_ts"] = (
         slot_end_ts if automatic else None
     )
-    plan["fahrplan_slot_verriegelt"] = automatic and decision_slot_locked
+    plan["fahrplan_slot_verriegelt"] = automatic and all(slot_locked_by_key.values())
     plan["fahrplan_slot_aktiv"] = any(automatic_slot_active.values())
     plan["fahrplan_slot_status"] = (
         "Beobachten"
@@ -2183,9 +2226,10 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         name = key.lower()
         plan["fahrplan_slot_aktiv_venus_" + name] = automatic_slot_active[key]
         plan["fahrplan_slot_grund_venus_" + name] = automatic_limit_reason[key]
+        plan["fahrplan_slot_verriegelt_venus_" + name] = automatic and slot_locked_by_key[key]
         old_start_reason = prior_attributes.get("fahrplan_slot_startgrund_venus_" + name)
         plan["fahrplan_slot_startgrund_venus_" + name] = (
-            old_start_reason if decision_slot_locked and automatic_slot_active[key]
+            old_start_reason if slot_locked_by_key[key] and automatic_slot_active[key]
             and old_start_reason else automatic_reason if automatic_slot_active[key] else None
         )
     for key in BATTERY_KEYS:
@@ -2194,9 +2238,14 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         decision = {"zeit_ts": NOW, "bevorzugt_w": efficient_caps[key],
                     "roh_w": automatic_limits_raw[key], "stabil_w": automatic_limits[key],
                     "restbedarf_kwh": bats[key]["need"], "grund": efficiency_mode,
+                    "fahrplan_status": automatic_status, "fahrplan_grund": automatic_reason,
+                    "sollwert_grund": automatic_limit_reason[key],
+                    "datenfehler": list(data_errors),
+                    "live_ueberschuss_w": round(normal_live),
                     "fenster_start_ts": start, "simulation_ende_ts": simulation_end,
                     "fehlmenge_bevorzugt_kwh": round(preferred_sim["missing"], 4)}
         if (isinstance(previous_decision, dict)
+                and "sollwert_grund" in previous_decision
                 and previous_decision.get("stabil_w") == automatic_limits[key]):
             decision = previous_decision
         plan["leistungsentscheidung_venus_" + name] = decision
@@ -2245,10 +2294,10 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             lade_str = "Gesperrt (Kalibrierung wartet)"
         elif manual_active_by_key.get(key, False) and lw > 0:
             lade_str = "Manuell " + str(lw) + " W"
-        elif lw > 0:
-            lade_str = "Laden " + str(lw) + " W"
         elif b.get("target_met"):
             lade_str = "Ziel erreicht"
+        elif lw > 0:
+            lade_str = "Laden " + str(lw) + " W"
         else:
             lade_str = "Wartet"
         react = reaction.get(key, {})
@@ -2363,6 +2412,8 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     plan["mittagsspitzen_aktiv"] = peak_enabled
     plan["mittagsspitzen_planbar"] = peak["ok"]
     plan["einspeiseziel_w"] = peak["target"] if peak["ok"] else None
+    plan["mittagsspitze_live_freigabe_w"] = round(peak_live_headroom) if peak_live_override else 0
+    plan["mittagsspitze_live_seit_ts"] = peak_live_since
     plan["spitzenfenster_start_ts"] = peak["start"]
     plan["spitzenfenster_ende_ts"] = peak["end"]
     plan["spitzenplan_voll_ts"] = peak["finish"]
@@ -2390,6 +2441,9 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             plan["status_venus_" + name] = "Manuelle Grenze"
             plan["grund_venus_" + name] = (key + " Laden/Entladen " + str(manual_charge[key])
                                                + "/" + str(manual_discharge[key]) + " W")
+        elif bats[key]["target_met"]:
+            plan["status_venus_" + name] = "Ziel erreicht"
+            plan["grund_venus_" + name] = "Geräteziel erreicht; Registerwert bleibt stehen"
         elif automatic_limit_held[key]:
             plan["status_venus_" + name] = "Sollwert gehalten"
             plan["grund_venus_" + name] = automatic_limit_reason[key]

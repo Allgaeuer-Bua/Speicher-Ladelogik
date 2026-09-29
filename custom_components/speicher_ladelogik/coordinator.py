@@ -85,6 +85,7 @@ _STABILITY_KEYS = tuple(
         f"fahrplan_ladegrenze_stabil_venus_{name}_w",
     )
 ) + (
+    "daten_gueltig",
     "betriebsart",
     "regelung_aktiv",
     "mittagsspitzen_aktiv",
@@ -92,6 +93,7 @@ _STABILITY_KEYS = tuple(
     "mittagsfenster_start_ts",
     "mittagsfenster_ende_ts",
     "netzeinspeisung_seit_ts",
+    "mittagsspitze_live_seit_ts",
     "fahrplan_slot_start_ts",
     "fahrplan_slot_ende_ts",
     "fahrplan_slot_aktiv_venus_a",
