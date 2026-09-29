@@ -49,6 +49,7 @@ def test_ae_configuration_has_only_two_models_and_keeps_optional_a_mppts():
 def test_default_sources_never_require_venus_d():
     assert all("venus_d" not in str(value) for value in const.DEFAULTS.values())
     assert all(not str(key).startswith("d_") for key in const.DEFAULTS)
+    assert const.CONF_A_MIN_SOC not in const.DEFAULTS
 
 
 def test_last_percent_keeps_register_on_forecast_pause_but_safety_stop_wins():

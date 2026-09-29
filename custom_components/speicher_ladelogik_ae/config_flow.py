@@ -188,11 +188,15 @@ class SpeicherLadelogikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Required("active", default=current.get("active", defaults["active"])): _entity("switch"),
             vol.Optional("charge_override"): _entity("input_boolean"),
             vol.Required("max_soc", default=current.get("max_soc", defaults["max_soc"])): _entity("number"),
-            vol.Optional("min_soc", default=current.get("min_soc", defaults.get("min_soc"))): _entity("number"),
             vol.Required("max_cell_voltage", default=current.get("max_cell_voltage", defaults["max_cell_voltage"])): _entity("sensor"),
             vol.Required("max_cell_temp", default=current.get("max_cell_temp", defaults["max_cell_temp"])): _entity("sensor"),
             vol.Required("min_cell_temp", default=current.get("min_cell_temp", defaults["min_cell_temp"])): _entity("sensor"),
         }
+        min_soc = current.get("min_soc", defaults.get("min_soc"))
+        fields[
+            vol.Optional("min_soc", default=min_soc)
+            if min_soc else vol.Optional("min_soc")
+        ] = _entity("number")
         if model == "A":
             fields[vol.Required("pack_soc", default=current.get("pack_soc", defaults["pack_soc"]))] = _entity("sensor", multiple=True)
             fields[vol.Required("drift", default=current.get("drift", defaults["drift"]))] = _entity("sensor", multiple=True)

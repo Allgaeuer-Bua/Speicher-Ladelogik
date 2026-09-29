@@ -96,7 +96,6 @@ DEFAULTS: Final = {
     CONF_A_AUTO_TARGET: "switch.astrameter_venus_a_auto_target",
     CONF_A_ACTIVE: "switch.astrameter_venus_a_active",
     CONF_A_MAX_SOC: "number.marstek_venus_a_maximaler_soc",
-    CONF_A_MIN_SOC: "number.marstek_venus_a_minimaler_soc",
     CONF_A_PACK_SOC: [
         "sensor.marstek_venus_a_soc_batteriepack_1",
         "sensor.marstek_venus_a_soc_batteriepack_2",
