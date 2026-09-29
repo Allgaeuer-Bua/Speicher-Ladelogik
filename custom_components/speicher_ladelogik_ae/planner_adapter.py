@@ -11,7 +11,6 @@ from homeassistant.util import dt as dt_util
 from .compat import get_state_with_legacy_fallback
 from .const import (
     CONF_A_CHARGE_OVERRIDE,
-    CONF_D_CHARGE_OVERRIDE,
     CONF_E_CHARGE_OVERRIDE,
     CONF_ENABLED_MODELS,
     DEFAULTS,
@@ -22,7 +21,6 @@ from .storage import SLOT_FIELDS
 
 LEGACY_OVERRIDE_ENTITIES = {
     CONF_A_CHARGE_OVERRIDE: "input_boolean.venus_a_nicht_laden",
-    CONF_D_CHARGE_OVERRIDE: "input_boolean.venus_d_nicht_laden",
     CONF_E_CHARGE_OVERRIDE: "input_boolean.venus_e_nicht_laden",
 }
 

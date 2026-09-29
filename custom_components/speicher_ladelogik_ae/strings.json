@@ -38,15 +38,15 @@
           "min_cell_temp": "Minimale Zelltemperatur",
           "drift": "Zelldrift-Sensoren",
           "mppt_sensors": "Optionale MPPT-Leistungssensoren Venus A (maximal 4)"
-        },
-        "error": {
-          "too_many_mppts": "Maximal vier MPPT-Sensoren für Venus A auswählen."
         }
       }
     },
     "abort": {
       "already_configured": "Speicher-Ladelogik A/E ist bereits eingerichtet.",
       "reconfigure_successful": "Speicherinstanzen wurden aktualisiert."
+    },
+    "error": {
+      "too_many_mppts": "Maximal vier MPPT-Sensoren für Venus A auswählen."
     }
   },
   "options": {

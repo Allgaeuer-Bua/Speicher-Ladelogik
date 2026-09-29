@@ -24,13 +24,6 @@ from .const import (
     CONF_A_CHARGE_OVERRIDE,
     CONF_A_DISCHARGE_LIMIT,
     CONF_A_SOC,
-    CONF_D_AC_POWER,
-    CONF_D_ACTIVE,
-    CONF_D_AUTO_TARGET,
-    CONF_D_CHARGE_LIMIT,
-    CONF_D_CHARGE_OVERRIDE,
-    CONF_D_DISCHARGE_LIMIT,
-    CONF_D_SOC,
     CONF_E_AC_POWER,
     CONF_E_ACTIVE,
     CONF_E_AUTO_TARGET,
@@ -721,7 +714,6 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Recheck the device-side control gates immediately before a write."""
         keys = {
             "A": (CONF_A_AUTO_TARGET, CONF_A_ACTIVE, CONF_A_CHARGE_OVERRIDE),
-            "D": (CONF_D_AUTO_TARGET, CONF_D_ACTIVE, CONF_D_CHARGE_OVERRIDE),
             "E": (CONF_E_AUTO_TARGET, CONF_E_ACTIVE, CONF_E_CHARGE_OVERRIDE),
         }
         auto_key, active_key, override_key = keys[battery]
@@ -760,8 +752,6 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         allowed = {
             self.config.get(CONF_A_CHARGE_LIMIT),
             self.config.get(CONF_A_DISCHARGE_LIMIT),
-            self.config.get(CONF_D_CHARGE_LIMIT),
-            self.config.get(CONF_D_DISCHARGE_LIMIT),
             self.config.get(CONF_E_CHARGE_LIMIT),
             self.config.get(CONF_E_DISCHARGE_LIMIT),
         }
@@ -837,7 +827,6 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Set charge limits to zero if an active controller loses its plan."""
         charge_keys = {
             "A": CONF_A_CHARGE_LIMIT,
-            "D": CONF_D_CHARGE_LIMIT,
             "E": CONF_E_CHARGE_LIMIT,
         }
         commands = [

@@ -46,6 +46,11 @@ def test_ae_configuration_has_only_two_models_and_keeps_optional_a_mppts():
     assert normalized["slot_models"] == {"A": "A", "E": "E"}
 
 
+def test_default_sources_never_require_venus_d():
+    assert all("venus_d" not in str(value) for value in const.DEFAULTS.values())
+    assert all(not str(key).startswith("d_") for key in const.DEFAULTS)
+
+
 def test_last_percent_keeps_register_on_forecast_pause_but_safety_stop_wins():
     base = dict(raw_limit=0, previous_limit=1100, current_cap=1500,
                 eligible=True, target_reached=False, within_window=False,

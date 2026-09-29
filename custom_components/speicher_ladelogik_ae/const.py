@@ -49,23 +49,6 @@ CONF_A_MIN_CELL_TEMP: Final = "a_min_cell_temp"
 CONF_A_PACK_DRIFT: Final = "a_pack_drift"
 CONF_A_MPPT_SENSORS: Final = "a_mppt_sensors"
 
-CONF_D_SOC: Final = "d_soc"
-CONF_D_AC_POWER: Final = "d_ac_power"
-CONF_D_DC_POWER: Final = "d_dc_power"
-CONF_D_CHARGE_LIMIT: Final = "d_charge_limit"
-CONF_D_DISCHARGE_LIMIT: Final = "d_discharge_limit"
-CONF_D_AUTO_TARGET: Final = "d_auto_target"
-CONF_D_ACTIVE: Final = "d_active"
-CONF_D_CHARGE_OVERRIDE: Final = "d_charge_override"
-CONF_D_MAX_SOC: Final = "d_max_soc"
-CONF_D_MIN_SOC: Final = "d_min_soc"
-CONF_D_PACK_SOC: Final = "d_pack_soc"
-CONF_D_MAX_CELL_VOLTAGE: Final = "d_max_cell_voltage"
-CONF_D_MAX_CELL_TEMP: Final = "d_max_cell_temp"
-CONF_D_MIN_CELL_TEMP: Final = "d_min_cell_temp"
-CONF_D_PACK_DRIFT: Final = "d_pack_drift"
-CONF_D_MPPT_SENSORS: Final = "d_mppt_sensors"
-
 CONF_E_SOC: Final = "e_soc"
 CONF_E_AC_POWER: Final = "e_ac_power"
 CONF_E_DC_POWER: Final = "e_dc_power"
@@ -126,27 +109,6 @@ DEFAULTS: Final = {
         "sensor.venus_a_pack_2_zelldrift",
     ],
     CONF_A_MPPT_SENSORS: [],
-    CONF_D_SOC: "sensor.marstek_venus_d_soc",
-    CONF_D_AC_POWER: "sensor.marstek_venus_d_ac_leistung",
-    CONF_D_DC_POWER: "sensor.marstek_venus_d_batterieleistung",
-    CONF_D_CHARGE_LIMIT: "number.marstek_venus_d_maximale_ladeleistung",
-    CONF_D_DISCHARGE_LIMIT: "number.marstek_venus_d_maximale_entladeleistung",
-    CONF_D_AUTO_TARGET: "switch.astrameter_venus_d_auto_target",
-    CONF_D_ACTIVE: "switch.astrameter_venus_d_active",
-    CONF_D_MAX_SOC: "number.marstek_venus_d_maximaler_soc",
-    CONF_D_MIN_SOC: "number.marstek_venus_d_minimaler_soc",
-    CONF_D_PACK_SOC: [
-        "sensor.marstek_venus_d_soc_batteriepack_1",
-        "sensor.marstek_venus_d_soc_batteriepack_2",
-    ],
-    CONF_D_MAX_CELL_VOLTAGE: "sensor.marstek_venus_d_maximale_zellenspannung",
-    CONF_D_MAX_CELL_TEMP: "sensor.marstek_venus_d_maximale_zellentemperatur",
-    CONF_D_MIN_CELL_TEMP: "sensor.marstek_venus_d_minimale_zellentemperatur",
-    CONF_D_PACK_DRIFT: [
-        "sensor.venus_d_pack_1_zelldrift",
-        "sensor.venus_d_pack_2_zelldrift",
-    ],
-    CONF_D_MPPT_SENSORS: [],
     CONF_E_SOC: "sensor.marstek_venus_e_soc",
     CONF_E_AC_POWER: "sensor.marstek_venus_e_ac_leistung",
     CONF_E_DC_POWER: "sensor.marstek_venus_e_dc_leistung",
@@ -191,25 +153,6 @@ VENUS_A_KEYS: Final = (
     CONF_A_MPPT_SENSORS,
 )
 
-VENUS_D_KEYS: Final = (
-    CONF_D_SOC,
-    CONF_D_AC_POWER,
-    CONF_D_DC_POWER,
-    CONF_D_CHARGE_LIMIT,
-    CONF_D_DISCHARGE_LIMIT,
-    CONF_D_AUTO_TARGET,
-    CONF_D_ACTIVE,
-    CONF_D_CHARGE_OVERRIDE,
-    CONF_D_MAX_SOC,
-    CONF_D_MIN_SOC,
-    CONF_D_PACK_SOC,
-    CONF_D_MAX_CELL_VOLTAGE,
-    CONF_D_MAX_CELL_TEMP,
-    CONF_D_MIN_CELL_TEMP,
-    CONF_D_PACK_DRIFT,
-    CONF_D_MPPT_SENSORS,
-)
-
 VENUS_E_KEYS: Final = (
     CONF_E_SOC,
     CONF_E_AC_POWER,
@@ -249,13 +192,4 @@ REQUIRED_E_KEYS: Final = (
     CONF_E_DISCHARGE_LIMIT,
     CONF_E_AUTO_TARGET,
     CONF_E_ACTIVE,
-)
-
-REQUIRED_D_KEYS: Final = (
-    CONF_D_SOC,
-    CONF_D_AC_POWER,
-    CONF_D_CHARGE_LIMIT,
-    CONF_D_DISCHARGE_LIMIT,
-    CONF_D_AUTO_TARGET,
-    CONF_D_ACTIVE,
 )
