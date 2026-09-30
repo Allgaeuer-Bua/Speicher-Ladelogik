@@ -23,6 +23,8 @@ Die Planungs- und Kalibrierfunktionen aus 1.2.5 bleiben für A und E verfügbar.
 
 Seit v2.0.1 ist die eingestellte Ruhezeit **vor** der Kalibrierladung ein Wunschwert: Bei leerem Speicher und ausreichend realem PV-Überschuss kann ein nutzbares Fenster früher beginnen. Die tatsächlich erreichte Dauer steht je Speicher in der Kalibrierungsansicht. Die Ruhezeit **nach** bestätigten 100 % bleibt für das Kalibrierergebnis erforderlich.
 
+Seit v2.0.2 wird ein kurzfristiger PV-Einbruch bei der Kalibrierfensteranzeige für heute nicht mehr pauschal auf den gesamten restlichen Tag übertragen. Die Anzeige bewertet spätere 15-Minuten-Prognosen mit der zeitabhängigen Korrektur der Tagesplanung.
+
 ## Entwicklung
 
 ```sh
