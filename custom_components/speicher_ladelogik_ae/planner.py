@@ -516,9 +516,14 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
 
     def pause_session(session, reason):
         session["u"] = session["p"]
+        lower_rest_start = session["t"] if session["p"] == "empty_rest" else 0
         if session["p"] == "charge":
             session["i"] = 1
         transition(session, "paused", reason)
+        # Keep the start for a short, verifiably idle telemetry interruption.
+        # The existing numeric field is only used for grid support in drain.
+        if lower_rest_start:
+            session["l"] = lower_rest_start
 
 
     def calibration_step(session, context):
@@ -576,7 +581,16 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             if resume == "charge" and s["x"] + 1800 <= NOW:
                 transition(s, "restore", "retry_window")
             elif resume != "charge" or calibration_surplus >= required_start:
+                lower_rest_start = s["l"] if resume == "empty_rest" else 0
+                pause_started = s["t"]
                 transition(s, resume, "resumed")
+                if lower_rest_start and 0 <= NOW - pause_started <= 90:
+                    bat = context["batteries"][key]
+                    reported = bat.get("power_reported_ts")
+                    if (bat["power"] is not None and abs(bat["power"]) <= 50
+                            and reported is not None and reported >= NOW - 30
+                            and bat["soc"] is not None and bat["soc"] <= 14):
+                        s["t"] = lower_rest_start
                 s["u"] = ""
                 s["q"] = int(NOW)
                 s["v"] = 0

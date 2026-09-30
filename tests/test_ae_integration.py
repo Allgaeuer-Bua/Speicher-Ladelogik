@@ -224,3 +224,29 @@ def test_pause_reason_survives_resume_through_the_real_calibration_sensor():
     assert resumed["calibration"]["phase"] == "wait"
     assert resumed["calibration"]["grund_code"] == "resumed"
     assert resumed["calibration"]["letzte_pause_grund"] == paused["calibration"]["letzte_pause_grund"]
+
+
+def test_short_verified_pause_preserves_elapsed_lower_rest_but_long_gap_restarts_it():
+    hass, payload = _waiting_venus_e(phase="empty_rest", pause_minutes=45)
+    resting = fx.persistence.read_session(
+        hass.states.get("input_text.speicher_ladelogik_ae_kalibrierung_sitzung").state)
+    resting["t"] = fx.NOW - 40 * 60
+    hass.states.states["input_text.speicher_ladelogik_ae_kalibrierung_sitzung"] = fx.state(
+        fx.persistence.encode_session(resting), fx.NOW)
+    hass.states.states["sensor.marstek_venus_e_min_zelltemperatur"] = fx.state(
+        "unavailable", fx.NOW, "°C")
+    with patch.dict(sys.modules, stubs):
+        paused = planner.calculate_plan(hass, payload)
+        assert paused["calibration"]["phase"] == "paused"
+        assert fx.persistence.read_session(paused["session"])["l"] == resting["t"]
+        for gap, expected in ((60, 4 * 60), (120, 45 * 60)):
+            payload["now"] = fx.NOW + gap
+            hass.states.states["input_text.speicher_ladelogik_ae_kalibrierung_sitzung"] = fx.state(
+                paused["session"], fx.NOW + gap)
+            hass.states.states["sensor.marstek_venus_e_min_zelltemperatur"] = fx.state(
+                24, fx.NOW + gap, "°C")
+            hass.states.states["sensor.marstek_venus_e_ac_leistung"] = fx.state(
+                0, fx.NOW + gap, "W")
+            resumed = planner.calculate_plan(hass, payload)
+            assert resumed["calibration"]["phase"] == "empty_rest"
+            assert resumed["calibration"]["ruhe_verbleibend_s"] == expected
