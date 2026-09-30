@@ -21,6 +21,8 @@ Die neue Kennung lautet `speicher_ladelogik_ae`. Einstellungen, Kalibrierhistori
 
 Die Planungs- und Kalibrierfunktionen aus 1.2.5 bleiben für A und E verfügbar. Bei der Venus A bleibt die Ladegrenze auch für das letzte SoC-Prozent gesetzt, sofern kein Sicherheitsstopp vorliegt; eine gehaltene Grenze zählt nicht als aktiver Ladeslot.
 
+Seit v2.0.1 ist die eingestellte Ruhezeit **vor** der Kalibrierladung ein Wunschwert: Bei leerem Speicher und ausreichend realem PV-Überschuss kann ein nutzbares Fenster früher beginnen. Die tatsächlich erreichte Dauer steht je Speicher in der Kalibrierungsansicht. Die Ruhezeit **nach** bestätigten 100 % bleibt für das Kalibrierergebnis erforderlich.
+
 ## Entwicklung
 
 ```sh

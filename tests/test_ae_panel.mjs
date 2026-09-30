@@ -10,7 +10,7 @@ globalThis.customElements = {
   define: (name, klass) => registry.set(name, klass),
 };
 await import("../custom_components/speicher_ladelogik_ae/frontend/speicher-ladelogik-ae-panel.js");
-const Panel = registry.get("speicher-ladelogik-ae-panel-2-0-0");
+const Panel = registry.get("speicher-ladelogik-ae-panel-2-0-1");
 
 function panel() {
   const instance = new Panel();
