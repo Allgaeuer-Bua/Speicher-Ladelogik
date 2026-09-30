@@ -824,17 +824,17 @@ class SpeicherLadelogikPanel extends HTMLElement {
       const mode = this._batteryMode(power);
       const icon = mode.tone === "charge" ? "mdi:battery-arrow-up-outline"
         : mode.tone === "discharge" ? "mdi:battery-arrow-down-outline" : "mdi:battery-outline";
-      const y = model === "A" ? 170 : 365;
+      const y = model === "A" ? 180 : 390;
       const route = power < -10
-        ? `M 500 270 C 620 250 730 ${y} 850 ${y}`
-        : `M 850 ${y} C 730 ${y} 620 250 500 270`;
+        ? `M 500 300 C 620 280 730 ${y} 850 ${y}`
+        : `M 850 ${y} C 730 ${y} 620 280 500 300`;
       return { model, suffix, power, soc, icon, route };
     });
     const gridDirection = this._gridDirection(grid);
     const gridPath = gridDirection === "import"
-      ? "M 140 270 C 260 270 380 270 500 270"
-      : "M 500 270 C 380 270 260 270 140 270";
-    const pvPath = "M 500 100 C 500 150 500 210 500 270";
+      ? "M 140 300 C 260 300 380 300 500 300"
+      : "M 500 300 C 380 300 260 300 140 300";
+    const pvPath = "M 500 80 C 500 150 500 230 500 300";
     return {
       pv, grid, home, batteries, gridDirection, gridPath, pvPath,
     };
@@ -1276,13 +1276,13 @@ class SpeicherLadelogikPanel extends HTMLElement {
       .early-goals{margin:14px 0;padding:12px;border:1px solid var(--line);border-radius:10px}.early-goals>strong{display:block;margin-bottom:8px}.early-goal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 15px}.control-explanation{font-size:12px;color:var(--muted);line-height:1.5;margin:8px 0}.early-goal-grid .control-row{min-width:0}
       @media(max-width:720px){.early-goal-grid{grid-template-columns:1fr}}
       @media(max-width:720px){.battery-diagnostics{grid-template-columns:1fr}}
-      .flow-card .flow-node.grid{left:14%;top:54%}.flow-card .flow-node.pv{top:20%}.flow-card .flow-node.home{left:50%;top:54%}
-      .flow-card .flow-node.battery-a{left:85%;top:34%;color:#38d582}.flow-card .flow-node.battery-e{left:85%;top:73%;color:#6dd7e2}
+      .flow-card .flow-canvas{min-height:520px}.flow-card .flow-node.grid{left:14%;top:60%}.flow-card .flow-node.pv{top:16%}.flow-card .flow-node.home{left:50%;top:60%}
+      .flow-card .flow-node.battery-a{left:85%;top:36%;color:#38d582}.flow-card .flow-node.battery-e{left:85%;top:78%;color:#6dd7e2}
       .flow-card .flow-node.battery{cursor:pointer}.flow-card .flow-node.battery>span{font-weight:700;color:var(--primary-text-color)}
       .battery-upper{display:block}.battery-history{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
       .soc-overview{min-height:0}.soc-summaries{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:12px 0 18px}
       .soc-summary{display:flex;align-items:center;justify-content:space-between;padding:12px;border-radius:10px;background:rgba(110,135,125,.07)}.soc-summary strong{font-size:21px;color:var(--accent)}
-      @media(max-width:720px){.flow-card .flow-node.grid{left:13%}.flow-card .flow-node.home{left:50%}.flow-card .flow-node.battery-a,.flow-card .flow-node.battery-e{left:87%}.soc-summaries{gap:8px}.soc-summary{padding:9px}.soc-summary strong{font-size:16px}}
+      @media(max-width:720px){.flow-card .flow-canvas{min-height:390px}.flow-card .flow-node.grid{left:13%}.flow-card .flow-node.pv{top:16%}.flow-card .flow-node.home{left:50%}.flow-card .flow-node.battery-a,.flow-card .flow-node.battery-e{left:87%}.soc-summaries{gap:8px}.soc-summary{padding:9px}.soc-summary strong{font-size:16px}}
       @media(prefers-reduced-motion:reduce){.flow-dots.active{animation-duration:3s}}
     `;
   }
