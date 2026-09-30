@@ -342,6 +342,8 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "ruhedauer_oben_min",
                 "ruhe_verbleibend_s",
                 "ladebeginn_voraussichtlich_ts",
+                "letzte_pause_grund",
+                "letzte_pause_ts",
                 "parallel_erlaubt",
                 "phase",
                 "batterie",

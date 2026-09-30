@@ -181,3 +181,46 @@ def test_today_request_during_register_restore_is_queued_for_after_restore():
         result = planner.calculate_plan(hass, payload)
     assert result["calibration"]["vormerkungen"][0]["batterie"] == "E"
     assert result["calibration"]["vormerkungen"][0]["fruehestens_ts"] == fx.DAY
+
+
+def test_marginal_forecast_waits_then_starts_on_live_surplus_instead_of_retrying_tomorrow():
+    hass, payload = _waiting_venus_e(phase="empty_rest", pause_minutes=45)
+    for direction in ("sw", "so", "no"):
+        key = f"sensor.{direction}_energy_production_today"
+        buckets = {
+            datetime.fromtimestamp(fx.DAY + index * 900, timezone.utc).isoformat():
+            (350 if 28 <= index < 64 else 0)
+            for index in range(96)
+        }
+        hass.states.states[key] = fx.state(30, fx.NOW, unit="kWh", wh_period_15m=buckets)
+    with patch.dict(sys.modules, stubs):
+        first = planner.calculate_plan(hass, payload)
+        assert first["calibration"]["heute_e"]["ok"] is False
+        assert first["calibration"]["heute_e"]["longest_h"] >= 8.86
+        assert first["calibration"]["phase"] == "wait"
+        hass.states.states["input_text.speicher_ladelogik_ae_kalibrierung_sitzung"] = fx.state(
+            first["session"], fx.NOW)
+        second = planner.calculate_plan(hass, payload)
+    assert second["calibration"]["phase"] == "charge"
+    assert second["calibration"]["auftraege"][0]["fruehestens_ts"] == fx.DAY
+
+
+def test_pause_reason_survives_resume_through_the_real_calibration_sensor():
+    hass, payload = _waiting_venus_e()
+    hass.states.states["sensor.marstek_venus_e_min_zelltemperatur"] = fx.state(
+        "unavailable", fx.NOW, "°C")
+    with patch.dict(sys.modules, stubs):
+        paused = planner.calculate_plan(hass, payload)
+        assert paused["calibration"]["phase"] == "paused"
+        assert "Pausiert" in paused["calibration"]["letzte_pause_grund"]
+        hass.states.states["input_text.speicher_ladelogik_ae_kalibrierung_sitzung"] = fx.state(
+            paused["session"], fx.NOW)
+        hass.states.states["sensor.speicher_ladelogik_ae_kalibrierung"] = fx.state(
+            "Pausiert", fx.NOW,
+            letzte_pause_grund=paused["calibration"]["letzte_pause_grund"],
+            letzte_pause_ts=paused["calibration"]["letzte_pause_ts"])
+        hass.states.states["sensor.marstek_venus_e_min_zelltemperatur"] = fx.state(24, fx.NOW, "°C")
+        resumed = planner.calculate_plan(hass, payload)
+    assert resumed["calibration"]["phase"] == "wait"
+    assert resumed["calibration"]["grund_code"] == "resumed"
+    assert resumed["calibration"]["letzte_pause_grund"] == paused["calibration"]["letzte_pause_grund"]
