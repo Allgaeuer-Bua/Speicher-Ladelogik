@@ -342,6 +342,8 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "ruhedauer_oben_min",
                 "ruhe_verbleibend_s",
                 "ladebeginn_voraussichtlich_ts",
+                "letzte_pause_grund",
+                "letzte_pause_ts",
                 "parallel_erlaubt",
                 "phase",
                 "batterie",
@@ -374,6 +376,8 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                     f"kalibrierung_letzter_erfolg_{name}_ts",
                     f"kalibrierung_naechste_faelligkeit_{name}_ts",
                     f"kalibrierung_faellig_{name}",
+                    f"letzte_ruhe_vor_laden_s_{name}",
+                    f"letzte_ruhe_vor_laden_ts_{name}",
                 ):
                     source = data if key.startswith("kalibrierung_") else calibration
                     attributes[key] = source.get(key)
