@@ -970,7 +970,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return `<div class="cal-window-grid">${jobs.map((job) => {
       const phase = job.phase_label || PHASE_LABELS[job.phase] || job.phase;
       const times = [];
-      if (job.ruhe_ende_ts) times.push(`Ruhephase bis ${this._dateTime(job.ruhe_ende_ts)} · noch ca. ${Math.max(0, Math.ceil((job.ruhe_ende_ts - Date.now() / 1000) / 60))} min`);
+      if (job.ruhe_ende_ts) times.push(`${job.phase === "empty_rest" ? "Angestrebte Ruhe bis" : "Ruhephase bis"} ${this._dateTime(job.ruhe_ende_ts)} · noch ca. ${Math.max(0, Math.ceil((job.ruhe_ende_ts - Date.now() / 1000) / 60))} min`);
       if (job.ladebeginn_voraussichtlich_ts) times.push(`Ladebeginn frühestens ${this._dateTime(job.ladebeginn_voraussichtlich_ts)} bei ausreichend PV`);
       if (job.voll_voraussichtlich_ts) times.push(`Voraussichtlich voll ${this._dateTime(job.voll_voraussichtlich_ts)}`);
       if (job.freigabe_voraussichtlich_ts) times.push(`Freigabe nach Ruhephase ca. ${this._dateTime(job.freigabe_voraussichtlich_ts)}`);
@@ -1159,7 +1159,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const reason = String(this._attr("kalibrierung", "grund", "") || "").trim();
     const restSeconds = this._num(this._attr("kalibrierung", "ruhe_verbleibend_s"), 0);
     const restHint = restSeconds > 0
-      ? ` · noch ca. ${Math.ceil(restSeconds / 60)} min`
+      ? ` · angestrebt noch ca. ${Math.ceil(restSeconds / 60)} min`
       : "";
     const chargeStart = this._attr("kalibrierung", "ladebeginn_voraussichtlich_ts");
     const chargeHint = chargeStart && (phase.includes("Untere Ruhephase") || phase.includes("Wartet auf PV-Fenster"))
@@ -1170,12 +1170,15 @@ class SpeicherLadelogikPanel extends HTMLElement {
       <section class="card span-full calibration-card">
         ${this._cardTitle("mdi:battery-sync-outline", "Kalibrierung", this._badge(cal?.state || "—", cal?.state === "Bereit" ? "good" : "warn"))}
         ${this._calibrationJobs().length ? this._calibrationJobsCard() : `<div class="cal-state"><div><span>Speicher</span><strong>${esc(batteryName)}</strong><small>Gerät des aktuellen Kalibrierauftrags</small></div><div><span>Status</span><strong>${esc(statusText)}</strong><small>Aktuelle Phase: ${esc(phase)}${esc(restHint)}</small>${chargeHint}</div><div><span>Energie</span><strong>${this._energy(this._attr("kalibrierung", "energie_ac_kwh"))}</strong><small>Bisher in diesem Kalibrierlauf geladene AC-Energie</small></div></div>`}
-        <div class="control-list calibration-setting">${this._numberRow(["kalibrierleistung", "Kalibrierleistung", "Leistung für die vollständige Kalibrierladung"])}${this._numberRow(["kalibrierung_ruhe_unten", "Ruhezeit vor dem Laden", "Ab Erreichen des unteren SoC; gilt auch für laufende Ruhephasen"])}${this._numberRow(["kalibrierung_ruhe_oben", "Ruhezeit nach dem Laden", "Ab bestätigten 100 %; benötigt kein PV-Fenster"])}${this._toggleRow("kalibrierung_parallel", "Zwei Speicher gleichzeitig", "Nur bei zwei vorbereiteten Speichern und ausreichend gemeinsamem PV-Überschuss", "mdi:battery-sync")}</div>
+        <div class="control-list calibration-setting">${this._numberRow(["kalibrierleistung", "Kalibrierleistung", "Leistung für die vollständige Kalibrierladung"])}${this._numberRow(["kalibrierung_ruhe_unten", "Ruhezeit vor dem Laden", "Angestrebt ab unterem SoC; ein nutzbares PV-Fenster kann den Start vorziehen"])}${this._numberRow(["kalibrierung_ruhe_oben", "Ruhezeit nach dem Laden", "Ab bestätigten 100 %; benötigt kein PV-Fenster"])}${this._toggleRow("kalibrierung_parallel", "Zwei Speicher gleichzeitig", "Nur bei zwei vorbereiteten Speichern und ausreichend gemeinsamem PV-Überschuss", "mdi:battery-sync")}</div>
 
         <div class="cal-window-grid">
           ${this._models().map((model) => {
             const suffix = model.toLowerCase();
-            return `<div class="cal-window-storage"><b>${esc(this._storageLabel(model))}</b><small>Letzte Kalibrierung: ${esc(this._lastCalibration(model))}</small>${this._calibrationResult(model)}${this._calibrationWindow(model, "heute", "Heute")}${this._calibrationWindow(model, "morgen", "Morgen")}<div class="cal-actions">${this._actionButton(`kalibrierung_venus_${suffix}_anfordern`, "mdi:play", "Heute")}${this._actionButton(`kalibrierung_venus_${suffix}_morgen`, "mdi:calendar-arrow-right", "Morgen")}${this._actionButton(`kalibrierung_venus_${suffix}_entfernen`, "mdi:playlist-remove", "Vormerkung löschen", "subtle")}</div></div>`;
+            const rest = this._num(this._attr("kalibrierung", `letzte_ruhe_vor_laden_s_${suffix}`), NaN);
+            const restNote = Number.isFinite(rest) && rest >= 0
+              ? `<small>Letzte Ruhe vor Ladebeginn: ${esc((rest / 60).toLocaleString("de-DE", { maximumFractionDigits: 1 }))} min</small>` : "";
+            return `<div class="cal-window-storage"><b>${esc(this._storageLabel(model))}</b><small>Letzte Kalibrierung: ${esc(this._lastCalibration(model))}</small>${restNote}${this._calibrationResult(model)}${this._calibrationWindow(model, "heute", "Heute")}${this._calibrationWindow(model, "morgen", "Morgen")}<div class="cal-actions">${this._actionButton(`kalibrierung_venus_${suffix}_anfordern`, "mdi:play", "Heute")}${this._actionButton(`kalibrierung_venus_${suffix}_morgen`, "mdi:calendar-arrow-right", "Morgen")}${this._actionButton(`kalibrierung_venus_${suffix}_entfernen`, "mdi:playlist-remove", "Vormerkung löschen", "subtle")}</div></div>`;
           }).join("")}
         </div>
         <div class="danger-actions">${this._actionButton("kalibrierung_abbrechen", "mdi:cancel", "Laufende Kalibrierung abbrechen", "danger")}</div>

@@ -250,3 +250,64 @@ def test_short_verified_pause_preserves_elapsed_lower_rest_but_long_gap_restarts
             resumed = planner.calculate_plan(hass, payload)
             assert resumed["calibration"]["phase"] == "empty_rest"
             assert resumed["calibration"]["ruhe_verbleibend_s"] == expected
+
+
+def test_lower_rest_is_preferred_but_live_pv_can_start_charge_early_and_record_duration():
+    hass, payload = _waiting_venus_e(phase="empty_rest", pause_minutes=45)
+    session = fx.persistence.read_session(
+        hass.states.get("input_text.speicher_ladelogik_ae_kalibrierung_sitzung").state)
+    session["t"] = fx.NOW - 10 * 60
+    hass.states.states["input_text.speicher_ladelogik_ae_kalibrierung_sitzung"] = fx.state(
+        fx.persistence.encode_session(session), fx.NOW)
+    with patch.dict(sys.modules, stubs):
+        ready = planner.calculate_plan(hass, payload)
+        assert ready["calibration"]["phase"] == "wait"
+        assert ready["calibration"]["heute_e"]["ok"] is True
+        hass.states.states["input_text.speicher_ladelogik_ae_kalibrierung_sitzung"] = fx.state(
+            ready["session"], fx.NOW)
+        charging = planner.calculate_plan(hass, payload)
+        assert charging["calibration"]["phase"] == "charge"
+        assert charging["calibration"]["letzte_ruhe_vor_laden_s_e"] == 10 * 60
+        assert charging["learning"]["last_precharge_rest"]["E"]["seconds"] == 10 * 60
+        hass.states.states["sensor.speicher_ladelogik_ae_lernspeicher"] = fx.state(
+            "bereit", fx.NOW, **charging["learning"])
+        hass.states.states["input_text.speicher_ladelogik_ae_kalibrierung_sitzung"] = fx.state(
+            charging["session"], fx.NOW)
+        continued = planner.calculate_plan(hass, payload)
+    assert continued["calibration"]["letzte_ruhe_vor_laden_s_e"] == 10 * 60
+
+
+def test_lower_rest_waits_when_live_pv_is_insufficient():
+    hass, payload = _waiting_venus_e(phase="empty_rest", pause_minutes=45)
+    session = fx.persistence.read_session(
+        hass.states.get("input_text.speicher_ladelogik_ae_kalibrierung_sitzung").state)
+    session["t"] = fx.NOW - 10 * 60
+    hass.states.states["input_text.speicher_ladelogik_ae_kalibrierung_sitzung"] = fx.state(
+        fx.persistence.encode_session(session), fx.NOW)
+    hass.states.states["sensor.aktuelle_pv_leistung"] = fx.state(150, fx.NOW, "W")
+    with patch.dict(sys.modules, stubs):
+        result = planner.calculate_plan(hass, payload)
+    assert result["calibration"]["phase"] == "empty_rest"
+    assert result["calibration"]["ruhe_verbleibend_s"] == 35 * 60
+
+
+def test_remaining_precharge_rest_does_not_invalidate_a_sufficient_short_window():
+    hass, payload = _waiting_venus_e(phase="empty_rest", pause_minutes=45)
+    session = fx.persistence.read_session(
+        hass.states.get("input_text.speicher_ladelogik_ae_kalibrierung_sitzung").state)
+    session["t"] = fx.NOW - 10 * 60
+    hass.states.states["input_text.speicher_ladelogik_ae_kalibrierung_sitzung"] = fx.state(
+        fx.persistence.encode_session(session), fx.NOW)
+    for direction in ("sw", "so", "no"):
+        buckets = {
+            datetime.fromtimestamp(fx.DAY + index * 900, timezone.utc).isoformat():
+            (350 if 28 <= index < 66 else 0)
+            for index in range(96)
+        }
+        hass.states.states[f"sensor.{direction}_energy_production_today"] = fx.state(
+            30, fx.NOW, unit="kWh", wh_period_15m=buckets)
+    with patch.dict(sys.modules, stubs):
+        result = planner.calculate_plan(hass, payload)
+    assert result["calibration"]["heute_e"]["ok"] is True
+    assert result["calibration"]["heute_e"]["longest_h"] == 9.5
+    assert result["calibration"]["phase"] == "wait"

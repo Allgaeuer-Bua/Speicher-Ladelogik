@@ -57,3 +57,17 @@ test("storage chart follows pack details and duplicate power chart is gone", () 
   assert.ok(html.indexOf("Pack-SoC") < html.indexOf("SoC und Leistungsverlauf"));
   assert.doesNotMatch(html, /AC-Leistung · Laden \/ Entladen/);
 });
+
+test("calibration displays the measured lower rest as a preference", () => {
+  const p = panel();
+  p._panel.config.entities = { kalibrierung: "sensor.calibration" };
+  p._hass.states["sensor.calibration"] = {
+    state: "Lädt", attributes: {
+      letzte_ruhe_vor_laden_s_e: 600,
+      auftraege: [{ batterie: "E", phase: "empty_rest", ruhe_ende_ts: Date.now() / 1000 + 600 }],
+    },
+  };
+  const html = p._calibrationCard();
+  assert.match(html, /Letzte Ruhe vor Ladebeginn: 10 min/);
+  assert.match(html, /Angestrebte Ruhe bis/);
+});
