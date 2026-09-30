@@ -311,3 +311,21 @@ def test_remaining_precharge_rest_does_not_invalidate_a_sufficient_short_window(
     assert result["calibration"]["heute_e"]["ok"] is True
     assert result["calibration"]["heute_e"]["longest_h"] == 9.5
     assert result["calibration"]["phase"] == "wait"
+
+
+def test_temporary_low_live_pv_does_not_discard_later_calibration_window():
+    hass, payload = _waiting_venus_e(phase="wait")
+    hass.states.states["sensor.aktuelle_pv_leistung"] = fx.state(1050, fx.NOW, "W")
+    for direction in ("sw", "so", "no"):
+        buckets = {
+            datetime.fromtimestamp(fx.DAY + index * 900, timezone.utc).isoformat():
+            (175 if 28 <= index < 76 else 0)
+            for index in range(96)
+        }
+        hass.states.states[f"sensor.{direction}_energy_production_today"] = fx.state(
+            30, fx.NOW, unit="kWh", wh_period_15m=buckets)
+    with patch.dict(sys.modules, stubs):
+        result = planner.calculate_plan(hass, payload)
+    assert result["plan"]["prognose_kurzfristfaktor"] == 0.5
+    assert result["calibration"]["heute_e"]["ok"] is True
+    assert result["calibration"]["heute_e"]["longest_h"] == 10.5

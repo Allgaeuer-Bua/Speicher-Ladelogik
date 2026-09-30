@@ -1261,7 +1261,10 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         # The lower rest is preferred, but must not remove a usable PV window
         # from the forecast. Its actual duration is recorded at charge start.
         earliest = NOW
-        previews_today[key] = continuous_window(today["rows"], earliest, hours, load, min(day_factor, short_factor) * safety)
+        # Match the time-dependent correction used by the normal PV plan.
+        # A temporary live PV shortfall must not discount every later bucket
+        # by the same near-term factor. `rows` already includes safety.
+        previews_today[key] = continuous_window(rows, earliest, hours, load, 1)
         previews_tomorrow[key] = continuous_window(tomorrow["rows"], max(DAY1, earliest), hours, load, safety)
         previews_today[key]["energy_kwh"] = round(calibration_energy, 4)
         previews_today[key]["energy_source"] = calibration_energy_source
