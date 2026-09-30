@@ -1,5 +1,10 @@
 # Änderungen
 
+## 2.0.2
+
+- Das Kalibrierfenster für heute nutzt die gleiche zeitabhängige PV-Prognosekorrektur wie die Tagesplanung. Ein vorübergehender Einbruch der aktuellen PV-Leistung verkürzt damit nicht pauschal alle späteren Prognoseabschnitte.
+- Die Prognosesicherheit wird weiterhin einmal berücksichtigt; die Fensterberechnung für morgen bleibt unverändert.
+
 ## 2.0.1
 
 - Kalibrierung: Ein laufender Auftrag kann mit „Heute“ oder „Morgen“ neu terminiert werden; ein bereits begonnenes PV-Fenster wird bei ausreichendem realem Überschuss nicht durch eine neue Prognose verworfen.

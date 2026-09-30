@@ -94,7 +94,7 @@ def test_venus_a_near_full_keeps_register_in_real_peak_planner():
     with patch.dict(sys.modules, stubs):
         hass.states.states.update(runtime.planner_states(controls))
         payload["prior_plan"] = {
-            "version": "2.0.1", "berechnet_ts": fx.NOW - 20,
+            "version": "2.0.2", "berechnet_ts": fx.NOW - 20,
             "betriebsart": "Automatik", "regelung_aktiv": True,
             "daten_gueltig": True, "mittagsspitzen_aktiv": True,
             "fahrplan_slot_start_ts": int(fx.NOW // 900) * 900,
