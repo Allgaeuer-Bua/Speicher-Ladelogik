@@ -106,3 +106,78 @@ def test_venus_a_near_full_keeps_register_in_real_peak_planner():
     assert plan["soll_ladegrenze_venus_a_w"] == 1100
     assert plan["fahrplan_slot_aktiv_venus_a"] is False
     assert plan["soll_ladeleistung_gesamt_w"] == 0
+
+
+def _waiting_venus_e(*, phase="wait", soc=13, pause_minutes=45, earliest=None):
+    hass, payload = fx.scenario(primary_phase="idle", secondary_phase="idle",
+                                pv=3000, live_load=126)
+    hass.states.states["sensor.marstek_venus_e_soc"] = fx.state(soc, fx.NOW, "%")
+    session = fx.persistence.read_session("")
+    session.update(p=phase, b="E", t=fx.NOW - pause_minutes * 60,
+                   s=fx.NOW - 900, x=fx.NOW + 12 * 3600,
+                   n=earliest if earliest is not None else fx.DAY, z=1,
+                   r="waiting_pv" if phase == "wait" else "empty_resting")
+    controls = dict(runtime.CONTROL_DEFAULTS)
+    controls.update(mode="Automatik", kalibrierung_e_freigegeben=True,
+                    kalibrierleistung_w=550, kalibrierung_ruhe_unten_min=pause_minutes,
+                    kalibrierung_sicherung="backup2|0|-1|0|1500|-1|2500",
+                    kalibrierung_sitzung=fx.persistence.encode_session(session))
+    with patch.dict(sys.modules, stubs):
+        hass.states.states.update(runtime.planner_states(controls))
+    return hass, payload
+
+
+def test_today_button_retimes_waiting_tomorrow_calibration_and_starts_with_live_pv():
+    hass, payload = _waiting_venus_e(earliest=fx.DAY + 86400)
+    with patch.dict(sys.modules, stubs):
+        before = planner.calculate_plan(hass, payload)
+        payload["request"] = "cal_e"
+        after = planner.calculate_plan(hass, payload)
+    assert before["calibration"]["phase"] == "wait"
+    assert before["calibration"]["auftraege"][0]["fruehestens_ts"] == fx.DAY + 86400
+    assert before["calibration"]["heute_e"]["ok"] is True
+    assert after["calibration"]["phase"] == "charge"
+    assert after["calibration"]["auftraege"][0]["fruehestens_ts"] == fx.DAY
+    assert after["calibration"]["leistung_w"] == 550
+
+
+def test_empty_rest_does_not_restart_after_one_percent_soc_rebound():
+    hass, payload = _waiting_venus_e(phase="empty_rest", soc=14)
+    with patch.dict(sys.modules, stubs):
+        result = planner.calculate_plan(hass, payload)
+    assert result["calibration"]["phase"] == "wait"
+    assert result["calibration"]["heute_e"]["ok"] is True
+
+
+def test_started_wait_window_can_charge_with_live_surplus_after_forecast_moves():
+    hass, payload = _waiting_venus_e()
+    for direction in ("sw", "so", "no"):
+        key = f"sensor.{direction}_energy_production_today"
+        buckets = {
+            datetime.fromtimestamp(fx.DAY + index * 900, timezone.utc).isoformat():
+            (350 if index < 30 else 0)
+            for index in range(96)
+        }
+        hass.states.states[key] = fx.state(20, fx.NOW, unit="kWh", wh_period_15m=buckets)
+    with patch.dict(sys.modules, stubs):
+        result = planner.calculate_plan(hass, payload)
+    assert result["calibration"]["heute_e"]["ok"] is False
+    assert result["calibration"]["phase"] == "charge"
+
+
+def test_booked_window_still_requires_live_surplus_and_empty_battery():
+    for soc, pv in ((13, 150), (15, 3000)):
+        hass, payload = _waiting_venus_e(soc=soc)
+        hass.states.states["sensor.aktuelle_pv_leistung"] = fx.state(pv, fx.NOW, "W")
+        with patch.dict(sys.modules, stubs):
+            result = planner.calculate_plan(hass, payload)
+        assert result["calibration"]["phase"] != "charge"
+
+
+def test_today_request_during_register_restore_is_queued_for_after_restore():
+    hass, payload = _waiting_venus_e(phase="restore", earliest=fx.DAY + 86400)
+    payload["request"] = "cal_e"
+    with patch.dict(sys.modules, stubs):
+        result = planner.calculate_plan(hass, payload)
+    assert result["calibration"]["vormerkungen"][0]["batterie"] == "E"
+    assert result["calibration"]["vormerkungen"][0]["fruehestens_ts"] == fx.DAY

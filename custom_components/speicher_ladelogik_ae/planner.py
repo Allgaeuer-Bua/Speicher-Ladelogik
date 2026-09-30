@@ -630,7 +630,12 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 transition(s, "restore", "retry_window")
         elif p == "empty_rest":
             bat = context["batteries"][key]
-            if not bat["cal_empty_ready"]:
+            # A resting BMS can report a one-percent SoC rebound. Once the
+            # lower rest has begun, only a material rise invalidates it.
+            still_empty = (bat["cal_empty_ready"] or
+                           (bat["soc"] is not None and bat["soc"] <= 14 and
+                            bat["highest_soc"] is not None and bat["highest_soc"] <= 14.5))
+            if not still_empty:
                 transition(s, "drain", "natural_discharge")
             elif NOW - s["t"] >= EMPTY_REST_SECONDS:
                 preview = (
@@ -650,22 +655,32 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 if s["n"] <= DAY0
                 else context["tomorrow"][key]
             )
+            booked_window_active = (s["n"] <= DAY0 and s["s"] > 0 and
+                                    s["s"] <= NOW < s["x"])
             if preview["ok"] and preview["start"] >= s["n"]:
-                s["s"] = int(preview["start"])
-                s["x"] = int(preview["end"])
-            elif s["n"] <= DAY0:
+                # Keep a started window while real PV is sufficient. Moving
+                # its start on every forecast refresh can postpone it forever.
+                if not booked_window_active:
+                    s["s"] = int(preview["start"])
+                    s["x"] = int(preview["end"])
+            elif s["n"] <= DAY0 and not booked_window_active:
                 transition(s, "restore", "retry_window")
             if (
                 s["p"] == "wait"
                 and s["s"] <= NOW
                 and s["n"] <= DAY0
-                and preview["ok"]
+                and (preview["ok"] or booked_window_active)
                 and calibration_surplus >= required_start
             ):
-                if context["batteries"][key]["cal_empty_ready"]:
+                bat = context["batteries"][key]
+                still_empty = (bat["cal_empty_ready"] or
+                               (bat["soc"] is not None and bat["soc"] <= 14 and
+                                bat["highest_soc"] is not None and bat["highest_soc"] <= 14.5))
+                if still_empty:
                     transition(s, "charge", "charging")
-                    s["s"] = int(preview["start"])
-                    s["x"] = int(preview["end"])
+                    if not booked_window_active:
+                        s["s"] = int(preview["start"])
+                        s["x"] = int(preview["end"])
                     s["q"] = int(NOW)
                     s["v"] = 0
                     s["w"] = 0
@@ -1303,11 +1318,21 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             queue_notify = "Vormerkung erfordert Automatik und die Kalibrierfreigabe für " + SLOT_NAMES[key] + "."
         elif any(s["p"] in ACTIVE_PHASES and s["b"] == key for s in (session, secondary)):
             current = next(s for s in (session, secondary) if s["p"] in ACTIVE_PHASES and s["b"] == key)
-            if current["p"] == "requested":
+            if current["p"] in {"requested", "drain", "empty_rest", "wait"} or (
+                current["p"] == "paused" and current["u"] in {"requested", "drain", "empty_rest", "wait"}
+            ):
                 current["n"] = not_before
-                current["s"] = 0
-                current["x"] = 0
+                if current["p"] == "requested":
+                    current["s"] = 0
+                    current["x"] = 0
+                elif current["p"] == "wait" or current["p"] == "paused" and current["u"] == "wait":
+                    # Re-evaluate the chosen day immediately on the next step.
+                    current["s"] = 0
+                    current["x"] = 0
                 queue_notify = "Termin für " + SLOT_NAMES[key] + " aktualisiert."
+            elif current["p"] == "restore":
+                queue[key] = {"n": not_before, "t": int(NOW), "d": "-"}
+                queue_notify = SLOT_NAMES[key] + " wird nach Rückgabe der Grenzwerte erneut vorbereitet."
             else:
                 queue_notify = SLOT_NAMES[key] + " wird bereits vorbereitet oder kalibriert."
         else:
