@@ -25,6 +25,8 @@ Seit v2.0.1 ist die eingestellte Ruhezeit **vor** der Kalibrierladung ein Wunsch
 
 Seit v2.0.2 wird ein kurzfristiger PV-Einbruch bei der Kalibrierfensteranzeige für heute nicht mehr pauschal auf den gesamten restlichen Tag übertragen. Die Anzeige bewertet spätere 15-Minuten-Prognosen mit der zeitabhängigen Korrektur der Tagesplanung.
 
+Ab v2.0.3 beginnt ein vorbereiteter Speicher bei mindestens 600 W frischer Einspeisung am zugeordneten Netzsensor. Die angestrebte Ruhezeit vor dem Laden und das prognostizierte Zeitfenster verhindern den Start nicht; der untere SoC für die Kalibrierung liegt bei 14 %. Ein kurzer Ertragseinbruch oder höchstens 400 W Ladeleistung beendet die Kalibrierladung nicht. Für diese Fälle und für knappe Prognosen erzeugt die Integration HA-Warnungen. Für zusätzliche Push-Nachrichten muss in den Integrationsoptionen ein Handy-Dienst wie `notify.mobile_app_mein_geraet` hinterlegt sein. Gerätegrenzen, Datenprüfungen und die obere Ruhezeit gelten weiterhin.
+
 ## Entwicklung
 
 ```sh

@@ -10,9 +10,9 @@ const TABS = [
 const PHASE_LABELS = {
   idle: "Bereit",
   requested: "Auftrag vorgemerkt",
-  drain: "Entladen auf 13 %",
+  drain: "Entladen auf 14 %",
   empty_rest: "Untere Ruhephase",
-  wait: "Warten auf PV-Fenster",
+  wait: "Warten auf 600 W Einspeisung",
   charge: "Kalibrierladung",
   rest: "Obere Ruhephase",
   full_rest: "Obere Ruhephase",
@@ -824,17 +824,17 @@ class SpeicherLadelogikPanel extends HTMLElement {
       const mode = this._batteryMode(power);
       const icon = mode.tone === "charge" ? "mdi:battery-arrow-up-outline"
         : mode.tone === "discharge" ? "mdi:battery-arrow-down-outline" : "mdi:battery-outline";
-      const y = model === "A" ? 170 : 365;
+      const y = model === "A" ? 180 : 390;
       const route = power < -10
-        ? `M 500 270 C 620 250 730 ${y} 850 ${y}`
-        : `M 850 ${y} C 730 ${y} 620 250 500 270`;
+        ? `M 500 300 C 620 280 730 ${y} 850 ${y}`
+        : `M 850 ${y} C 730 ${y} 620 280 500 300`;
       return { model, suffix, power, soc, icon, route };
     });
     const gridDirection = this._gridDirection(grid);
     const gridPath = gridDirection === "import"
-      ? "M 140 270 C 260 270 380 270 500 270"
-      : "M 500 270 C 380 270 260 270 140 270";
-    const pvPath = "M 500 100 C 500 150 500 210 500 270";
+      ? "M 140 300 C 260 300 380 300 500 300"
+      : "M 500 300 C 380 300 260 300 140 300";
+    const pvPath = "M 500 80 C 500 150 500 230 500 300";
     return {
       pv, grid, home, batteries, gridDirection, gridPath, pvPath,
     };
@@ -1162,7 +1162,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       ? ` · angestrebt noch ca. ${Math.ceil(restSeconds / 60)} min`
       : "";
     const chargeStart = this._attr("kalibrierung", "ladebeginn_voraussichtlich_ts");
-    const chargeHint = chargeStart && (phase.includes("Untere Ruhephase") || phase.includes("Wartet auf PV-Fenster"))
+    const chargeHint = chargeStart && (phase.includes("Untere Ruhephase") || phase.includes("Wartet auf 600 W Einspeisung"))
       ? `<small>Kalibrierladung frühestens ${esc(this._time(chargeStart))} bei ausreichend PV</small>` : "";
     const statusText = reason && reason !== "—"
       ? reason : phase === "Bereit" ? "Kein Kalibrierauftrag aktiv" : phase;
@@ -1170,7 +1170,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       <section class="card span-full calibration-card">
         ${this._cardTitle("mdi:battery-sync-outline", "Kalibrierung", this._badge(cal?.state || "—", cal?.state === "Bereit" ? "good" : "warn"))}
         ${this._calibrationJobs().length ? this._calibrationJobsCard() : `<div class="cal-state"><div><span>Speicher</span><strong>${esc(batteryName)}</strong><small>Gerät des aktuellen Kalibrierauftrags</small></div><div><span>Status</span><strong>${esc(statusText)}</strong><small>Aktuelle Phase: ${esc(phase)}${esc(restHint)}</small>${chargeHint}</div><div><span>Energie</span><strong>${this._energy(this._attr("kalibrierung", "energie_ac_kwh"))}</strong><small>Bisher in diesem Kalibrierlauf geladene AC-Energie</small></div></div>`}
-        <div class="control-list calibration-setting">${this._numberRow(["kalibrierleistung", "Kalibrierleistung", "Leistung für die vollständige Kalibrierladung"])}${this._numberRow(["kalibrierung_ruhe_unten", "Ruhezeit vor dem Laden", "Angestrebt ab unterem SoC; ein nutzbares PV-Fenster kann den Start vorziehen"])}${this._numberRow(["kalibrierung_ruhe_oben", "Ruhezeit nach dem Laden", "Ab bestätigten 100 %; benötigt kein PV-Fenster"])}${this._toggleRow("kalibrierung_parallel", "Zwei Speicher gleichzeitig", "Nur bei zwei vorbereiteten Speichern und ausreichend gemeinsamem PV-Überschuss", "mdi:battery-sync")}</div>
+        <div class="control-list calibration-setting">${this._numberRow(["kalibrierleistung", "Kalibrierleistung", "Leistung für die vollständige Kalibrierladung"])}${this._numberRow(["kalibrierung_ruhe_unten", "Ruhezeit vor dem Laden", "Angestrebt ab unterem SoC; bei 600 W gemessener Einspeisung beginnt die Ladung auch früher mit Warnung"])}${this._numberRow(["kalibrierung_ruhe_oben", "Ruhezeit nach dem Laden", "Ab bestätigten 100 %; benötigt kein PV-Fenster"])}${this._toggleRow("kalibrierung_parallel", "Zwei Speicher gleichzeitig", "Nur bei zwei vorbereiteten Speichern und ausreichend gemeinsamem PV-Überschuss", "mdi:battery-sync")}</div>
 
         <div class="cal-window-grid">
           ${this._models().map((model) => {
@@ -1276,13 +1276,13 @@ class SpeicherLadelogikPanel extends HTMLElement {
       .early-goals{margin:14px 0;padding:12px;border:1px solid var(--line);border-radius:10px}.early-goals>strong{display:block;margin-bottom:8px}.early-goal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 15px}.control-explanation{font-size:12px;color:var(--muted);line-height:1.5;margin:8px 0}.early-goal-grid .control-row{min-width:0}
       @media(max-width:720px){.early-goal-grid{grid-template-columns:1fr}}
       @media(max-width:720px){.battery-diagnostics{grid-template-columns:1fr}}
-      .flow-card .flow-node.grid{left:14%;top:54%}.flow-card .flow-node.pv{top:20%}.flow-card .flow-node.home{left:50%;top:54%}
-      .flow-card .flow-node.battery-a{left:85%;top:34%;color:#38d582}.flow-card .flow-node.battery-e{left:85%;top:73%;color:#6dd7e2}
+      .flow-card .flow-canvas{min-height:520px}.flow-card .flow-node.grid{left:14%;top:60%}.flow-card .flow-node.pv{top:16%}.flow-card .flow-node.home{left:50%;top:60%}
+      .flow-card .flow-node.battery-a{left:85%;top:36%;color:#38d582}.flow-card .flow-node.battery-e{left:85%;top:78%;color:#6dd7e2}
       .flow-card .flow-node.battery{cursor:pointer}.flow-card .flow-node.battery>span{font-weight:700;color:var(--primary-text-color)}
       .battery-upper{display:block}.battery-history{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
       .soc-overview{min-height:0}.soc-summaries{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:12px 0 18px}
       .soc-summary{display:flex;align-items:center;justify-content:space-between;padding:12px;border-radius:10px;background:rgba(110,135,125,.07)}.soc-summary strong{font-size:21px;color:var(--accent)}
-      @media(max-width:720px){.flow-card .flow-node.grid{left:13%}.flow-card .flow-node.home{left:50%}.flow-card .flow-node.battery-a,.flow-card .flow-node.battery-e{left:87%}.soc-summaries{gap:8px}.soc-summary{padding:9px}.soc-summary strong{font-size:16px}}
+      @media(max-width:720px){.flow-card .flow-canvas{min-height:390px}.flow-card .flow-node.grid{left:13%}.flow-card .flow-node.pv{top:16%}.flow-card .flow-node.home{left:50%}.flow-card .flow-node.battery-a,.flow-card .flow-node.battery-e{left:87%}.soc-summaries{gap:8px}.soc-summary{padding:9px}.soc-summary strong{font-size:16px}}
       @media(prefers-reduced-motion:reduce){.flow-dots.active{animation-duration:3s}}
     `;
   }
@@ -1443,7 +1443,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 }
 
-const PANEL_ELEMENT = "speicher-ladelogik-ae-panel-2-0-2";
+const PANEL_ELEMENT = "speicher-ladelogik-ae-panel-2-0-3";
 
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);

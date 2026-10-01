@@ -1,5 +1,11 @@
 # Änderungen
 
+## 2.0.3
+
+- Der Energiefluss zeigt Solar und Haus mit größerem Abstand, auch auf schmalen Bildschirmen.
+- Bei Kalibrierung startet ein vorbereiteter Speicher ab 600 W frisch gemessener Netzeinspeisung; die angestrebte untere Ruhezeit und eine ausreichend lange Prognose sind keine Start- oder Abbruchbedingungen mehr. Die untere SoC-Grenze beträgt 14 %.
+- Zu kurze Vorruhezeit, ein zu knappes Prognosefenster und weniger als 400 W Einspeisung lösen eine HA-Warnung und eine Push-Nachricht an den konfigurierten Handy-Dienst aus. Gemessene Ladeleistung bis 400 W wird nach fünf Minuten gemeldet, ohne deswegen zu pausieren. Geräteschutz und Prüfungen für ungültige Daten bleiben aktiv.
+
 ## 2.0.2
 
 - Das Kalibrierfenster für heute nutzt die gleiche zeitabhängige PV-Prognosekorrektur wie die Tagesplanung. Ein vorübergehender Einbruch der aktuellen PV-Leistung verkürzt damit nicht pauschal alle späteren Prognoseabschnitte.
