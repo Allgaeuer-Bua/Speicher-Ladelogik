@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .compat import legacy_entity_id
+from .calibration_alerts import active_alerts
 from .const import (
     COMMON_KEYS,
     CONF_A_AC_POWER,
@@ -138,6 +139,7 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._problem_signature: str | None = None
         self._mobile_problem_signature: str | None = None
         self._calibration_notification_signature: Any = None
+        self._calibration_alert_sent: set[tuple[str, int, str]] = set()
         self._stability_store: Store[dict[str, Any]] = Store(
             hass,
             _STABILITY_STORAGE_VERSION,
@@ -392,6 +394,7 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             result = self._collect_data()
         await self._async_update_calibration_due_notification(result)
         await self._async_update_calibration_notification(result)
+        await self._async_update_calibration_alerts(result)
         await self._async_update_problem_notification(result)
         return result
 
@@ -606,7 +609,7 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     slot, now=now_ts, power=result.get(f"ac_leistung_venus_{name}_w"),
                     fresh=plan.get(f"ac_leistung_venus_{name}_frisch", False),
                     soc=plan.get(f"soc_venus_{name}"), nominal=plan.get(f"nennkapazitaet_venus_{name}_kwh"),
-                    floor=13 if job.get("phase") == "drain" else plan.get(f"untere_geraetegrenze_venus_{name}_prozent"),
+                    floor=14 if job.get("phase") == "drain" else plan.get(f"untere_geraetegrenze_venus_{name}_prozent"),
                     goal=plan.get(f"obere_geraetegrenze_venus_{name}_prozent"),
                     need=plan.get(f"restbedarf_venus_{name}_kwh"), efficiency=eta / 100,
                     calibration_ac_remaining=calibration_remaining,
@@ -979,6 +982,38 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             lines.append(self.storage_name(calibration.get("batterie", "")) + ": " + str(calibration.get("grund", "")))
         await self._async_notification("speicher_ladelogik_ae_kalibrierung",
                                        "Speicher-Ladelogik A/E – Kalibrierung", "\n\n".join(lines))
+
+    async def _async_update_calibration_alerts(self, data: dict[str, Any]) -> None:
+        """Push each advisory once; rearm low-power alerts after recovery."""
+        calibration = data.get("calibration", {})
+        now = dt_util.utcnow().timestamp()
+        active = active_alerts(
+            calibration,
+            {slot: data.get(f"ac_leistung_venus_{slot.lower()}_w")
+             for slot in self.enabled_models},
+            now,
+        )
+        running = {
+            (job.get("batterie"), int(job.get("start_ts")))
+            for job in calibration.get("laufende_laeufe", [])
+            if job.get("phase") == "charge" and job.get("start_ts")
+        }
+        for key in tuple(self._calibration_alert_sent):
+            if key[:2] not in running or (key[2] in {"low_export", "low_charge"} and key not in active):
+                self._calibration_alert_sent.discard(key)
+                await self._async_dismiss_notification(
+                    f"speicher_ladelogik_ae_kalibrierwarn_{key[0].lower()}_{key[2]}"
+                )
+        for key, message in active.items():
+            if key in self._calibration_alert_sent:
+                continue
+            title = "Speicher-Ladelogik A/E – Kalibrierwarnung"
+            await self._async_notification(
+                f"speicher_ladelogik_ae_kalibrierwarn_{key[0].lower()}_{key[2]}",
+                title, message,
+            )
+            await self._async_mobile_notification(title, message)
+            self._calibration_alert_sent.add(key)
 
     async def _async_update_calibration_due_notification(self, data: dict[str, Any]) -> None:
         """Notify once when a known successful calibration becomes 30 days old."""

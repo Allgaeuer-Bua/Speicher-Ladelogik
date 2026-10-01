@@ -27,6 +27,7 @@ with patch.dict(sys.modules, stubs):
     stability = import_module("ae_fixture.stability")
     planner = import_module("ae_fixture.planner")
     runtime = import_module("ae_fixture.runtime")
+    calibration_alerts = import_module("ae_fixture.calibration_alerts")
 
 
 def test_ae_configuration_has_only_two_models_and_keeps_optional_a_mppts():
@@ -145,7 +146,7 @@ def test_empty_rest_does_not_restart_after_one_percent_soc_rebound():
     hass, payload = _waiting_venus_e(phase="empty_rest", soc=14)
     with patch.dict(sys.modules, stubs):
         result = planner.calculate_plan(hass, payload)
-    assert result["calibration"]["phase"] == "wait"
+    assert result["calibration"]["phase"] == "charge"
     assert result["calibration"]["heute_e"]["ok"] is True
 
 
@@ -165,10 +166,10 @@ def test_started_wait_window_can_charge_with_live_surplus_after_forecast_moves()
     assert result["calibration"]["phase"] == "charge"
 
 
-def test_booked_window_still_requires_live_surplus_and_empty_battery():
-    for soc, pv in ((13, 150), (15, 3000)):
+def test_calibration_start_requires_600w_fresh_meter_export_and_empty_battery():
+    for soc, export in ((13, 599), (15, 1500)):
         hass, payload = _waiting_venus_e(soc=soc)
-        hass.states.states["sensor.aktuelle_pv_leistung"] = fx.state(pv, fx.NOW, "W")
+        hass.states.states["sensor.stromzahler_leistung"] = fx.state(-export, fx.NOW, "W")
         with patch.dict(sys.modules, stubs):
             result = planner.calculate_plan(hass, payload)
         assert result["calibration"]["phase"] != "charge"
@@ -197,7 +198,7 @@ def test_marginal_forecast_waits_then_starts_on_live_surplus_instead_of_retrying
         first = planner.calculate_plan(hass, payload)
         assert first["calibration"]["heute_e"]["ok"] is False
         assert first["calibration"]["heute_e"]["longest_h"] >= 8.86
-        assert first["calibration"]["phase"] == "wait"
+        assert first["calibration"]["phase"] == "charge"
         hass.states.states["input_text.speicher_ladelogik_ae_kalibrierung_sitzung"] = fx.state(
             first["session"], fx.NOW)
         second = planner.calculate_plan(hass, payload)
@@ -261,20 +262,18 @@ def test_lower_rest_is_preferred_but_live_pv_can_start_charge_early_and_record_d
         fx.persistence.encode_session(session), fx.NOW)
     with patch.dict(sys.modules, stubs):
         ready = planner.calculate_plan(hass, payload)
-        assert ready["calibration"]["phase"] == "wait"
+        assert ready["calibration"]["phase"] == "charge"
         assert ready["calibration"]["heute_e"]["ok"] is True
+        assert ready["calibration"]["letzte_ruhe_vor_laden_s_e"] == 10 * 60
+        assert ready["learning"]["last_precharge_rest"]["E"]["seconds"] == 10 * 60
+        hass.states.states["sensor.speicher_ladelogik_ae_lernspeicher"] = fx.state(
+            "bereit", fx.NOW, **ready["learning"])
         hass.states.states["input_text.speicher_ladelogik_ae_kalibrierung_sitzung"] = fx.state(
             ready["session"], fx.NOW)
         charging = planner.calculate_plan(hass, payload)
         assert charging["calibration"]["phase"] == "charge"
         assert charging["calibration"]["letzte_ruhe_vor_laden_s_e"] == 10 * 60
         assert charging["learning"]["last_precharge_rest"]["E"]["seconds"] == 10 * 60
-        hass.states.states["sensor.speicher_ladelogik_ae_lernspeicher"] = fx.state(
-            "bereit", fx.NOW, **charging["learning"])
-        hass.states.states["input_text.speicher_ladelogik_ae_kalibrierung_sitzung"] = fx.state(
-            charging["session"], fx.NOW)
-        continued = planner.calculate_plan(hass, payload)
-    assert continued["calibration"]["letzte_ruhe_vor_laden_s_e"] == 10 * 60
 
 
 def test_lower_rest_waits_when_live_pv_is_insufficient():
@@ -285,10 +284,11 @@ def test_lower_rest_waits_when_live_pv_is_insufficient():
     hass.states.states["input_text.speicher_ladelogik_ae_kalibrierung_sitzung"] = fx.state(
         fx.persistence.encode_session(session), fx.NOW)
     hass.states.states["sensor.aktuelle_pv_leistung"] = fx.state(150, fx.NOW, "W")
+    hass.states.states["sensor.stromzahler_leistung"] = fx.state(-100, fx.NOW, "W")
     with patch.dict(sys.modules, stubs):
         result = planner.calculate_plan(hass, payload)
-    assert result["calibration"]["phase"] == "empty_rest"
-    assert result["calibration"]["ruhe_verbleibend_s"] == 35 * 60
+    assert result["calibration"]["phase"] == "wait"
+    assert result["calibration"]["ruhe_verbleibend_s"] == 0
 
 
 def test_remaining_precharge_rest_does_not_invalidate_a_sufficient_short_window():
@@ -310,7 +310,7 @@ def test_remaining_precharge_rest_does_not_invalidate_a_sufficient_short_window(
         result = planner.calculate_plan(hass, payload)
     assert result["calibration"]["heute_e"]["ok"] is True
     assert result["calibration"]["heute_e"]["longest_h"] == 9.5
-    assert result["calibration"]["phase"] == "wait"
+    assert result["calibration"]["phase"] == "charge"
 
 
 def test_temporary_low_live_pv_does_not_discard_later_calibration_window():
@@ -329,3 +329,73 @@ def test_temporary_low_live_pv_does_not_discard_later_calibration_window():
     assert result["plan"]["prognose_kurzfristfaktor"] == 0.5
     assert result["calibration"]["heute_e"]["ok"] is True
     assert result["calibration"]["heute_e"]["longest_h"] == 10.5
+
+
+def test_14_percent_with_uneven_packs_can_start_on_meter_export_without_full_rest():
+    hass, payload = fx.scenario(primary_phase="empty_rest", secondary_phase="idle")
+    hass.states.states["sensor.marstek_venus_a_soc_batterie"] = fx.state(14, fx.NOW, "%")
+    hass.states.states["sensor.marstek_venus_a_soc_batteriepack_1"] = fx.state(13, fx.NOW, "%")
+    hass.states.states["sensor.marstek_venus_a_soc_batteriepack_2"] = fx.state(14, fx.NOW, "%")
+    controls = dict(runtime.CONTROL_DEFAULTS)
+    controls.update(mode="Automatik", kalibrierung_a_freigegeben=True,
+                    kalibrierung_ruhe_unten_min=60,
+                    kalibrierung_sicherung="backup2|0|500|0|1500|0|2500",
+                    kalibrierung_sitzung=hass.states.get(
+                        "input_text.speicher_ladelogik_ae_kalibrierung_sitzung").state)
+    with patch.dict(sys.modules, stubs):
+        hass.states.states.update(runtime.planner_states(controls))
+        result = planner.calculate_plan(hass, payload)
+    assert result["calibration"]["phase"] == "charge"
+    assert result["calibration"]["letzte_ruhe_vor_laden_s_a"] == 100
+    assert result["calibration"]["ruhedauer_unten_min"] == 60
+
+
+def test_short_forecast_does_not_abort_prepared_battery_or_running_charge():
+    hass, payload = _waiting_venus_e(phase="drain", soc=20)
+    for direction in ("sw", "so", "no"):
+        key = f"sensor.{direction}_energy_production_today"
+        hass.states.states[key] = fx.state(0, fx.NOW, unit="kWh", wh_period_15m={})
+    with patch.dict(sys.modules, stubs):
+        draining = planner.calculate_plan(hass, payload)
+    assert draining["calibration"]["heute_e"]["ok"] is False
+    assert draining["calibration"]["phase"] == "drain"
+
+    hass, payload = fx.scenario(primary_phase="charge", secondary_phase="idle")
+    hass.states.states["sensor.stromzahler_leistung"] = fx.state(-100, fx.NOW, "W")
+    for direction in ("sw", "so", "no"):
+        hass.states.states[f"sensor.{direction}_energy_production_today"] = fx.state(
+            0, fx.NOW, unit="kWh", wh_period_15m={})
+    with patch.dict(sys.modules, stubs):
+        charging = planner.calculate_plan(hass, payload)
+    assert charging["calibration"]["phase"] == "charge"
+
+
+def test_calibration_push_conditions_are_advisory_and_specific():
+    calibration = {
+        "laufende_laeufe": [{"batterie": "E", "name": "Venus E", "phase": "charge",
+                            "start_ts": fx.NOW - 600, "unter_400_seit_ts": fx.NOW - 301}],
+        "netzleistung_w": -100, "ruhedauer_unten_min": 45,
+        "letzte_ruhe_vor_laden_s_e": 300,
+        "letzte_ruhe_vor_laden_ts_e": fx.NOW - 600,
+        "leistung_w": 500, "heute_e": {"ok": False, "longest_h": 8, "energy_kwh": 5.15},
+    }
+    alerts = calibration_alerts.active_alerts(calibration, {"E": -350}, fx.NOW)
+    assert {key[2] for key in alerts} == {"short_rest", "short_window", "low_export", "low_charge"}
+    assert all("läuft weiter" in message for message in alerts.values())
+    calibration["laufende_laeufe"][0]["unter_400_seit_ts"] = fx.NOW - 60
+    assert not any(key[2] == "low_charge" for key in calibration_alerts.active_alerts(calibration, {"E": 0}, fx.NOW))
+
+
+def test_running_calibration_continues_below_400w_and_past_forecast_end():
+    hass, payload = fx.scenario(primary_phase="charge", secondary_phase="idle")
+    session_key = "input_text.speicher_ladelogik_ae_kalibrierung_sitzung"
+    session = fx.persistence.read_session(hass.states.get(session_key).state)
+    session.update(t=fx.NOW - 1800, x=fx.NOW - 3600, l=fx.NOW - 400,
+                   q=fx.NOW - 15, h=1)
+    hass.states.states[session_key] = fx.state(fx.persistence.encode_session(session), fx.NOW)
+    hass.states.states["sensor.marstek_venus_a_ac_leistung"] = fx.state(-350, fx.NOW, "W")
+    hass.states.states["sensor.stromzahler_leistung"] = fx.state(-100, fx.NOW, "W")
+    with patch.dict(sys.modules, stubs):
+        result = planner.calculate_plan(hass, payload)
+    assert result["calibration"]["phase"] == "charge"
+    assert result["calibration"]["laufende_laeufe"][0]["unter_400_seit_ts"] == fx.NOW - 400

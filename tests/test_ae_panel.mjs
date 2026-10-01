@@ -10,7 +10,7 @@ globalThis.customElements = {
   define: (name, klass) => registry.set(name, klass),
 };
 await import("../custom_components/speicher_ladelogik_ae/frontend/speicher-ladelogik-ae-panel.js");
-const Panel = registry.get("speicher-ladelogik-ae-panel-2-0-2");
+const Panel = registry.get("speicher-ladelogik-ae-panel-2-0-3");
 
 function panel() {
   const instance = new Panel();
@@ -40,6 +40,13 @@ test("independent battery flows retain their own power, direction, SoC and sourc
   assert.match(html, /data-flow-route="battery-a"/);
   assert.match(html, /data-flow-route="battery-e"/);
   assert.doesNotMatch(html, /data-live-flow="battery-soc"/);
+});
+
+test("solar and house nodes have a longer vertical connection", () => {
+  const p = panel();
+  const data = p._flowData();
+  assert.equal(data.pvPath, "M 500 80 C 500 150 500 230 500 300");
+  assert.match(p._styles(), /\.flow-card \.flow-canvas\{min-height:520px\}/);
 });
 
 test("overview has separate SoC values and no daily energy card", () => {
