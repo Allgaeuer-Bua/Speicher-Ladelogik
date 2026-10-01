@@ -646,7 +646,11 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 s["h"] = 1
             if context["batteries"][key]["cal_empty_ready"]:
                 transition(s, "empty_rest", "empty_resting")
-            elif s["n"] <= DAY0 and not preview["ok"]:
+            elif s["n"] <= DAY0 and not preview["ok"] and NOW >= DAY1 - 4 * 3600:
+                # A near-complete window can still start with measured surplus
+                # once the battery is empty. Do not abandon the preparation
+                # just because the remaining forecast slips below the exact
+                # required duration before the wait phase is reached.
                 transition(s, "restore", "retry_window")
         elif p == "empty_rest":
             bat = context["batteries"][key]
