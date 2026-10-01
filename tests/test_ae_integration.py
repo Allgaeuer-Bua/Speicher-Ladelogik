@@ -205,6 +205,35 @@ def test_marginal_forecast_waits_then_starts_on_live_surplus_instead_of_retrying
     assert second["calibration"]["auftraege"][0]["fruehestens_ts"] == fx.DAY
 
 
+
+def test_marginal_today_window_does_not_cancel_drain_before_live_pv_can_start_charge():
+    hass, payload = _waiting_venus_e(phase="drain", soc=14, pause_minutes=0)
+    hass.states.states["input_number.speicher_ladelogik_ae_kalibrierleistung_w"] = fx.state(
+        500, fx.NOW, "W")
+    for direction in ("sw", "so", "no"):
+        buckets = {
+            datetime.fromtimestamp(fx.DAY + index * 900, timezone.utc).isoformat():
+            (350 if 28 <= index < 69 else 0)
+            for index in range(96)
+        }
+        hass.states.states[f"sensor.{direction}_energy_production_today"] = fx.state(
+            30, fx.NOW, unit="kWh", wh_period_15m=buckets)
+    with patch.dict(sys.modules, stubs):
+        draining = planner.calculate_plan(hass, payload)
+        assert draining["calibration"]["heute_e"]["ok"] is False
+        assert draining["calibration"]["heute_e"]["longest_h"] == 10.25
+        assert draining["calibration"]["heute_e"]["required_h"] == 10.3
+        assert draining["calibration"]["phase"] == "drain"
+        assert draining["calibration"]["vormerkungen"] == []
+        hass.states.states["sensor.marstek_venus_e_soc"] = fx.state(13, fx.NOW, "%")
+        for expected in ("empty_rest", "wait", "charge"):
+            hass.states.states["input_text.speicher_ladelogik_ae_kalibrierung_sitzung"] = fx.state(
+                draining["session"], fx.NOW)
+            draining = planner.calculate_plan(hass, payload)
+            assert draining["calibration"]["phase"] == expected
+    assert draining["calibration"]["leistung_w"] == 500
+
+
 def test_pause_reason_survives_resume_through_the_real_calibration_sensor():
     hass, payload = _waiting_venus_e()
     hass.states.states["sensor.marstek_venus_e_min_zelltemperatur"] = fx.state(
