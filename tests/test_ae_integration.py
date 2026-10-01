@@ -205,7 +205,6 @@ def test_marginal_forecast_waits_then_starts_on_live_surplus_instead_of_retrying
     assert second["calibration"]["auftraege"][0]["fruehestens_ts"] == fx.DAY
 
 
-
 def test_marginal_today_window_does_not_cancel_drain_before_live_pv_can_start_charge():
     hass, payload = _waiting_venus_e(phase="drain", soc=14, pause_minutes=0)
     hass.states.states["input_number.speicher_ladelogik_ae_kalibrierleistung_w"] = fx.state(
