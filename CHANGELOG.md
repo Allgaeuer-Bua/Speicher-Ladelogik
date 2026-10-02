@@ -1,5 +1,15 @@
 # Änderungen
 
+## 2.1.0
+
+- Normalen Ladeplan durch eine Tagesfreigabe je Speicher ersetzt. Die alten 15-Minuten-Ladepausen, Leistungsaufteilung und konkurrierenden Freigabewege entfallen.
+- Drei Ertragsklassen: schwach, mittel, stark. Eigene frühe SoC-Ziele je Speicher bleiben erhalten; „Wechselhaft“ dient als Zielprofil bei Prognoseunsicherheit. An schwachen Tagen keine Mittagsspitzenkappung.
+- Bevorzugte Leistung hat Vorrang. Zuerst früher starten; höhere Leistung nur bei nachgewiesen besserer Zielfüllung. PV, Hausverbrauch, Verluste und Reserven werden gemeinsam bilanziert, Speicherbedarf und Freigabe getrennt bewertet.
+- Nach der Tagesfreigabe bleiben positive Grenzen bei Wolken, Prognoseänderungen und am Abend stehen. Bei 100 % bleibt das Register erhalten; Nachladen bei 99 % erzeugt keine Leistungsspitze. Die Tagesfreigabe übersteht einen HA-Neustart.
+- Vor dem ersten Ladebeginn eines neuen mittleren/starken Tages bleibt eine 0-W-Sperre möglich, damit die spätere Mittagsspitze aufgenommen werden kann. Frühe SoC-Ziele lösen nach ihrer Erfüllung keine erneute Sperre aus.
+- Diagnose nennt die aktuelle eigene Entscheidung je Speicher. Handbetrieb der E überschreibt die Begründung für A nicht mehr. Die Oberfläche zeigt die tatsächliche Freigabe und wirksame Mittagsspitzenplanung; das ungenutzte gemeinsame Mindestleistungsfeld entfällt.
+- Bestehende Einstellungen und Kalibrieraufträge bleiben erhalten. Kalibrierung, Handbetrieb und Sicherheitsprüfungen behalten Vorrang.
+
 ## 2.0.3
 
 - Der Energiefluss zeigt Solar und Haus mit größerem Abstand, auch auf schmalen Bildschirmen.

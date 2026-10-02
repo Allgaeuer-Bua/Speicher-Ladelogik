@@ -77,8 +77,14 @@ _STABILITY_KEYS = tuple(
         f"ziel_venus_{name}_erreicht",
         f"ziel_venus_{name}_latch_soc",
         f"fahrplan_ladegrenze_stabil_venus_{name}_w",
+        f"ladefreigabe_venus_{name}_seit_ts",
     )
 ) + (
+    "berechnet_ts",
+    "knapp",
+    "tagesklasse",
+    "tagesklasse_kandidat",
+    "tagesklasse_kandidat_seit_ts",
     "daten_gueltig",
     "betriebsart",
     "regelung_aktiv",
@@ -358,7 +364,7 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # value to each day class only once; later class edits remain intact.
         migrate_legacy_day_class_goals(self._control, loaded_control, EARLY_DAY_CLASSES)
         self._sync_model_controls()
-        for obsolete in ("mindestreserve", "mindestreserve_a_kwh", "mindestreserve_d_kwh", "mindestreserve_e_kwh"):
+        for obsolete in ("min_effiziente_leistung", "mindestreserve", "mindestreserve_a_kwh", "mindestreserve_d_kwh", "mindestreserve_e_kwh"):
             self._control.pop(obsolete, None)
         if (self._control.get("mode") != "Automatik"
                 and (self._control.get("sicherung") or self._control.get("kalibrierung_sicherung"))):

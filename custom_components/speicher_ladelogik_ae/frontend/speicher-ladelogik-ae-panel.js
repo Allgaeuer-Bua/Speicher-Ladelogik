@@ -26,7 +26,6 @@ const PHASE_LABELS = {
 
 const NUMBER_GROUPS = {
   leistung: [
-    ["min_effiziente_leistung", "Mindestwert für geplantes Laden", "Zielwert beim normalen Fahrplanladen; keine erzwungene Ladeleistung"],
   ],
   planung: [
     ["unplanbare_reserve", "Wolkenreserve", "Abzug vom prognostizierten Restüberschuss"],
@@ -46,11 +45,10 @@ const NUMBER_HELP = {
   leistung: [
     ["Bevorzugte Ladeleistung", "Mit dieser Ladegrenze plant das System zuerst. Reicht sie nicht aus, wird nur so weit wie nötig bis zur automatischen Maximalleistung erhöht."],
     ["Automatische Maximalleistung", "Harte Obergrenze für den automatischen Lade- beziehungsweise Entladebetrieb. Der Handbetrieb besitzt weiterhin eigene Werte."],
-    ["Mindestwert für geplantes Laden", "Läuft eine reguläre Ladung mit mehr als 25 W an, hebt die Planung ihr Ziel nach Möglichkeit mindestens auf diesen Wert an. Der tatsächliche Verbrauch hängt weiterhin vom PV-Überschuss, vom Gerät und von der Regelung ab."],
   ],
   planung: [
     ["Vorzeitiges Ladeziel je Speicher", "Für jede Tagesklasse und jeden Speicher getrennt. 0 % deaktiviert das zusätzliche SoC-Ziel und die Vormittagsabsicherung für diese Klasse. Der normale PV-Fahrplan darf weiterhin laden und bei Zeitknappheit früher starten. Die untere SoC-Grenze des Geräts bleibt unverändert."],
-    ["Wolkenreserve", "Dieser kWh-Wert wird vom für den restlichen Tag erwarteten speicherbaren PV-Überschuss abgezogen. Höher bedeutet vorsichtiger planen."],
+    ["Wolkenreserve", "Dieser kWh-Wert wird einmal vom verbleibenden AC-PV-Überschuss abgezogen, zuerst am Tagesende. Höher bedeutet vorsichtiger planen."],
     ["Prognosesicherheit", "Nur dieser Prozentsatz der 15-Minuten-PV-Prognose fließt in die Planung ein. 90 % bedeutet: 10 % der prognostizierten Energie werden nicht fest eingeplant."],
     ["Planungswirkungsgrad", "Schätzt Ladeverluste zwischen AC-Eingang und gespeicherter Energie. Bei 90 % werden aus 1 kWh AC rechnerisch 0,9 kWh im Speicher."],
     ["Knappheits-Hysterese", "Ist der Tag bereits als knapp eingestuft, muss die verbleibende Ladechance diesen zusätzlichen kWh-Abstand übertreffen, bevor die Knappheit endet."],
@@ -773,7 +771,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const jobs = this._calibrationJobs();
     const calibration = jobs.length ? jobs.map((job) => `${job.name || this._storageLabel(job.batterie)}: ${job.phase_label || PHASE_LABELS[job.phase] || job.phase}`).join(" · ") : calibrationBattery && !["Bereit", "—"].includes(calibrationState)
       ? `${this._storageLabel(calibrationBattery)}: ${calibrationState}` : calibrationState;
-    const peak = this._isOn("mittagsspitzen");
+    const peak = Boolean(this._attr("planung", "mittagsspitzen_aktiv", false));
     return `
       <section class="card system-card span-full">
         ${this._cardTitle("mdi:shield-check-outline", "Systemstatus", this._badge(valid ? "Daten bereit" : "Daten prüfen", valid ? "good" : "bad"))}
@@ -864,7 +862,6 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const stateLabel = this._statusLabel(state?.state || "—");
     const reason = this._attr("planung", "entscheidungsgrund", this._attr("planung", "normaler_fahrplan_grund", "Keine Begründung verfügbar"));
     const progress = Math.max(0, Math.min(100, this._num(this._attr("planung", "fenster_fortschritt_prozent", 0))));
-    const lockedUntil = this._attr("planung", "fahrplan_entscheidung_fixiert_bis_ts");
     return `
       <section class="card plan-card span-5 entity-card" data-entity="${esc(this._eid("planung"))}">
         ${this._cardTitle("mdi:timeline-clock-outline", "Tagesplanung", this._badge(stateLabel, "accent"))}
@@ -882,7 +879,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
         <div class="storage-slots">
           ${this._models().map((model) => this._storageSlot(model, model.toLowerCase())).join("")}
         </div>
-        <div class="slot-note"><ha-icon icon="mdi:lock-clock"></ha-icon> Entscheidung fixiert bis ${this._time(lockedUntil)}</div>
+        <div class="slot-note">Nach dem Ladebeginn bleibt die Freigabe für diesen Tag bestehen. AstraMeter regelt die tatsächliche Leistung.</div>
         ${this._calibrationJobsCard()}
         ${this._peakDetails()}
       </section>`;
@@ -895,14 +892,13 @@ class SpeicherLadelogikPanel extends HTMLElement {
   _storageSlot(letter, suffix) {
     const active = Boolean(this._attr("planung", `fahrplan_slot_aktiv_venus_${suffix}`, false));
     const goalReached = Boolean(this._attr("planung", `ziel_venus_${suffix}_erreicht`, false));
-    const start = this._time(this._attr("planung", "fahrplan_slot_start_ts"));
-    const end = this._time(this._attr("planung", "fahrplan_slot_ende_ts"));
+    const released = this._attr("planung", `ladefreigabe_venus_${suffix}_seit_ts`);
+    const planned = this._attr("planung", `ladebeginn_venus_${suffix}_ts`);
     const reason = this._attr("planung", `fahrplan_slot_grund_venus_${suffix}`, "—");
-    const startReason = this._attr("planung", `fahrplan_slot_startgrund_venus_${suffix}`);
     const currentGoal = this._attr("planung", "fruehe_soc_ziele_prozent", {})?.[letter] || 0;
-    const detail = active && startReason && String(reason).includes("beibehalten")
-      ? `${start} begonnen: ${startReason} · bis ${end} gehalten` : reason;
-    return `<div><strong>${esc(this._storageLabel(letter))}</strong><span>${goalReached ? "Ziel erreicht" : active ? `${start}–${end} geplant` : "aktuell pausiert"}</span><small>${esc(detail)} · Vorzeitiges Ziel ${esc(currentGoal)} %</small></div>`;
+    const label = goalReached ? "Ziel erreicht" : active ? `freigegeben seit ${this._time(released)}`
+      : planned ? `Beginn geplant ${this._time(planned)}` : "wartet";
+    return `<div><strong>${esc(this._storageLabel(letter))}</strong><span>${esc(label)}</span><small>${esc(reason)} · Vorzeitiges Ziel ${esc(currentGoal)} %</small></div>`;
   }
 
   _batteryCard(letter, full = false) {
@@ -1023,7 +1019,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 
   _peakDetails() {
-    const active = this._isOn("mittagsspitzen");
+    const active = Boolean(this._attr("planung", "mittagsspitzen_aktiv", false));
     const planable = Boolean(this._attr("planung", "mittagsspitzen_planbar", false));
     return `
       <div class="peak-inline">
@@ -1058,7 +1054,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const active = Boolean(this._attr("planung", `fahrplan_slot_aktiv_venus_${suffix}`, false));
     const goalReached = Boolean(this._attr("planung", `ziel_venus_${suffix}_erreicht`, false));
     const reason = this._attr("planung", `fahrplan_slot_grund_venus_${suffix}`, "—");
-    return `<div class="comparison"><div><strong>${esc(this._storageLabel(letter))}</strong>${this._badge(goalReached ? "Ziel erreicht" : active ? "Ladeslot" : "Pausenslot", active || goalReached ? "good" : "neutral")}</div><p>${esc(reason)}</p></div>`;
+    return `<div class="comparison"><div><strong>${esc(this._storageLabel(letter))}</strong>${this._badge(goalReached ? "Ziel erreicht" : active ? "Freigegeben" : "Warten", active || goalReached ? "good" : "neutral")}</div><p>${esc(reason)}</p></div>`;
   }
 
   _modeControl() {
@@ -1192,7 +1188,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       `fruehes_ladeziel_venus_${model.toLowerCase()}_${key}`, label + (currentClass === key ? " · heute" : ""),
       "0 % = kein zusätzliches SoC-Ziel; der normale PV-Fahrplan bleibt aktiv",
     ])).join("")}</div></div>`).join("");
-    return `<main class="grid control-view">${this._calibrationCard()}<div class="control-columns manual-columns span-full">${this._models().map((model) => this._manualCard(model)).join("")}</div><section class="card span-full">${this._cardTitle("mdi:chart-bell-curve", "Fahrplanfunktionen")}${this._toggleRow("mittagsspitzen", "Mittagsspitzen reduzieren", "Speicherkapazität für die PV-Spitze freihalten", "mdi:chart-bell-curve")}<p class="control-explanation">Vorzeitiges Ladeziel je Tagesklasse · aktuell ${esc(currentClass)}. 0 % deaktiviert das zusätzliche Ziel und die Vormittagsabsicherung; der normale PV-Fahrplan bleibt aktiv.</p>${earlyGoals}${this._numberRow(["mittag_vorlauf", "Beginn vor Sonnenhöchststand", "Dynamischer Start des Mittagsfensters"])}${this._numberRow(["mittag_nachlauf", "Ende nach Sonnenhöchststand", "Dynamisches Ende des Mittagsfensters"])}</section><div class="control-columns span-full">${this._numberCard("Leistungsgrenzen", "mdi:battery-charging", "leistung")}${this._numberCard("Planungsparameter", "mdi:shield-sun-outline", "planung")}${this._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen")}</div>${this._modeControl()}</main>`;
+    return `<main class="grid control-view">${this._calibrationCard()}<div class="control-columns manual-columns span-full">${this._models().map((model) => this._manualCard(model)).join("")}</div><section class="card span-full">${this._cardTitle("mdi:chart-bell-curve", "Fahrplanfunktionen")}${this._toggleRow("mittagsspitzen", "Mittagsspitzen reduzieren", "An mittleren und starken Tagen, soweit die Vollladung abgesichert ist", "mdi:chart-bell-curve")}<p class="control-explanation">Vorzeitiges Ladeziel je Speicher · Profil aktuell ${esc(currentClass)}. Tagesklassen: schwach, mittel, stark. Wechselhaft nutzt die eigene Einstellung bei gemessener Prognoseunsicherheit. 0 % deaktiviert das zusätzliche Ziel. Vor dem ersten Tagesstart kann 0 W gesetzt werden; nach der Freigabe bleiben positive Grenzen erhalten.</p>${earlyGoals}${this._numberRow(["mittag_vorlauf", "Beginn vor Sonnenhöchststand", "Dynamischer Start des Mittagsfensters"])}${this._numberRow(["mittag_nachlauf", "Ende nach Sonnenhöchststand", "Dynamisches Ende des Mittagsfensters"])}</section><div class="control-columns span-full">${this._numberCard("Leistungsgrenzen", "mdi:battery-charging", "leistung")}${this._numberCard("Planungsparameter", "mdi:shield-sun-outline", "planung")}${this._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen")}</div>${this._modeControl()}</main>`;
   }
 
   _formatWriteResult(item) {
@@ -1443,7 +1439,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 }
 
-const PANEL_ELEMENT = "speicher-ladelogik-ae-panel-2-0-3";
+const PANEL_ELEMENT = "speicher-ladelogik-ae-panel-2-1-0";
 
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);

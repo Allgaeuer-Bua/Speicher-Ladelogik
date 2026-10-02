@@ -60,7 +60,6 @@ NUMBERS = (
     SpeicherNumberDescription(key="knappheitsreserve", name="Knappheitsreserve", control_key="knappheitsreserve", minimum=100, maximum=200, step=1, native_unit_of_measurement=PERCENTAGE),
     SpeicherNumberDescription(key="mittag_vorlauf", name="Mittagsfenster vor Sonnenhöchststand", control_key="mittag_vorlauf_h", minimum=0, maximum=8, step=0.25, native_unit_of_measurement=UnitOfTime.HOURS),
     SpeicherNumberDescription(key="mittag_nachlauf", name="Mittagsfenster nach Sonnenhöchststand", control_key="mittag_nachlauf_h", minimum=0, maximum=8, step=0.25, native_unit_of_measurement=UnitOfTime.HOURS),
-    SpeicherNumberDescription(key="min_effiziente_leistung", name="Minimale effiziente Ladeleistung", control_key="min_effiziente_leistung", minimum=0, maximum=5000, step=50, native_unit_of_measurement=UnitOfPower.WATT),
     SpeicherNumberDescription(key="kalibrierleistung", name="Kalibrierleistung", control_key="kalibrierleistung_w", minimum=400, maximum=1500, step=50, native_unit_of_measurement=UnitOfPower.WATT),
     SpeicherNumberDescription(key="kalibrierung_ruhe_unten", name="Ruhezeit vor der Kalibrierladung", control_key="kalibrierung_ruhe_unten_min", minimum=0, maximum=240, step=5, native_unit_of_measurement=UnitOfTime.MINUTES),
     SpeicherNumberDescription(key="kalibrierung_ruhe_oben", name="Ruhezeit nach der Kalibrierladung", control_key="kalibrierung_ruhe_oben_min", minimum=0, maximum=240, step=5, native_unit_of_measurement=UnitOfTime.MINUTES),

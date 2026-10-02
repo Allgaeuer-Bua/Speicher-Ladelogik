@@ -107,7 +107,6 @@ PANEL_ENTITIES: Final = {
     "knappheitsreserve": ("number", "knappheitsreserve"),
     "mittag_vorlauf": ("number", "mittag_vorlauf"),
     "mittag_nachlauf": ("number", "mittag_nachlauf"),
-    "min_effiziente_leistung": ("number", "min_effiziente_leistung"),
     "kalibrierleistung": ("number", "kalibrierleistung"),
     "kalibrierung_ruhe_unten": ("number", "kalibrierung_ruhe_unten"),
     "kalibrierung_ruhe_oben": ("number", "kalibrierung_ruhe_oben"),
