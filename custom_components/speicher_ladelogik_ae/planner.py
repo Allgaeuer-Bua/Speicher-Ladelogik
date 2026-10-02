@@ -9,20 +9,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from . import persistence
+from .charge_plan import daily_plan
 from .const import VERSION as INTEGRATION_VERSION
 from .stability import (
     calibration_required_seconds,
-    confirmed_export,
-    confirmed_peak_export,
-    early_goal_limits,
-    early_soc_candidates,
     forecast_day_factor,
     forecast_factor,
-    morning_rescue_candidates,
     peer_discharge_release,
     peer_grid_support,
-    quarter_hour_window,
-    stable_charge_limit,
     stable_day_class,
     target_latch,
 )
@@ -330,128 +324,6 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         return {"ok": not errors, "rows": rows if not errors else [], "errors": errors}
 
 
-    def split_power(total, needs, caps, previous):
-        total = int(max(0, total) // 50 * 50)
-        caps = {key: int(max(0, caps[key]) // 50 * 50) for key in BATTERY_KEYS}
-        limits = {key: 0 for key in BATTERY_KEYS}
-        eligible = [key for key in BATTERY_KEYS if needs[key] > 0 and caps[key] >= 50]
-        if not eligible or total < 50:
-            return limits
-        first = eligible[0]
-        for key in eligible:
-            if previous.get(key, 0) > 0 and total <= caps[key]:
-                first = key
-                break
-            if needs[key] > needs[first]:
-                first = key
-        if total < 1600 and total <= caps[first]:
-            limits[first] = total
-            return limits
-        remaining = total
-        denominator = sum([needs[key] for key in eligible])
-        for key in eligible:
-            value = min(caps[key], int(total * needs[key] / denominator // 50) * 50)
-            limits[key] = value
-            remaining = remaining - value
-        for key in eligible:
-            extra = min(caps[key] - limits[key], remaining)
-            limits[key] = limits[key] + extra
-            remaining = remaining - extra
-        return limits
-
-
-    def simulate(rows, start, end, battery_data, caps, load, factor, eta, charge_after=None, export_target=0):
-        remaining = {key: battery_data[key]["need"] for key in BATTERY_KEYS}
-        finish = None
-        for row in rows:
-            begin = max(start, row["t"])
-            stop = min(end, row["t"] + 900)
-            if stop <= begin:
-                continue
-            surplus = row["wh"] * 4 * factor - load
-            available = max(0, surplus - export_target)
-            tick = begin
-            while tick < stop:
-                seconds = min(60, stop - tick)
-                if surplus >= 0 and (charge_after is None or tick >= charge_after):
-                    instantaneous = {}
-                    for key in BATTERY_KEYS:
-                        bat = battery_data[key]
-                        tail_kwh = bat["nominal"] * max(0, bat["goal"] - 90) / 100
-                        rate = caps[key]
-                        if remaining[key] <= tail_kwh + 0.000001:
-                            rate = min(rate, BATTERIES[key]["tail"])
-                        instantaneous[key] = rate if remaining[key] > 0.00001 else 0
-                    allocated = split_power(min(available, sum(instantaneous.values())), remaining, instantaneous, {})
-                    for key in BATTERY_KEYS:
-                        remaining[key] = max(0, remaining[key] - allocated[key] * seconds / 3600000 * eta)
-                elif surplus < 0:
-                    active = [key for key in BATTERY_KEYS if caps[key] > 0]
-                    for key in active:
-                        remaining[key] = min(battery_data[key]["target"], remaining[key] + (-surplus) * seconds / 3600000 / max(1, len(active)))
-                tick = tick + seconds
-                if sum(remaining.values()) <= 0.002:
-                    finish = tick
-                    break
-            if finish is not None:
-                break
-        return {"finish": finish, "missing": sum(remaining.values())}
-
-
-    def minimum_working_caps(rows, start, end, battery_data, preferred_caps,
-                             hard_caps, load, eta, charge_after):
-        """Find the lowest 50-W cap blend that still reaches the target."""
-        preferred_result = simulate(
-            rows, start, end, battery_data, preferred_caps, load, 1, eta,
-            charge_after,
-        )
-        if preferred_result["finish"] is not None:
-            return preferred_caps.copy(), preferred_result
-
-        hard_result = simulate(
-            rows, start, end, battery_data, hard_caps, load, 1, eta,
-            charge_after,
-        )
-        if hard_result["finish"] is None:
-            # More register power cannot fix a PV-limited interval or the
-            # device's simulated end phase. Do not raise caps without benefit.
-            if hard_result["missing"] >= preferred_result["missing"] - 0.000001:
-                return preferred_caps.copy(), preferred_result
-            return hard_caps.copy(), hard_result
-
-        low = 0.0
-        high = 1.0
-        best_caps = hard_caps.copy()
-        best_result = hard_result
-        for _iteration in range(7):
-            fraction = (low + high) / 2
-            candidate = {}
-            for key in BATTERY_KEYS:
-                span = max(0, hard_caps[key] - preferred_caps[key])
-                value = preferred_caps[key] + span * fraction
-                candidate[key] = min(
-                    hard_caps[key],
-                    int((value + 49) // 50) * 50,
-                )
-            result = simulate(
-                rows, start, end, battery_data, candidate, load, 1, eta,
-                charge_after,
-            )
-            if result["finish"] is not None:
-                high = fraction
-                best_caps = candidate
-                best_result = result
-            else:
-                low = fraction
-        for key in BATTERY_KEYS:
-            for value in range(int(preferred_caps[key]), int(best_caps[key]), 50):
-                candidate = {**best_caps, key: value}
-                result = simulate(rows, start, end, battery_data, candidate,
-                                  load, 1, eta, charge_after)
-                if result["finish"] is not None:
-                    best_caps, best_result = candidate, result
-                    break
-        return best_caps, best_result
 
 
     def continuous_window(rows, after, required_hours, load, factor):
@@ -777,28 +649,6 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         return result
 
 
-    def peak_plan(rows, end, battery_data, caps, load, eta, after):
-        feasible = simulate(rows, NOW, end, battery_data, caps, load, 1, eta, after)
-        if feasible["finish"] is None:
-            return {"ok": False, "target": 0, "start": None, "end": None, "finish": None}
-        lower = 0
-        upper = max([max(0, row["wh"] * 4 - load) for row in rows] + [0])
-        finish = feasible["finish"]
-        for attempt in range(16):
-            threshold = (lower + upper) / 2
-            test = simulate(rows, NOW, end, battery_data, caps, load, 1, eta, after, threshold)
-            if test["finish"] is not None:
-                lower = threshold
-                finish = test["finish"]
-            else:
-                upper = threshold
-        threshold = int(lower // 50 * 50)
-        active_rows = [row for row in rows if row["t"] + 900 > max(NOW, after)
-                       and row["t"] < end and row["wh"] * 4 - load - threshold >= 50]
-        return {"ok": True, "target": threshold, "start": max(NOW, after, active_rows[0]["t"]) if active_rows else None,
-                "end": min(end, active_rows[-1]["t"] + 900) if active_rows else None, "finish": finish}
-
-
     def read_learning():
         state = hass.states.get(LEARNING_ID)
         saved = state.attributes if state is not None else {}
@@ -1103,15 +953,20 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     )
     if category == "schwach":
         preferred = DAY0
-    elif category == "wechselhaft":
-        preferred = NINE - 7200 * max(0, min(1, (middle - expected_total) / (middle - weak)))
     elif category == "mittel":
-        preferred = NINE + (ELEVEN - NINE) * max(0, min(1, (expected_total - middle) / (strong - middle)))
+        if expected_total < middle:
+            preferred = NINE - 7200 * max(0, min(1, (middle - expected_total) / max(0.01, middle - weak)))
+        else:
+            preferred = NINE + (ELEVEN - NINE) * max(0, min(1, (expected_total - middle) / max(0.01, strong - middle)))
     else:
         preferred = ELEVEN
+    # "Wechselhaft" is an early-target profile based on measured uncertainty,
+    # never a fourth daily yield class. Preserve the existing user settings.
+    early_profile = ("wechselhaft" if category != "schwach" and
+                     (short_factor < 0.7 or day_factor < 0.9) else category)
     early_soc_goals = {
         key: setting(
-            "fruehes_ladeziel_" + key.lower() + "_" + category + "_soc",
+            "fruehes_ladeziel_" + key.lower() + "_" + early_profile + "_soc",
             setting("fruehes_ladeziel_" + key.lower() + "_soc", 0, 0, 100),
             0, 100,
         )
@@ -1495,355 +1350,106 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "restore",
     ] else ""
     cal_active_keys = {s["b"] for s in (session, secondary) if s["p"] in ACTIVE_PHASES}
-    caps = {key: bats[key]["cap"] if bats[key]["owns"] and bats[key]["usable_data"] and failure_counts[key] < 3
-            and not reaction_blocked_prior[key] and not bats[key]["target_met"]
-            and key not in cal_active_keys and not held[key] else 0 for key in BATTERY_KEYS}
-    needs = {key: bats[key]["need"] if caps[key] > 0 else 0 for key in BATTERY_KEYS}
-    stored = sum([bats[key]["stored"] for key in BATTERY_KEYS])
-    target_energy = sum([bats[key]["target"] for key in BATTERY_KEYS])
-    normal_stored = sum([bats[key]["stored"] for key in BATTERY_KEYS if caps[key] > 0])
-    normal_target = sum([bats[key]["target"] for key in BATTERY_KEYS if caps[key] > 0])
-    early_soc_keys = (
-        early_soc_candidates(caps, bats, early_soc_goals)
-        if NOW < MIDDAY_START else []
-    )
+    normal_eligible = {
+        key: bats[key]["owns"] and bats[key]["usable_data"] and failure_counts[key] < 3
+        and not reaction_blocked_prior[key]
+        and key not in cal_active_keys and not held[key] and not manual_active_by_key[key]
+        and BATTERIES[key]["maximum"] > 0 and BATTERIES[key]["preferred"] > 0
+        for key in BATTERY_KEYS
+    }
+    needs = {key: bats[key]["need"] if normal_eligible[key] else 0 for key in BATTERY_KEYS}
     need = sum(needs.values())
-    max_total = sum(caps.values())
-
+    stored = sum(bats[key]["stored"] for key in BATTERY_KEYS)
+    target_energy = sum(bats[key]["target"] for key in BATTERY_KEYS)
+    normal_stored = sum(bats[key]["stored"] for key in BATTERY_KEYS if normal_eligible[key])
+    normal_target = sum(bats[key]["target"] for key in BATTERY_KEYS if normal_eligible[key])
+    cal_draw = calibration_power * sum(s["p"] == "charge" for s in (session, secondary))
+    manual_draw = sum(manual_charge[key] for key in BATTERY_KEYS
+                      if manual_active_by_key[key] and not bats[key]["target_met"])
     normal_rows = []
     for row in rows:
-        cal_reservation = 0
+        reservation = manual_draw
         for current in (session, secondary):
             if current["b"] in cal_active_keys and current["p"] in ["wait", "charge", "paused"]:
-                overlap = max(0, min(row["t"] + 900, current["x"] + 1800) - max(row["t"], current["s"]))
-                cal_reservation += calibration_power * overlap / 3600
-        normal_rows.append({"t": row["t"], "wh": max(0, row["wh"] - cal_reservation)})
+                overlap = max(0, min(row["t"] + 900, max(NOW, current["x"]) + 1800)
+                              - max(row["t"], current["s"]))
+                reservation += calibration_power * overlap / 900
+        normal_rows.append({"t": row["t"], "wh": max(0, row["wh"] - reservation / 4)})
     solar_rows = [row for row in rows if row["wh"] * 4 > load]
     solar_start = solar_rows[0]["t"] if solar_rows else None
-    solar_end = solar_rows[-1]["t"] + 900 if solar_rows else None
-    peak_enabled = raw("input_boolean.speicher_ladelogik_ae_mittagsspitzen") != "off"
-    end = (min(MIDDAY_END, solar_end) if solar_end is not None else MIDDAY_END) if peak_enabled else (solar_end or DEADLINE)
-    if end <= NOW:
-        end = solar_end if solar_end is not None else DAY1
-    preferred = max(preferred, solar_start or preferred,
-                    MIDDAY_START if peak_enabled else preferred)
-    simulation_bats = {key: {**bats[key], "need": needs[key]} for key in BATTERY_KEYS}
-    simulation_end = max(NOW, end - 1800)
-    hard_caps = caps.copy()
-    efficient_caps = {key: min(caps[key], BATTERIES[key]["preferred"]) for key in BATTERY_KEYS}
-    preferred_sim = simulate(normal_rows, NOW, simulation_end, simulation_bats,
-                             efficient_caps, load, 1, eta, preferred)
-    start = preferred
-    early = need > 0 and preferred_sim["finish"] is None
-    # Prefer an earlier efficient start over raising power because of a late window.
-    if early:
-        start = min(NOW, preferred)
-    caps, efficiency_sim = minimum_working_caps(
-        normal_rows, NOW, simulation_end, simulation_bats, efficient_caps,
-        hard_caps, load, eta, start,
-    )
-    if need > 0 and efficiency_sim["finish"] is None:
-        efficiency_mode = (
-            "Ladeziel trotz Maximalleistung knapp"
-            if caps != efficient_caps else "Mehr Leistung bringt laut Prognose keinen Vorteil"
-        )
-    elif need <= 0 or caps == efficient_caps:
-        efficiency_mode = (
-            "Früher beginnen mit bevorzugter Leistung"
-            if early else "Bevorzugte Leistung reicht aus"
-        )
-    else:
-        efficiency_mode = "Dynamisch erforderliche Leistung"
-    planned_caps = caps.copy()
-    max_total = sum(caps.values())
-    safe_rest = 0
-    window_wh = 0
-    current_opportunity = 0
-    current_normal_surplus = 0
-    morning = 0
-    afternoon = 0
-    for row in normal_rows:
-        seconds = max(0, row["t"] + 900 - max(NOW, row["t"]))
-        surplus = max(0, row["wh"] * 4 - load)
-        opportunity = min(surplus, max_total)
-        safe_rest = safe_rest + opportunity * seconds / 3600000 * eta
-        win_seconds = max(0, min(end, row["t"] + 900) - max(NOW, start, row["t"]))
-        window_wh = window_wh + opportunity * win_seconds / 3600
-        if row["t"] <= NOW < row["t"] + 900:
-            current_opportunity = opportunity
-            current_normal_surplus = surplus
-    for row in rows:
-        if row["t"] < NINE + 10800:
-            morning = morning + row["wh"] / 1000
-        else:
-            afternoon = afternoon + row["wh"] / 1000
-    safe_rest = max(0, safe_rest - extra)
-    was_scarce = prior_attributes.get("knapp") is True
-    scarce_threshold = need * setting("knappheitsreserve", 125, 100, 200) / 100
-    if was_scarce:
-        scarce_threshold = scarce_threshold + setting("hysterese", 0.2, 0.05, 1)
-    scarce = pv_chance and (expected_total <= weak or safe_rest < scarce_threshold)
-
-    if caps != hard_caps and scarce and expected_total > weak:
-        hard_safe = max(0, sum([min(max(0, row["wh"] * 4 - load), sum(hard_caps.values()))
-                        * max(0, row["t"] + 900 - max(NOW, row["t"])) / 3600000 * eta
-                        for row in normal_rows]) - extra)
-        scarce = hard_safe < scarce_threshold
-    reason = "Kein aktueller PV-Überschuss"
-    status = "Keine PV-Ladechance"
-    total = 0
-    peak = {"ok": False, "target": 0, "start": None, "end": None, "finish": None}
-    peak_live_headroom = 0
-    peak_live_override = False
-    peak_live_since = None
-    peak_enabled = raw("input_boolean.speicher_ladelogik_ae_mittagsspitzen") != "off"
-    cal_draw = calibration_power * sum(s["p"] == "charge" for s in (session, secondary))
-    normal_live = max(0, live_surplus - cal_draw)
-    export_confirmed, export_since = confirmed_export(
-        now_ts=NOW, grid_power_w=grid, live_surplus_w=normal_live,
-        prior_since_ts=number(prior_attributes.get("netzeinspeisung_seit_ts")),
-    )
-    # Prefer actual morning energy over a predicted afternoon on uncertain
-    # days. Leave capacity above the early target for the noon peak. Without
-    # a configured target, there is no separate morning rescue for this storage.
-    rescue_keys = morning_rescue_candidates(caps, bats, early_soc_goals) if NOW < MIDDAY_START else []
-    rescue_morning = (
-        export_confirmed and NOW < MIDDAY_END and bool(rescue_keys)
-        and (category != "stark" or short_factor < 0.7)
-    )
-    if not live_valid:
-        reason = "Keine verlässliche Live-Überschusserkennung"
-        status = "Datenfehler"
-    elif need <= 0:
-        status = "Ziel erreicht" if all([bats[key]["target_met"] for key in BATTERY_KEYS]) else "Speicher einzeln gesperrt / vorgemerkt"
-        reason = "Kein Restbedarf in den aktuell für den Fahrplan freigegebenen Speichern"
-    elif pv_chance:
-        if early_soc_keys:
-            # Charge batteries below their own early goal before deferring
-            # energy to the noon window. Other batteries resume the ordinary
-            # schedule as soon as every early goal is reached.
-            caps = early_goal_limits(
-                early_soc_keys, bats,
-                {key: BATTERIES[key]["preferred"] for key in BATTERY_KEYS},
-                hard_caps, early_soc_goals, eta, MIDDAY_START - NOW,
-            )
-            max_total = sum(caps.values())
-            start = min(start, NOW)
-            total = max_total
-            status = "Frühes SoC-Ziel"
-            reason = "PV-Überschuss zuerst für Venus " + "/".join(early_soc_keys)
-            efficiency_mode = "Vorzeitiges SoC-Ziel mit bedarfsgerechter Leistung"
-        elif not today["ok"]:
-            caps = hard_caps
-            max_total = sum(caps.values())
-            efficiency_mode = "Prognose-Fallback"
-            total = max_total
-            status = "PV-Fallback"
-            reason = "Prognose ungültig; AstraMeter darf realen Überschuss aufnehmen"
-        elif rescue_morning:
-            caps = {key: hard_caps[key] if key in rescue_keys else 0 for key in BATTERY_KEYS}
-            max_total = sum(caps.values())
-            start = min(start, NOW)
-            efficiency_mode = "Gemessenen Morgenüberschuss nutzen"
-            total = max_total
-            status = "Morgenüberschuss nutzen"
-            reason = "Netzeinspeisung seit mindestens 3 Minuten; reale Ladung hat Vorrang vor späterer PV-Prognose"
-        elif scarce:
-            caps = hard_caps
-            max_total = sum(caps.values())
-            start = min(start, NOW)
-            efficiency_mode = "Reserve sichern; Ladeziel hat Vorrang"
-            total = max_total
-            status = "Sichern"
-            reason = "Knappheit; vorhandenen Überschuss mit Vorrang sichern"
-        else:
-            if peak_enabled and not early and end - 1800 > NOW:
-                peak = peak_plan(normal_rows, end - 1800, simulation_bats, caps, load, eta, preferred)
-            if peak["ok"]:
-                total = min(max(0, normal_live - peak["target"]), max(0, current_normal_surplus - peak["target"])) if preferred <= NOW else 0
-                start = peak["start"] if peak["start"] is not None else preferred
-                status = "Mittagsspitzen reduzieren" if total >= 50 else "Platz für Mittagsspitze halten"
-                reason = "Ladung auf die höchsten prognostizierten Überschüsse konzentriert; Ladeziel und Endphase eingeplant"
-                # The forecast can postpone the next slot even while the meter
-                # confirms that the current export already exceeds its planned
-                # peak target. Use only the measured headroom above that target;
-                # AstraMeter still controls the actual draw at the grid point.
-                if MIDDAY_START <= NOW < MIDDAY_END and grid is not None:
-                    peak_live_headroom = max(0, min(normal_live, -grid) - peak["target"])
-                    peak_live_override, peak_live_since = confirmed_peak_export(
-                        now_ts=NOW, headroom_w=peak_live_headroom,
-                        minimum_w=min(400, max_total),
-                        prior_since_ts=number(prior_attributes.get("mittagsspitze_live_seit_ts")),
-                        prior_sample_ts=number(prior_attributes.get("berechnet_ts")),
-                    )
-                    if peak_live_override:
-                        total = min(max_total, peak_live_headroom)
-                        start = min(start, NOW)
-                        status = "Gemessene Mittagsspitze nutzen"
-                        reason = "Bestätigte Einspeisung über dem geplanten Einspeiseziel; freien Überschuss jetzt speichern"
-            elif start <= NOW:
-                quota_wh = need / eta * 1000
-                total = current_opportunity * min(1, quota_wh / max(1, window_wh))
-                if early:
-                    total = max(total, min(max_total, need / eta * 1000 / max(0.25, (end - NOW) / 3600)))
-                if NOW >= end:
-                    total = max_total
-                if total > 25:
-                    total = max(total, min(max_total, setting("min_effiziente_leistung", 800, 0, 5000)))
-                status = "Vorladen" if early and preferred > NOW else "Fahrplanladen"
-                if efficiency_mode == "Dynamisch erforderliche Leistung":
-                    reason = "Bevorzugte Leistung reicht zeitlich nicht; dynamisch geplant: " + ", ".join(
-                        SLOT_NAMES[key] + " " + str(caps[key]) + " W"
-                        for key in BATTERY_KEYS if caps[key] > 0
-                    )
-                elif efficiency_mode == "Ladeziel trotz Maximalleistung knapp":
-                    reason = "Ladeziel ist selbst mit den automatischen Maximalgrenzen knapp"
-                elif efficiency_mode == "Mehr Leistung bringt laut Prognose keinen Vorteil":
-                    reason = "PV-Angebot oder Lade-Endphase begrenzen die Aufnahme; bevorzugte Ladegrenzen bleiben bestehen"
-                elif early and preferred > NOW:
-                    reason = "Spätere Ertragsfenster reichen nicht; Ladebeginn vorgezogen"
-                else:
-                    reason = "Bevorzugte Ladeleistung reicht bis zum dynamischen Fensterende"
-            else:
-                status = "Zurückhalten"
-                reason = "Spätere PV-Fenster decken Restbedarf einschließlich Lade-Endphase"
-
-    # ── Stabile Fahrplan-Grenzen und manuelle Grenzen je Speicher ───────────────
-    # Die Prognose entscheidet weiterhin ueber Start, Ende und Leistungsstufe.
-    # Waehrend einer normalen Ladephase wird je Speicher aber ein fester Grenzwert
-    # gesetzt und gehalten; die Feinregelung am Netzanschlusspunkt macht AstraMeter.
-    automatic_status = status
-    automatic_reason = reason
-    # Oberhalb von 90 % reduziert das Gerät seine reale Aufnahme selbst. Die
-    # Planung modelliert diese Endphase, schreibt deswegen aber keinen kleineren
-    # Registerwert und erzeugt so keine unnötigen Schreibzyklen.
-    dispatch_caps = caps.copy()
-    if cal_draw:
-        total = min(total, max(0, live_surplus - cal_draw - 100))
-        if any(
-            bats[s["b"]]["charge_power"] < calibration_min_power
-            and not bats[s["b"]]["all_full"]
-            for s in (session, secondary) if s["p"] == "charge"
-        ):
-            total = 0
-            automatic_reason = (
-                "Kalibrierladung erhält zuerst "
-                + str(calibration_power)
-                + " W; danach gilt der normale Fahrplan für den Rest"
-            )
-
-    if total >= 50:
-        if cal_draw:
-            # Nur waehrend einer Kalibrierung wird der Rest dynamisch begrenzt,
-            # damit deren eingestellte Leistung sicher Vorrang behält.
-            limits = split_power(min(max_total, total), needs, dispatch_caps, {})
-        else:
-            limits = {key: dispatch_caps[key] if needs[key] > 0 else 0
-                      for key in BATTERY_KEYS}
-    else:
-        limits = {key: 0 for key in BATTERY_KEYS}
-    automatic_limits_raw = limits.copy()
+    solar_end = solar_rows[-1]["t"] + 900 if solar_rows else NOW
+    end = max(NOW, solar_end)
+    peak_configured = raw("input_boolean.speicher_ladelogik_ae_mittagsspitzen") != "off"
+    peak_enabled = peak_configured and category != "schwach"
+    normal_live = max(0, live_surplus - cal_draw - manual_draw)
     automatic_limits = {}
     automatic_limit_held = {}
     automatic_limit_reason = {}
-    slot_start_ts, slot_end_ts = quarter_hour_window(NOW)
-    prior_slot_start_ts = number(prior_attributes.get("fahrplan_slot_start_ts"))
-    prior_automatic = (
-        prior_attributes.get("betriebsart") == "Automatik"
-        and flag(prior_attributes.get("regelung_aktiv", False))
-    )
-    prior_peak_enabled = prior_attributes.get("mittagsspitzen_aktiv")
-    peak_setting_unchanged = (
-        prior_peak_enabled is None or flag(prior_peak_enabled) == peak_enabled
-    )
-    prior_early_goals = prior_attributes.get("fruehe_soc_ziele_prozent")
-    prior_early_keys = prior_attributes.get("fruehes_soc_ziel_offen")
-    early_goals_unchanged = (
-        not isinstance(prior_early_goals, dict)
-        or all(number(prior_early_goals.get(key), 0) == goal
-               for key, goal in early_soc_goals.items())
-    )
-    midday_window_unchanged = (
-        number(prior_attributes.get("sonnenhoechststand_ts"), SOLAR_NOON)
-        == SOLAR_NOON
-        and number(prior_attributes.get("mittagsfenster_start_ts"), MIDDAY_START)
-        == MIDDAY_START
-        and number(prior_attributes.get("mittagsfenster_ende_ts"), MIDDAY_END)
-        == MIDDAY_END
-    )
-    decision_slot_locked = (
-        prior_slot_start_ts is not None
-        and int(prior_slot_start_ts) == slot_start_ts
-        and prior_automatic
-        and flag(prior_attributes.get("daten_gueltig", True))
-        and peak_setting_unchanged
-        and early_goals_unchanged
-        and not rescue_morning
-        and midday_window_unchanged
-        and (not isinstance(prior_early_keys, list) or prior_early_keys == early_soc_keys)
-    )
-    within_charge_window = start <= NOW < end
-    slot_locked_by_key = {}
-    final_register_held = {}
-    for key in BATTERY_KEYS:
-        name = key.lower()
-        previous_limit = number(
-            prior_attributes.get(
-                "fahrplan_ladegrenze_stabil_venus_" + name + "_w"
-            ),
-            0,
-        )
-        eligible = caps[key] > 0 and key not in cal_active_keys and not held[key]
-        safety_stop = (
-            not automatic
-            or not records_ok
-            or not live_valid
-            or not bats[key]["usable_data"]
-            or not bats[key]["owns"]
-            or failure_counts[key] >= 3
-        )
-        # Live export may start a paused storage, but must not unlock an
-        # already active slot and reintroduce rapid positive cap changes.
-        slot_locked_by_key[key] = decision_slot_locked and not (
-            peak_live_override and previous_limit <= 0
-            and automatic_limits_raw[key] > 0 and eligible and not safety_stop
-        )
-        stable_limit, limit_held, limit_reason = stable_charge_limit(
-            raw_limit=automatic_limits_raw[key],
-            previous_limit=previous_limit,
-            current_cap=BATTERIES[key]["maximum"],
-            eligible=eligible,
-            target_reached=bats[key]["target_met"],
-            within_window=within_charge_window,
-            planner_status=automatic_status,
-            safety_stop=safety_stop,
-            decision_locked=slot_locked_by_key[key],
-            slot_was_active=flag(
-                prior_attributes.get(
-                    "fahrplan_slot_aktiv_venus_" + name,
-                    False,
-                )
-            ),
-            final_percent_pending=(
-                MIDDAY_START <= NOW < MIDDAY_END
-                and bats[key]["soc"] is not None
-                and bats[key]["lowest_soc"] is not None
-                and bats[key]["soc"] >= bats[key]["goal"] - 1
-                and bats[key]["lowest_soc"] >= bats[key]["goal"] - 1
-            ),
-            actual_limit=current_caps[key],
-            preferred_limit=caps[key],
-        )
-        automatic_limits[key] = stable_limit
-        automatic_limit_held[key] = limit_held
-        automatic_limit_reason[key] = limit_reason
-        final_register_held[key] = "Letztes SoC-Prozent" in limit_reason
-    limits = automatic_limits.copy()
-    automatic_slot_active = {
-        key: automatic_limits[key] > 0 and not bats[key]["target_met"]
-        and not final_register_held[key]
-        for key in BATTERY_KEYS
+    specs = {
+        key: {**bats[key], "maximum": BATTERIES[key]["maximum"],
+              "discharge_maximum": BATTERIES[key]["discharge_maximum"],
+              "preferred": BATTERIES[key]["preferred"], "tail": BATTERIES[key]["tail"],
+              "actual_limit": number(current_caps[key], 0), "early_goal": early_soc_goals[key]}
+        for key in BATTERY_KEYS if normal_eligible[key]
     }
+    daily = daily_plan(
+        now=NOW, day=DAY0, end=end, midday_start=MIDDAY_START, midday_end=MIDDAY_END,
+        preferred_start=preferred, category=category, peak_enabled=peak_enabled,
+        forecast_ok=today["ok"], live_surplus=normal_live,
+        pv_chance=live_valid and normal_live >= 200,
+        rows=normal_rows, load=load, efficiency=eta, cloud_reserve=extra,
+        reserve_factor=setting("knappheitsreserve", 125, 100, 200) / 100,
+        hysteresis=setting("hysterese", 0.2, 0.05, 1), batteries=specs, prior=prior_attributes,
+    )
+    decisions = daily["decisions"]
+    early_soc_keys = daily["early_keys"]
+    scarce = daily["scarce"]
+    safe_rest = daily["available_kwh"]
+    window_wh = safe_rest * 1000 / eta
+    normal_sim = daily["result"]
+    start = min((d["released_at"] if d["released_at"] is not None else d["start"]
+                 for d in decisions.values()), default=NOW)
+    early = any(d["start"] < preferred for d in decisions.values())
+    efficient_caps = {key: BATTERIES[key]["preferred"] if normal_eligible[key] else 0 for key in BATTERY_KEYS}
+    simulation_end = end
+    morning = sum(row["wh"] / 1000 for row in rows if row["t"] < SOLAR_NOON)
+    afternoon = sum(row["wh"] / 1000 for row in rows if row["t"] >= SOLAR_NOON)
+    export_since = None
+    rescue_morning, rescue_keys = False, []
+    peak_live_override, peak_live_headroom, peak_live_since = False, 0, None
+    peak = {"ok": daily["peak_possible"], "target": daily["peak_export"],
+            "start": start if daily["peak_possible"] else None,
+            "end": MIDDAY_END if daily["peak_possible"] else None,
+            "finish": normal_sim["finish"] if daily["peak_possible"] else None}
+    automatic_slot_active = {}
+    for key in BATTERY_KEYS:
+        d = decisions.get(key)
+        safety_stop = (not automatic or not records_ok or not live_valid
+                       or not bats[key]["usable_data"] or failure_counts[key] >= 3)
+        value = d["limit"] if d else 0
+        why = d["reason"] if d else "Speicher nicht für Fahrplan freigegeben"
+        if safety_stop:
+            value, why = 0, "Sicherheitsstopp"
+        automatic_limits[key] = value
+        automatic_limit_reason[key] = why
+        automatic_limit_held[key] = bool(value > 0 and number(current_caps[key], 0) == value)
+        automatic_slot_active[key] = bool(d and d["active"] and not safety_stop)
+    # The displayed raw and selected limits now describe the same decision.
+    automatic_limits_raw = automatic_limits.copy()
+    limits = automatic_limits.copy()
+    if not live_valid:
+        automatic_status, automatic_reason = "Datenfehler", "Keine verlässliche Live-Überschusserkennung"
+    elif need <= 0:
+        automatic_status, automatic_reason = "Ziel erreicht", "Kein Restbedarf in den freigegebenen Speichern"
+    elif any(automatic_slot_active.values()):
+        automatic_status = "Ladefreigabe aktiv" if normal_live >= 200 else "Ladegrenze bleibt gesetzt"
+        automatic_reason = "; ".join(SLOT_NAMES[k] + ": " + automatic_limit_reason[k]
+                                     for k in BATTERY_KEYS if automatic_slot_active[k])
+    else:
+        automatic_status = "Platz für Mittagsspitze halten" if peak["ok"] else "Warten auf Ladebeginn"
+        automatic_reason = "Jeder Speicher startet zum eigenen geplanten Zeitpunkt mit PV-Überschuss"
+    efficiency_mode = ("Bedarfsgerecht erhöhte Ladegrenze" if daily["boosted"]
+                       else "Bevorzugte Leistung; Freigabe bleibt nach Start bestehen")
 
     manual_allowed = {}
     for key in BATTERY_KEYS:
@@ -1918,7 +1524,6 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     normal_limits = automatic_limits.copy()
     normal_status = automatic_status
     normal_reason = automatic_reason
-    normal_sim = simulate(normal_rows, NOW, end, simulation_bats, caps, load, 1, eta, start)
 
     hardware_commands = []
     release_ready = True
@@ -2095,7 +1700,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         warnings.append("Rückgabe eines Speichers wartet auf dessen Steuerbarkeit; anderer Speicher arbeitet weiter")
     reported_need = sum([bats[key]["need"] for key in BATTERY_KEYS])
     effective_limits = {
-        key: limit if ((not bats[key]["target_met"] and not final_register_held[key])
+        key: limit if ((automatic_slot_active[key] and normal_live >= 200)
                        or manual_active_by_key[key]
                        or key in cal["charge"]) else 0
         for key, limit in limits.items()
@@ -2128,7 +1733,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "pv_planungswert_quelle": pv_estimate_source,
         "ueberschuss_untergrenze_w": balance_lower,
         "effizienzmodus": efficiency_mode,
-        "sollwertstrategie": "Zustandsbasierte Grenzwerte; schreiben nur bei wirklicher Änderung",
+        "sollwertstrategie": "Tagesfreigabe je Speicher; nach Start positive Ladegrenze halten",
         "bevorzugte_ladeleistung_a_w": BATTERIES["A"]["preferred"],
         "bevorzugte_ladeleistung_e_w": BATTERIES["E"]["preferred"],
         "maximale_ladeleistung_a_w": BATTERIES["A"]["maximum"],
@@ -2191,44 +1796,40 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "packs_a_soc": bats.get("A", {}).get("packs", []),
         "netto_ueberschuss_w": round(live_surplus),
     }
-    plan["fahrplan_slot_start_ts"] = slot_start_ts
-    plan["fahrplan_slot_ende_ts"] = slot_end_ts
-    plan["fahrplan_entscheidung_fixiert_bis_ts"] = (
-        slot_end_ts if automatic else None
-    )
-    plan["fahrplan_slot_verriegelt"] = automatic and all(slot_locked_by_key.values())
+    plan["planungsmodus"] = "Tagesfreigabe je Speicher"
+    plan["fahrplan_slot_start_ts"] = start
+    plan["fahrplan_slot_ende_ts"] = end
+    plan["fahrplan_entscheidung_fixiert_bis_ts"] = None
+    plan["fahrplan_slot_verriegelt"] = False
     plan["fahrplan_slot_aktiv"] = any(automatic_slot_active.values())
-    plan["fahrplan_slot_status"] = (
-        "Beobachten"
-        if not automatic
-        else ("Laden" if any(automatic_slot_active.values()) else "Pause")
-    )
+    plan["fahrplan_slot_status"] = "Freigegeben" if any(automatic_slot_active.values()) else "Warten"
     for key in BATTERY_KEYS:
         name = key.lower()
+        d = decisions.get(key, {})
+        release_stamp = d.get("released_at", prior_attributes.get("ladefreigabe_venus_" + name + "_seit_ts"))
+        if not automatic_slot_active[key]:
+            release_stamp = prior_attributes.get("ladefreigabe_venus_" + name + "_seit_ts")
+        plan["ladefreigabe_venus_" + name + "_seit_ts"] = (
+            release_stamp if automatic and key not in cal_active_keys and not manual_active_by_key[key]
+            and isinstance(release_stamp, (int, float)) and DAY0 <= release_stamp <= NOW else None
+        )
+        plan["ladebeginn_venus_" + name + "_ts"] = plan["ladefreigabe_venus_" + name + "_seit_ts"] or d.get("start")
+        plan["voll_venus_" + name + "_ts"] = d.get("finish")
         plan["fahrplan_slot_aktiv_venus_" + name] = automatic_slot_active[key]
         plan["fahrplan_slot_grund_venus_" + name] = automatic_limit_reason[key]
-        plan["fahrplan_slot_verriegelt_venus_" + name] = automatic and slot_locked_by_key[key]
-        old_start_reason = prior_attributes.get("fahrplan_slot_startgrund_venus_" + name)
-        plan["fahrplan_slot_startgrund_venus_" + name] = (
-            old_start_reason if slot_locked_by_key[key] and automatic_slot_active[key]
-            and old_start_reason else automatic_reason if automatic_slot_active[key] else None
-        )
+        plan["fahrplan_slot_verriegelt_venus_" + name] = False
+        plan["fahrplan_slot_startgrund_venus_" + name] = automatic_limit_reason[key]
     for key in BATTERY_KEYS:
         name = key.lower()
-        previous_decision = prior_attributes.get("leistungsentscheidung_venus_" + name, {})
         decision = {"zeit_ts": NOW, "bevorzugt_w": efficient_caps[key],
                     "roh_w": automatic_limits_raw[key], "stabil_w": automatic_limits[key],
-                    "restbedarf_kwh": bats[key]["need"], "grund": efficiency_mode,
+                    "restbedarf_kwh": bats[key]["need"], "grund": automatic_limit_reason[key],
                     "fahrplan_status": automatic_status, "fahrplan_grund": automatic_reason,
                     "sollwert_grund": automatic_limit_reason[key],
                     "datenfehler": list(data_errors),
                     "live_ueberschuss_w": round(normal_live),
-                    "fenster_start_ts": start, "simulation_ende_ts": simulation_end,
-                    "fehlmenge_bevorzugt_kwh": round(preferred_sim["missing"], 4)}
-        if (isinstance(previous_decision, dict)
-                and "sollwert_grund" in previous_decision
-                and previous_decision.get("stabil_w") == automatic_limits[key]):
-            decision = previous_decision
+                    "fenster_start_ts": decisions.get(key, {}).get("start"), "simulation_ende_ts": simulation_end,
+                    "fehlmenge_bevorzugt_kwh": round(decisions.get(key, {}).get("preferred_missing", 0), 4)}
         plan["leistungsentscheidung_venus_" + name] = decision
         plan["soc_venus_" + name] = bats[key]["soc"]
         plan["restbedarf_venus_" + name + "_kwh"] = round(bats[key]["need"], 4)
@@ -2384,7 +1985,8 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     plan["ueberschuss_quelle"] = surplus_source
     plan["normaler_fahrplan_status"] = normal_status
     plan["normaler_fahrplan_grund"] = normal_reason
-    plan["mittagsspitzen_aktiv"] = peak_enabled
+    plan["mittagsspitzen_aktiv"] = peak_enabled and peak["ok"]
+    plan["mittagsspitzen_konfiguriert"] = peak_configured
     plan["mittagsspitzen_planbar"] = peak["ok"]
     plan["einspeiseziel_w"] = peak["target"] if peak["ok"] else None
     plan["mittagsspitze_live_freigabe_w"] = round(peak_live_headroom) if peak_live_override else 0
@@ -2395,7 +1997,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     plan["kalibrier_reserviert_w"] = cal_draw
     plan["normaler_restbedarf_kwh"] = round(need, 4)
     plan["fruehe_soc_ziele_prozent"] = early_soc_goals
-    plan["fruehes_soc_ziel_tagesklasse"] = category
+    plan["fruehes_soc_ziel_tagesklasse"] = early_profile
     plan["fruehes_soc_ziel_offen"] = early_soc_keys
     for key in BATTERY_KEYS:
         name = key.lower()

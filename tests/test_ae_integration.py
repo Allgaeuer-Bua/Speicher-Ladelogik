@@ -53,25 +53,8 @@ def test_default_sources_never_require_venus_d():
     assert const.CONF_A_MIN_SOC not in const.DEFAULTS
 
 
-def test_last_percent_keeps_register_on_forecast_pause_but_safety_stop_wins():
-    base = dict(raw_limit=0, previous_limit=1100, current_cap=1500,
-                eligible=True, target_reached=False, within_window=False,
-                planner_status="Platz für Mittagsspitze halten", safety_stop=False,
-                decision_locked=True, slot_was_active=False,
-                final_percent_pending=True, actual_limit=1100, preferred_limit=1100)
-    assert stability.stable_charge_limit(**base) == (
-        1100, True, "Letztes SoC-Prozent: Ladegrenze beibehalten")
-    assert stability.stable_charge_limit(**{**base, "safety_stop": True})[0] == 0
-    assert stability.stable_charge_limit(**{**base, "final_percent_pending": False})[0] == 0
-    assert stability.stable_charge_limit(**{**base, "previous_limit": 0})[0] == 1100
 
 
-def test_full_battery_uses_the_actual_register_when_prior_plan_is_stale():
-    value, held, _ = stability.stable_charge_limit(
-        raw_limit=0, previous_limit=0, current_cap=1500,
-        eligible=True, target_reached=True, within_window=False,
-        planner_status="Ziel erreicht", safety_stop=False, actual_limit=1100)
-    assert (value, held) == (1100, True)
 
 
 def test_venus_a_near_full_keeps_register_in_real_peak_planner():
@@ -103,10 +86,12 @@ def test_venus_a_near_full_keeps_register_in_real_peak_planner():
             "fahrplan_ladegrenze_stabil_venus_a_w": 1100,
         }
         plan = planner.calculate_plan(hass, payload)["plan"]
-    assert plan["fahrplan_ladegrenze_roh_venus_a_w"] == 0
-    assert plan["soll_ladegrenze_venus_a_w"] == 1100
-    assert plan["fahrplan_slot_aktiv_venus_a"] is False
-    assert plan["soll_ladeleistung_gesamt_w"] == 0
+    # The actual 500 W register from this fixture stays usable for the final 1 %.
+    assert plan["fahrplan_ladegrenze_roh_venus_a_w"] == 500
+    assert plan["soll_ladegrenze_venus_a_w"] == 500
+    assert plan["fahrplan_slot_aktiv_venus_a"] is True
+    assert plan["soll_ladeleistung_gesamt_w"] == 500
+    assert not plan["fahrplan_slot_verriegelt"]
 
 
 def _waiting_venus_e(*, phase="wait", soc=13, pause_minutes=45, earliest=None):
@@ -399,3 +384,104 @@ def test_running_calibration_continues_below_400w_and_past_forecast_end():
         result = planner.calculate_plan(hass, payload)
     assert result["calibration"]["phase"] == "charge"
     assert result["calibration"]["laufende_laeufe"][0]["unter_400_seit_ts"] == fx.NOW - 400
+
+
+def _normal_plan(*, pv=5000, soc_a=40, soc_e=50, controls=None):
+    hass, payload = fx.scenario(primary_phase="idle", secondary_phase="idle", pv=pv, live_load=500)
+    for key in ("sensor.marstek_venus_a_soc_batterie", "sensor.marstek_venus_a_soc_batteriepack_1", "sensor.marstek_venus_a_soc_batteriepack_2"):
+        hass.states.states[key] = fx.state(soc_a, fx.NOW, "%")
+    hass.states.states["sensor.marstek_venus_e_soc"] = fx.state(soc_e, fx.NOW, "%")
+    hass.states.states["sensor.stromzahler_leistung"] = fx.state(-(pv - 500), fx.NOW, "W")
+    values = dict(runtime.CONTROL_DEFAULTS)
+    values.update(mode="Automatik", fruehes_ladeziel_a_stark_soc=60,
+                  fruehes_ladeziel_e_stark_soc=60)
+    values.update(controls or {})
+    with patch.dict(sys.modules, stubs):
+        hass.states.states.update(runtime.planner_states(values))
+    return hass, payload
+
+
+def test_normal_planner_releases_both_at_preferred_power_with_no_locked_pause():
+    hass, payload = _normal_plan()
+    payload["prior_plan"] = {"berechnet_ts": fx.NOW - 20, "betriebsart": "Automatik",
+                             "regelung_aktiv": True, "daten_gueltig": True,
+                             "fahrplan_slot_start_ts": int(fx.NOW // 900) * 900,
+                             "fahrplan_slot_aktiv_venus_a": False,
+                             "fahrplan_ladegrenze_stabil_venus_a_w": 0}
+    with patch.dict(sys.modules, stubs):
+        result = planner.calculate_plan(hass, payload)
+    plan = result["plan"]
+    assert plan["soll_ladegrenze_venus_a_w"] == 1100
+    assert plan["soll_ladegrenze_venus_e_w"] == 1300
+    assert not plan["fahrplan_slot_verriegelt"]
+    assert plan["ladefreigabe_venus_a_seit_ts"] == fx.NOW
+    assert any(c["battery"] == "A" and c["value"] == 1100 for c in result["proposed_commands"])
+
+
+def test_manual_e_does_not_change_automatic_a_decision_or_diagnostic_reason():
+    hass, payload = _normal_plan(controls={"manuell_e_aktiv": True, "manuell_laden_e_w": 500})
+    with patch.dict(sys.modules, stubs):
+        plan = planner.calculate_plan(hass, payload)["plan"]
+    assert plan["soll_ladegrenze_venus_e_w"] == 500
+    assert plan["soll_ladegrenze_venus_a_w"] == 1100
+    assert not plan["fahrplan_slot_aktiv_venus_e"]
+    assert "Manuelle Grenze nur für E" not in plan["leistungsentscheidung_venus_a"]["grund"]
+
+
+def test_own_bad_pack_data_stops_a_but_e_can_still_charge():
+    hass, payload = _normal_plan()
+    hass.states.states["sensor.marstek_venus_a_soc_batteriepack_2"] = fx.state("unavailable", fx.NOW)
+    with patch.dict(sys.modules, stubs):
+        plan = planner.calculate_plan(hass, payload)["plan"]
+    assert plan["soll_ladegrenze_venus_a_w"] == 0
+    assert plan["soll_ladegrenze_venus_e_w"] == 1300
+
+
+def test_shared_bad_live_data_stops_both_and_recovery_keeps_daily_release():
+    hass, payload = _normal_plan()
+    with patch.dict(sys.modules, stubs):
+        first = planner.calculate_plan(hass, payload)["plan"]
+        payload["prior_plan"] = first
+        hass.states.states["sensor.stromzahler_leistung"] = fx.state("unavailable", fx.NOW)
+        stopped = planner.calculate_plan(hass, payload)["plan"]
+        assert stopped["soll_ladegrenze_venus_a_w"] == stopped["soll_ladegrenze_venus_e_w"] == 0
+        payload["prior_plan"] = stopped
+        hass.states.states["sensor.stromzahler_leistung"] = fx.state(-4500, fx.NOW, "W")
+        recovered = planner.calculate_plan(hass, payload)["plan"]
+    assert recovered["soll_ladegrenze_venus_a_w"] == 1100
+    assert recovered["soll_ladegrenze_venus_e_w"] == 1300
+
+
+def test_weak_day_ignores_configured_peak_switch_in_actual_planner():
+    hass, payload = _normal_plan(controls={"schwacher_tag": 150, "mittlerer_tag": 160, "starker_tag": 180})
+    with patch.dict(sys.modules, stubs):
+        plan = planner.calculate_plan(hass, payload)["plan"]
+    assert plan["tagesklasse"] == "schwach"
+    assert plan["mittagsspitzen_konfiguriert"]
+    assert not plan["mittagsspitzen_aktiv"]
+    assert not plan["mittagsspitzen_planbar"]
+    assert plan["soll_ladegrenze_venus_a_w"] == 1100
+    assert plan["soll_ladegrenze_venus_e_w"] == 1300
+
+
+def test_forecast_safety_applies_once_to_the_shared_remaining_pv():
+    values = []
+    for percent in (100, 80):
+        hass, payload = _normal_plan(controls={"prognose_sicherheit": percent, "unplanbare_reserve": 0})
+        with patch.dict(sys.modules, stubs):
+            plan = planner.calculate_plan(hass, payload)["plan"]
+        values.append(plan["sicher_speicherbar_rest_kwh"])
+    # The forecast is lowered before subtracting house demand, never per battery.
+    assert values[1] < values[0] * 0.8
+    assert values[1] > values[0] * 0.6
+
+
+def test_classification_has_three_yield_classes_and_confirms_changes():
+    assert stability.stable_day_class(20, (25, 50, 85), fx.NOW, fx.DAY, {})[0] == "schwach"
+    for expected in (30, 70):
+        assert stability.stable_day_class(expected, (25, 50, 85), fx.NOW, fx.DAY, {})[0] == "mittel"
+    prior = {"berechnet_ts": fx.NOW - 30, "tagesklasse": "mittel"}
+    category, candidate, since = stability.stable_day_class(90, (25, 50, 85), fx.NOW, fx.DAY, prior)
+    assert (category, candidate, since) == ("mittel", "stark", fx.NOW)
+    prior.update(tagesklasse_kandidat=candidate, tagesklasse_kandidat_seit_ts=since)
+    assert stability.stable_day_class(90, (25, 50, 85), fx.NOW + 900, fx.DAY, prior)[0] == "stark"

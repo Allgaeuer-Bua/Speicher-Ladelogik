@@ -281,6 +281,8 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "vorziehen_noetig",
                 "fruehestens_voll_ts",
                 "ziel_fehlmenge_simulation_kwh",
+                "planungsmodus",
+                "mittagsspitzen_konfiguriert",
                 "fahrplan_slot_start_ts",
                 "fahrplan_slot_ende_ts",
                 "fahrplan_entscheidung_fixiert_bis_ts",
@@ -293,6 +295,9 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
             )
             attributes = {key: plan.get(key) for key in keys}
             model_fields = (
+                "ladefreigabe_venus_{name}_seit_ts",
+                "ladebeginn_venus_{name}_ts",
+                "voll_venus_{name}_ts",
                 "restzeit_venus_{name}",
                 "leistungsentscheidung_venus_{name}",
                 "nennkapazitaet_venus_{name}_kwh",

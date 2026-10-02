@@ -10,7 +10,7 @@ globalThis.customElements = {
   define: (name, klass) => registry.set(name, klass),
 };
 await import("../custom_components/speicher_ladelogik_ae/frontend/speicher-ladelogik-ae-panel.js");
-const Panel = registry.get("speicher-ladelogik-ae-panel-2-0-3");
+const Panel = registry.get("speicher-ladelogik-ae-panel-2-1-0");
 
 function panel() {
   const instance = new Panel();
@@ -77,4 +77,20 @@ test("calibration displays the measured lower rest as a preference", () => {
   const html = p._calibrationCard();
   assert.match(html, /Letzte Ruhe vor Ladebeginn: 10 min/);
   assert.match(html, /Angestrebte Ruhe bis/);
+});
+
+test("daily release is shown per battery and effective peak state wins over its switch", () => {
+  const p = panel();
+  p._panel.config.entities = { planung: "sensor.plan", mittagsspitzen: "switch.peak" };
+  p._hass.states["switch.peak"] = { state: "on", attributes: {} };
+  p._hass.states["sensor.plan"] = { state: "Ladefreigabe aktiv", attributes: {
+    mittagsspitzen_aktiv: false, mittagsspitzen_planbar: false,
+    fahrplan_slot_aktiv_venus_a: true, fahrplan_slot_aktiv_venus_e: false,
+    ladefreigabe_venus_a_seit_ts: Date.now() / 1000 - 300,
+    ladebeginn_venus_e_ts: Date.now() / 1000 + 3600,
+  } };
+  assert.match(p._storageSlot("A", "a"), /freigegeben seit/);
+  assert.match(p._storageSlot("E", "e"), /Beginn geplant/);
+  assert.match(p._peakDetails(), />Aus</);
+  assert.doesNotMatch(p._planningCard(), /Entscheidung fixiert|Pausenslot|15-Minuten/);
 });
