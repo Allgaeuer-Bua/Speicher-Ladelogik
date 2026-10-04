@@ -22,7 +22,7 @@ Die neue Kennung lautet `speicher_ladelogik_ae`. Einstellungen, Kalibrierhistori
 ## Ladeplanung ab v2.1.0
 
 1. **Tag einordnen:** schwach, mittel oder stark anhand des erwarteten Tagesertrags. Die gemessene PV-Abweichung korrigiert die Prognose zeitabhängig. Ein Klassenwechsel wird erst nach 15 Minuten bestätigt; daraus entstehen keine Ladepausen.
-2. **Bedarf je Speicher:** Geräteziel, eigener SoC und bei A die einzelnen Packs bestimmen den Restbedarf. Das zusätzliche frühe SoC-Ziel greift nur, wenn dieser Speicher darunter liegt. „Wechselhaft“ ist ein separates Zielprofil bei gemessener Prognoseunsicherheit, keine vierte Ertragsklasse.
+2. **Bedarf je Speicher:** Geräteziel, eigener SoC und bei A die einzelnen Packs bestimmen den Restbedarf. Das zusätzliche frühe SoC-Ziel greift nur, wenn dieser Speicher darunter liegt. „Wechselhaft“ ist ein separates Zielprofil bei gemessener Prognoseunsicherheit an mittleren Tagen, keine vierte Ertragsklasse. Starke Tage behalten ihr eigenes frühes SoC-Ziel; ein kurzer PV-Einbruch schaltet es nicht auf „Wechselhaft“ um.
 3. **Früh genug beginnen:** Schwache Tage starten mit vorhandenem PV-Überschuss und ohne Mittagsspitzenkappung. Mittlere und starke Tage dürfen später beginnen, soweit die gemeinsame PV-Prognose beide Speicher einschließlich Reserve versorgen kann. Falls nötig wird zuerst der Start vorgezogen.
 4. **Bevorzugte Leistung:** A und E verwenden unabhängig ihre eingestellte bevorzugte Ladegrenze. Eine höhere Grenze wird nur gewählt, wenn die Simulation damit die heutige Zielfüllung tatsächlich verbessert. Fehlender PV-Ertrag oder eine knappe Reserve allein erzeugen keine Maximalleistung.
 5. **Nach Tagesfreigabe halten:** Keine 15-Minuten-Pausenslots und kein Zurücksetzen auf 0 W wegen Wolken, einer neuen Prognose oder dem Ende des Ladefensters. AstraMeter regelt die tatsächliche Leistung am Netzanschlusspunkt. Bei 100 % bleibt der Registerwert stehen; bei 100 → 99 % wird ohne Leistungserhöhung nachgeladen.
@@ -45,6 +45,14 @@ Hausverbrauch und reservierte Leistung für Handbetrieb/Kalibrierung werden abge
 Die Vollladung hat Vorrang vor der Mittagsspitzenkappung. Eine Prognose kann tatsächliches Wetter und Hausverbrauch nicht garantieren; die Planung wird laufend neu geprüft. Die Diagnose zeigt die verbleibende rechnerische Fehlmenge und die aktuelle Begründung je Speicher. Eine Freigabe ist eine **Leistungsgrenze**, keine erzwungene Ladung oder zugesicherte Istleistung.
 
 Kalibrierung, Handbetrieb, manuelle Sperren, ungültige Daten und Gerätegrenzen haben weiterhin Vorrang. Die Regel zum Halten der Ladegrenze gilt für den normalen automatischen Fahrplan.
+
+## AC-Rückmeldung und Wechselrichterstatus ab v2.1.1
+
+Eine positive Ladegrenze erlaubt Ladung, erzwingt sie aber nicht. Jeder gültige AC-Messwert mit einer letzten Meldung innerhalb von 90 Sekunden bestätigt den Datenempfang, auch 0 W und Entladeleistung. Fehlt bei freigegebener Ladung anschließend für mindestens drei Minuten eine frische AC-Meldung, erscheint ein Hinweis je Speicher. Derselbe Ausfall wird nicht laufend erneut gemeldet; nach Erholung verschwindet der Hinweis. Diese Prüfung allein setzt keine Ladegrenze auf 0 W.
+
+Optional können in der Speicherkonfiguration die Sensoren für den Wechselrichterstatus gewählt werden. Vorbelegt sind `sensor.marstek_venus_a_wechselrichter_status` und `sensor.marstek_venus_e_wechselrichter_status`. `Charge`, `Discharge` und `Standby` ergänzen die Diagnose nur bei aktueller Meldung; ein alter Standby-Wert verdeckt keinen Ausfall. Fehlen diese Sensoren, bleibt die AC-Prüfung nutzbar.
+
+Die Diagnose zeigt den ersten Freigabegrund des Tages neben der aktuellen Entscheidung. Nach einem Update bereits bestehende Freigaben bleiben bestehen; ihr nicht aufgezeichneter ursprünglicher Auslöser wird ausdrücklich als unbekannt gekennzeichnet.
 
 ## Kalibrierung
 

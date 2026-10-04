@@ -6,6 +6,7 @@ from typing import Any
 
 from .const import (
     CONF_A_AC_POWER,
+    CONF_A_INVERTER_STATUS,
     CONF_A_ACTIVE,
     CONF_A_AUTO_TARGET,
     CONF_A_CHARGE_LIMIT,
@@ -22,6 +23,7 @@ from .const import (
     CONF_A_PACK_SOC,
     CONF_A_SOC,
     CONF_E_AC_POWER,
+    CONF_E_INVERTER_STATUS,
     CONF_E_ACTIVE,
     CONF_E_AUTO_TARGET,
     CONF_E_CELL_DRIFT,
@@ -46,6 +48,7 @@ SLOT_FIELDS: dict[str, dict[str, str]] = {
     "A": {
         "soc": CONF_A_SOC,
         "ac_power": CONF_A_AC_POWER,
+        "inverter_status": CONF_A_INVERTER_STATUS,
         "dc_power": CONF_A_DC_POWER,
         "charge_limit": CONF_A_CHARGE_LIMIT,
         "discharge_limit": CONF_A_DISCHARGE_LIMIT,
@@ -64,6 +67,7 @@ SLOT_FIELDS: dict[str, dict[str, str]] = {
     "E": {
         "soc": CONF_E_SOC,
         "ac_power": CONF_E_AC_POWER,
+        "inverter_status": CONF_E_INVERTER_STATUS,
         "dc_power": CONF_E_DC_POWER,
         "charge_limit": CONF_E_CHARGE_LIMIT,
         "discharge_limit": CONF_E_DISCHARGE_LIMIT,

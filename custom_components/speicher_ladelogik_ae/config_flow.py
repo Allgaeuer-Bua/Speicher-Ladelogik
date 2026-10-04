@@ -149,6 +149,7 @@ class SpeicherLadelogikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors["mppt_sensors"] = "too_many_mppts"
         elif user_input is not None:
             instance = dict(user_input)
+            instance.setdefault("inverter_status", "")
             instance["model"] = model
             instance["id"] = str(
                 current.get("id", f"venus_{model.lower()}_{model_number}")
@@ -192,6 +193,11 @@ class SpeicherLadelogikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Required("max_cell_temp", default=current.get("max_cell_temp", defaults["max_cell_temp"])): _entity("sensor"),
             vol.Required("min_cell_temp", default=current.get("min_cell_temp", defaults["min_cell_temp"])): _entity("sensor"),
         }
+        inverter_status = current.get("inverter_status", defaults.get("inverter_status"))
+        fields[
+            vol.Optional("inverter_status", default=inverter_status)
+            if inverter_status else vol.Optional("inverter_status")
+        ] = _entity("sensor")
         min_soc = current.get("min_soc", defaults.get("min_soc"))
         fields[
             vol.Optional("min_soc", default=min_soc)

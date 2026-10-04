@@ -8,7 +8,7 @@ from homeassistant.const import Platform
 
 DOMAIN: Final = "speicher_ladelogik_ae"
 NAME: Final = "Speicher-Ladelogik A/E"
-VERSION: Final = "2.1.0"
+VERSION: Final = "2.1.1"
 
 PLATFORMS: Final = [
     Platform.SENSOR,
@@ -33,6 +33,7 @@ CONF_STORAGE_INSTANCES: Final = "storage_instances"
 
 CONF_A_SOC: Final = "a_soc"
 CONF_A_AC_POWER: Final = "a_ac_power"
+CONF_A_INVERTER_STATUS: Final = "a_inverter_status"
 CONF_A_DC_POWER: Final = "a_dc_power"
 CONF_A_CHARGE_LIMIT: Final = "a_charge_limit"
 CONF_A_DISCHARGE_LIMIT: Final = "a_discharge_limit"
@@ -51,6 +52,7 @@ CONF_A_MPPT_SENSORS: Final = "a_mppt_sensors"
 
 CONF_E_SOC: Final = "e_soc"
 CONF_E_AC_POWER: Final = "e_ac_power"
+CONF_E_INVERTER_STATUS: Final = "e_inverter_status"
 CONF_E_DC_POWER: Final = "e_dc_power"
 CONF_E_CHARGE_LIMIT: Final = "e_charge_limit"
 CONF_E_DISCHARGE_LIMIT: Final = "e_discharge_limit"
@@ -90,6 +92,7 @@ DEFAULTS: Final = {
     CONF_ENABLED_MODELS: ["A", "E"],
     CONF_A_SOC: "sensor.marstek_venus_a_soc_batterie",
     CONF_A_AC_POWER: "sensor.marstek_venus_a_ac_leistung",
+    CONF_A_INVERTER_STATUS: "sensor.marstek_venus_a_wechselrichter_status",
     CONF_A_DC_POWER: "sensor.marstek_venus_a_batterieleistung",
     CONF_A_CHARGE_LIMIT: "number.marstek_venus_a_maximale_ladeleistung",
     CONF_A_DISCHARGE_LIMIT: "number.marstek_venus_a_maximale_entladeleistung",
@@ -110,6 +113,7 @@ DEFAULTS: Final = {
     CONF_A_MPPT_SENSORS: [],
     CONF_E_SOC: "sensor.marstek_venus_e_soc",
     CONF_E_AC_POWER: "sensor.marstek_venus_e_ac_leistung",
+    CONF_E_INVERTER_STATUS: "sensor.marstek_venus_e_wechselrichter_status",
     CONF_E_DC_POWER: "sensor.marstek_venus_e_dc_leistung",
     CONF_E_CHARGE_LIMIT: "number.marstek_venus_e_ladeleistung",
     CONF_E_DISCHARGE_LIMIT: "number.marstek_venus_e_entladeleistung",
@@ -136,6 +140,7 @@ COMMON_KEYS: Final = (
 VENUS_A_KEYS: Final = (
     CONF_A_SOC,
     CONF_A_AC_POWER,
+    CONF_A_INVERTER_STATUS,
     CONF_A_DC_POWER,
     CONF_A_CHARGE_LIMIT,
     CONF_A_DISCHARGE_LIMIT,
@@ -155,6 +160,7 @@ VENUS_A_KEYS: Final = (
 VENUS_E_KEYS: Final = (
     CONF_E_SOC,
     CONF_E_AC_POWER,
+    CONF_E_INVERTER_STATUS,
     CONF_E_DC_POWER,
     CONF_E_CHARGE_LIMIT,
     CONF_E_DISCHARGE_LIMIT,

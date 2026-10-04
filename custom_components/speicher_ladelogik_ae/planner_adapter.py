@@ -82,6 +82,11 @@ def _entity_mapping(config: dict[str, Any]) -> dict[str, str]:
         ):
             mapping[legacy] = configured
 
+    # Respect an explicitly cleared optional status source.
+    for slot in ("A", "E"):
+        key = SLOT_FIELDS[slot]["inverter_status"]
+        if not config.get(key):
+            mapping[DEFAULTS[key]] = "sensor.speicher_ladelogik_ae_unconfigured_status"
     for key, legacy in LEGACY_OVERRIDE_ENTITIES.items():
         configured = config.get(key)
         if isinstance(configured, str):

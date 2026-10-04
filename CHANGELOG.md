@@ -1,5 +1,13 @@
 # Änderungen
 
+## 2.1.1
+
+- Starke Tage verwenden ausschließlich ihr eigenes frühes SoC-Ziel. Kurzfristige Prognoseabweichungen aktivieren nicht mehr das Wechselhaft-Profil. Eine tatsächlich gefährdete Vollladung darf den Start weiterhin vorziehen.
+- Frische AC-Messwerte bestätigen den Datenempfang auch bei 0 W oder Entladung. Eine Ladefreigabe verlangt keine Mindest-Istleistung mehr.
+- Optionaler Wechselrichterstatus (Charge, Discharge, Standby) je Speicher ergänzt die Diagnose. Die üblichen A/E-Entitäten sind vorbelegt; fehlende Statussensoren blockieren die Integration nicht.
+- Veraltete AC-Messwerte erzeugen nach drei Minuten ohne frische Daten nur einen Hinweis pro Störung und Speicher. Frische Statuswerte verdecken keine veralteten AC-Werte. Hinweise werden nach Erholung entfernt; der Störungszustand übersteht einen Neustart.
+- Die erste Tagesfreigabe speichert Zeitpunkt, Begründung, Tagesklasse, SoC-Ziel und Prognosefaktoren dauerhaft für diesen Tag. Die Diagnose zeigt den ursprünglichen Freigabegrund zusätzlich zur laufenden Entscheidung. Bereits vorhandene Freigaben werden ohne erfundenen Startgrund übernommen.
+
 ## 2.1.0
 
 - Normalen Ladeplan durch eine Tagesfreigabe je Speicher ersetzt. Die alten 15-Minuten-Ladepausen, Leistungsaufteilung und konkurrierenden Freigabewege entfallen.
