@@ -1214,7 +1214,9 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const decisions = this._models().map((slot) => {
       const decision = this._attr("planung", `leistungsentscheidung_venus_${slot.toLowerCase()}`);
       if (!decision) return null;
-      return `${this._storageLabel(slot)} · ${this._dateTime(decision.zeit_ts)}: bevorzugt ${this._power(decision.bevorzugt_w)}, geplant ${this._power(decision.roh_w)}, gehalten ${this._power(decision.stabil_w)} · Restbedarf ${this._energy(decision.restbedarf_kwh)} · Fenster ${this._time(decision.fenster_start_ts)}–${this._time(decision.simulation_ende_ts)} · Fehlmenge bei bevorzugter Leistung ${this._energy(decision.fehlmenge_bevorzugt_kwh)} · ${decision.grund}${decision.sollwert_grund ? ` · ${decision.fahrplan_status}: ${decision.fahrplan_grund} · ${decision.sollwert_grund}` : ""}`;
+      const origin = this._attr("planung", `ladefreigabe_venus_${slot.toLowerCase()}_ursprung`);
+      const originText = origin ? ` · Erste Freigabe ${this._dateTime(origin.zeit_ts)}: ${origin.grund}` : "";
+      return `${this._storageLabel(slot)} · ${this._dateTime(decision.zeit_ts)}: bevorzugt ${this._power(decision.bevorzugt_w)}, geplant ${this._power(decision.roh_w)}, gehalten ${this._power(decision.stabil_w)} · Restbedarf ${this._energy(decision.restbedarf_kwh)} · Fenster ${this._time(decision.fenster_start_ts)}–${this._time(decision.simulation_ende_ts)} · Fehlmenge bei bevorzugter Leistung ${this._energy(decision.fehlmenge_bevorzugt_kwh)} · ${decision.grund}${originText}${decision.sollwert_grund ? ` · ${decision.fahrplan_status}: ${decision.fahrplan_grund} · ${decision.sollwert_grund}` : ""}`;
     }).filter(Boolean);
     return `
       <main class="grid diagnostics-view">
@@ -1439,7 +1441,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 }
 
-const PANEL_ELEMENT = "speicher-ladelogik-ae-panel-2-1-0";
+const PANEL_ELEMENT = "speicher-ladelogik-ae-panel-2-1-1";
 
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);

@@ -10,7 +10,7 @@ globalThis.customElements = {
   define: (name, klass) => registry.set(name, klass),
 };
 await import("../custom_components/speicher_ladelogik_ae/frontend/speicher-ladelogik-ae-panel.js");
-const Panel = registry.get("speicher-ladelogik-ae-panel-2-1-0");
+const Panel = registry.get("speicher-ladelogik-ae-panel-2-1-1");
 
 function panel() {
   const instance = new Panel();
@@ -93,4 +93,17 @@ test("daily release is shown per battery and effective peak state wins over its 
   assert.match(p._storageSlot("E", "e"), /Beginn geplant/);
   assert.match(p._peakDetails(), />Aus</);
   assert.doesNotMatch(p._planningCard(), /Entscheidung fixiert|Pausenslot|15-Minuten/);
+});
+
+test("diagnostics retain the first release reason alongside the current hold", () => {
+  const p = panel();
+  p._panel.config.entities = { planung: "sensor.plan" };
+  p._hass.states["sensor.plan"] = { state: "Ladefreigabe aktiv", attributes: {
+    leistungsentscheidung_venus_a: { zeit_ts: 1791095172, grund: "Ladefreigabe bleibt bestehen" },
+    ladefreigabe_venus_a_ursprung: { zeit_ts: 1791093603, grund: "Eigenes vorzeitiges SoC-Ziel absichern" },
+  } };
+  const html = p._diagnostics();
+  assert.match(html, /Erste Freigabe/);
+  assert.match(html, /Eigenes vorzeitiges SoC-Ziel absichern/);
+  assert.match(html, /Ladefreigabe bleibt bestehen/);
 });

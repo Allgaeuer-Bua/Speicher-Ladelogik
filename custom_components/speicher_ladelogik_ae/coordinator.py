@@ -78,6 +78,8 @@ _STABILITY_KEYS = tuple(
         f"ziel_venus_{name}_latch_soc",
         f"fahrplan_ladegrenze_stabil_venus_{name}_w",
         f"ladefreigabe_venus_{name}_seit_ts",
+        f"ladefreigabe_venus_{name}_ursprung",
+        f"ac_rueckmeldung_venus_{name}",
     )
 ) + (
     "berechnet_ts",
@@ -135,6 +137,7 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._control[f"venus_{name}_packs"] = float(modules)
         self._remaining_estimator = RemainingTimeEstimator()
         self._state_loaded = False
+        self._legacy_ac_notice_cleared = False
         self._write_lock = asyncio.Lock()
         self._pending_request = "tick"
         self._last_write_error: str | None = None
@@ -505,7 +508,8 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         missing = sorted(
             {
                 item["entity_id"]
-                for snapshots in sources.values()
+                for source_key, snapshots in sources.items()
+                if not source_key.endswith("_inverter_status")
                 for item in snapshots
                 if not item["available"]
             }
@@ -1186,18 +1190,19 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 event_data[f"writes_{model.lower()}"] = successful.get(model, True)
             self.hass.bus.async_fire("speicher_ladelogik_ae_auswertung", event_data)
 
-            if output.get("reaction_newly_blocked"):
-                batteries = "/".join(
-                    self.storage_name(slot)
-                    for slot in output["reaction_newly_blocked"]
-                )
+            if not self._legacy_ac_notice_cleared:
+                await self._async_dismiss_notification("speicher_ladelogik_ae_ladereaktion")
+                self._legacy_ac_notice_cleared = True
+            for slot in output.get("reaction_newly_blocked", []):
+                feedback = plan.get(f"ac_rueckmeldung_venus_{slot.lower()}", {})
                 await self._async_notification(
-                    "speicher_ladelogik_ae_ladereaktion",
-                    "Speicher-Ladelogik A/E – Ladeleistung nicht bestätigt",
-                    batteries
-                    + " hat nach der Ladefreigabe keine frische "
-                    "AC-Rückmeldung geliefert.",
+                    f"speicher_ladelogik_ae_ac_rueckmeldung_{slot.lower()}",
+                    "Speicher-Ladelogik A/E – AC-Messwert veraltet",
+                    self.storage_name(slot) + ": " + feedback.get("message", "AC-Messwert fehlt."),
                 )
+            for slot in output.get("reaction_resolved", []):
+                await self._async_dismiss_notification(
+                    f"speicher_ladelogik_ae_ac_rueckmeldung_{slot.lower()}")
 
             errors = [item.get("error") for item in results if not item.get("ok")]
             if results:

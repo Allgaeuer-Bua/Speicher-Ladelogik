@@ -485,3 +485,98 @@ def test_classification_has_three_yield_classes_and_confirms_changes():
     assert (category, candidate, since) == ("mittel", "stark", fx.NOW)
     prior.update(tagesklasse_kandidat=candidate, tagesklasse_kandidat_seit_ts=since)
     assert stability.stable_day_class(90, (25, 50, 85), fx.NOW + 900, fx.DAY, prior)[0] == "stark"
+
+
+def test_strong_day_cloud_dip_does_not_enable_wechselhaft_goals():
+    hass, payload = _normal_plan(pv=1500, controls={
+        "fruehes_ladeziel_a_stark_soc": 0, "fruehes_ladeziel_e_stark_soc": 0,
+        "fruehes_ladeziel_a_wechselhaft_soc": 60, "fruehes_ladeziel_e_wechselhaft_soc": 60,
+    })
+    with patch.dict(sys.modules, stubs):
+        plan = planner.calculate_plan(hass, payload)["plan"]
+    assert plan["tagesklasse"] == "stark"
+    assert plan["prognose_kurzfristfaktor"] < 0.7
+    assert plan["fruehes_soc_ziel_tagesklasse"] == "stark"
+    assert plan["fruehe_soc_ziele_prozent"] == {"A": 0, "E": 0}
+    assert plan["soll_ladegrenze_venus_a_w"] == plan["soll_ladegrenze_venus_e_w"] == 0
+
+
+def test_first_release_reason_survives_hold_and_restart():
+    hass, payload = _normal_plan()
+    with patch.dict(sys.modules, stubs):
+        first = planner.calculate_plan(hass, payload)["plan"]
+        origin = first["ladefreigabe_venus_a_ursprung"]
+        assert origin["grund"] == "Eigenes vorzeitiges SoC-Ziel absichern"
+        assert origin["soc_ziel"] == 60
+        # These are exactly the fields saved across a restart for release tracking.
+        payload["prior_plan"] = {k: first[k] for k in (
+            "berechnet_ts", "ladefreigabe_venus_a_seit_ts", "ladefreigabe_venus_a_ursprung",
+            "fahrplan_ladegrenze_stabil_venus_a_w")}
+        payload["now"] += 15
+        second = planner.calculate_plan(hass, payload)["plan"]
+    assert second["ladefreigabe_venus_a_ursprung"] == origin
+    assert second["fahrplan_slot_startgrund_venus_a"] == origin["grund"]
+    assert "bleibt bestehen" in second["fahrplan_slot_grund_venus_a"]
+
+
+def test_actual_planner_accepts_zero_reports_and_warns_only_once_for_lost_ac():
+    hass, payload = _normal_plan()
+    start = fx.NOW
+    prior = None
+    with patch.dict(sys.modules, stubs):
+        for elapsed in (0, 100, 280, 295, 310):
+            now = start + elapsed
+            payload.update(now=now, prior_plan=prior)
+            for state in hass.states.states.values():
+                state.last_reported = datetime.fromtimestamp(now, timezone.utc)
+            for key in ('a', 'e'):
+                hass.states.states[f"sensor.marstek_venus_{key}_wechselrichter_status"] = fx.state('Standby', now)
+                stamp = now if key == 'e' or elapsed in (0, 310) else start
+                hass.states.states[f"sensor.marstek_venus_{key}_ac_leistung"] = fx.state(0, stamp, 'W')
+            result = planner.calculate_plan(hass, payload)
+            prior = result['plan']
+            assert prior['soll_ladegrenze_venus_a_w'] == 1100
+            assert prior['soll_ladegrenze_venus_e_w'] == 1300
+            assert not prior['ladereaktion_venus_a_gesperrt']
+            assert result['reaction_newly_blocked'] == (['A'] if elapsed == 280 else [])
+            assert result['reaction_resolved'] == (['A'] if elapsed == 310 else [])
+
+
+def test_optional_status_defaults_and_custom_mapping_survive_normalization():
+    config, instances = storage.normalize_config(dict(const.DEFAULTS))
+    assert config['a_inverter_status'] == 'sensor.marstek_venus_a_wechselrichter_status'
+    instances[0]['inverter_status'] = 'sensor.custom_inverter_state'
+    instances[1]['inverter_status'] = ''
+    config, _ = storage.normalize_config({**config, 'storage_instances': instances})
+    assert config['a_inverter_status'] == 'sensor.custom_inverter_state'
+    assert 'e_inverter_status' not in config
+    assert 'a_inverter_status' not in const.REQUIRED_A_KEYS
+    assert 'e_inverter_status' not in const.REQUIRED_E_KEYS
+
+
+def test_optional_inverter_sensor_can_be_remapped_or_explicitly_disabled():
+    with patch.dict(sys.modules, stubs):
+        adapter = import_module('ae_fixture.planner_adapter')
+    config, instances = storage.normalize_config(dict(const.DEFAULTS))
+    instances[0]['inverter_status'] = 'sensor.custom_inverter_state'
+    instances[1]['inverter_status'] = ''
+    config, _ = storage.normalize_config({**config, 'storage_instances': instances})
+    hass, _ = _normal_plan()
+    hass.states.states['sensor.custom_inverter_state'] = fx.state('Discharge', fx.NOW)
+    hass.states.states['sensor.marstek_venus_e_wechselrichter_status'] = fx.state('Standby', fx.NOW)
+    proxy = adapter._MappedStates(hass, adapter._entity_mapping(config))
+    assert proxy.get('sensor.marstek_venus_a_wechselrichter_status').state == 'Discharge'
+    assert proxy.get('sensor.marstek_venus_e_wechselrichter_status') is None
+
+
+def test_upgrading_existing_release_does_not_invent_a_cause_or_stop_charging():
+    hass, payload = _normal_plan(pv=1500, controls={
+        'fruehes_ladeziel_a_stark_soc': 0, 'fruehes_ladeziel_e_stark_soc': 0})
+    payload['prior_plan'] = {
+        'berechnet_ts': fx.NOW - 20, 'ladefreigabe_venus_a_seit_ts': fx.NOW - 60,
+        'fahrplan_ladegrenze_stabil_venus_a_w': 1100}
+    with patch.dict(sys.modules, stubs):
+        plan = planner.calculate_plan(hass, payload)['plan']
+    assert plan['soll_ladegrenze_venus_a_w'] == 1100
+    assert 'nicht aufgezeichnet' in plan['ladefreigabe_venus_a_ursprung']['grund']
+    assert plan['ladefreigabe_venus_a_ursprung']['zeit_ts'] == fx.NOW - 60

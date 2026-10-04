@@ -37,7 +37,8 @@
           "max_cell_temp": "Maximale Zelltemperatur",
           "min_cell_temp": "Minimale Zelltemperatur",
           "drift": "Zelldrift-Sensoren",
-          "mppt_sensors": "Optionale MPPT-Leistungssensoren Venus A (maximal 4)"
+          "mppt_sensors": "Optionale MPPT-Leistungssensoren Venus A (maximal 4)",
+          "inverter_status": "Optionaler Wechselrichterstatus (Charge / Discharge / Standby)"
         }
       }
     },

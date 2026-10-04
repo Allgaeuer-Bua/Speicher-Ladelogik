@@ -10,6 +10,7 @@ from homeassistant.util import dt as dt_util
 
 from . import persistence
 from .charge_plan import daily_plan
+from .telemetry import ac_feedback
 from .const import VERSION as INTEGRATION_VERSION
 from .stability import (
     calibration_required_seconds,
@@ -66,6 +67,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "A": {
             "soc": "sensor.marstek_venus_a_soc_batterie",
             "power": "sensor.marstek_venus_a_ac_leistung",
+            "inverter": "sensor.marstek_venus_a_wechselrichter_status",
             "charge": "number.marstek_venus_a_maximale_ladeleistung",
             "discharge": "number.marstek_venus_a_maximale_entladeleistung",
             "auto": "switch.astrameter_venus_a_auto_target",
@@ -81,6 +83,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "E": {
             "soc": "sensor.marstek_venus_e_soc",
             "power": "sensor.marstek_venus_e_ac_leistung",
+            "inverter": "sensor.marstek_venus_e_wechselrichter_status",
             "charge": "number.marstek_venus_e_ladeleistung",
             "discharge": "number.marstek_venus_e_entladeleistung",
             "auto": "switch.astrameter_venus_e_auto_target",
@@ -787,6 +790,10 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         power_latest = measurement(cfg["power"], "power")
         power_reported_ts = reported_timestamp(cfg["power"])
         power_age_min = max(0, (NOW - power_reported_ts) / 60) if power_reported_ts is not None else None
+        inverter_status = raw(cfg["inverter"])
+        inverter_ts = reported_timestamp(cfg["inverter"])
+        inverter_fresh = (inverter_status in ("Charge", "Discharge", "Standby")
+                          and inverter_ts is not None and NOW - inverter_ts <= 90)
         # Ein unveraenderter numerischer Wert bleibt verwendbar. "Frisch" ist
         # weiterhin separat sichtbar und wird fuer Netz-/Batteriebilanzen benutzt.
         power_held_zero = power_usable is None and power_latest is not None and abs(power_latest) <= 0.5
@@ -878,6 +885,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             errors.append(key + ": Gesamt-/Pack-SoC oder Ladegrenze fehlt/ist ungueltig")
         values.update({"soc": soc, "power": power, "power_live": power_usable,
                        "power_display": power_display,
+                       "inverter_status": inverter_status, "inverter_fresh": inverter_fresh,
                        "power_fresh": power_fresh is not None, "power_status": power_status,
                        "power_reported_ts": power_reported_ts, "power_age_min": power_age_min,
                        "power_held_zero": power_held_zero, "power_for_cal": power_for_cal,
@@ -962,7 +970,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         preferred = ELEVEN
     # "Wechselhaft" is an early-target profile based on measured uncertainty,
     # never a fourth daily yield class. Preserve the existing user settings.
-    early_profile = ("wechselhaft" if category != "schwach" and
+    early_profile = ("wechselhaft" if category == "mittel" and
                      (short_factor < 0.7 or day_factor < 0.9) else category)
     early_soc_goals = {
         key: setting(
@@ -1475,46 +1483,25 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             reason = "Grenzwert bleibt gesetzt; AstraMeter begrenzt die reale Leistung am Netzanschlusspunkt"
 
     reaction = {}
-    reaction_newly_blocked = []
+    reaction_newly_blocked = []  # Compatibility name: these are hints, never locks.
+    reaction_resolved = []
     for key in BATTERY_KEYS:
         name = key.lower()
-        prior_limit = number(prior_attributes.get("soll_ladegrenze_venus_" + name + "_w"), 0)
-        prior_since = number(prior_attributes.get("ladeanforderung_venus_" + name + "_seit_ts"))
-        prior_confirmed = flag(prior_attributes.get("ladeleistung_venus_" + name + "_bestaetigt", False))
-        blocked = reaction_blocked_prior[key]
-        requested = (
-            limits[key] > 0
-            and key not in cal["charge"]
-            and (
-                manual_active_by_key[key]
-                or automatic_limits_raw[key] > 0
-            )
+        requested = (limits[key] > 0 and key not in cal["charge"]
+                     and (manual_active_by_key[key] or automatic_limits_raw[key] > 0))
+        feedback = ac_feedback(
+            now=NOW, requested=requested, fresh=bats[key]["power_fresh"],
+            inverter_status=bats[key]["inverter_status"],
+            inverter_fresh=bats[key]["inverter_fresh"],
+            prior=prior_attributes.get("ac_rueckmeldung_venus_" + name) or {},
         )
-        since = None
-        confirmed = False
-        status_text = "aus"
-        if blocked:
-            limits[key] = 0
-            status_text = "gesperrt; Fehler quittieren"
-        elif requested:
-            continuing = prior_limit > 0 and prior_since is not None
-            since = prior_since if continuing else NOW
-            confirmed = (prior_confirmed if continuing else False) or (
-                bats[key]["power_fresh"] and bats[key]["charge_power"] is not None
-                and bats[key]["charge_power"] >= 25)
-            if confirmed:
-                status_text = "bestätigt"
-            elif NOW - since >= 180:
-                status_text = "nicht bestätigt – Hinweis (AstraMeter aktiv)"
-                reaction_newly_blocked.append(key)
-            else:
-                status_text = "wartet auf frische Ladeleistung"
-        reaction[key] = {"requested_since": since, "confirmed": confirmed,
-                         "blocked": blocked, "status": status_text}
-        if key in reaction_newly_blocked:
-            message = SLOT_NAMES[key] + ": Ladeleistung nach Freigabe nicht bestätigt (Hinweis)"
-            if message not in warnings:
-                warnings.append(message)
+        reaction[key] = feedback
+        if feedback["notify"]:
+            reaction_newly_blocked.append(key)
+        if feedback["resolved"]:
+            reaction_resolved.append(key)
+        if feedback["issue"]:
+            warnings.append(SLOT_NAMES[key] + ": " + feedback["message"])
 
     reaction_blocked_keys = [key for key in BATTERY_KEYS if reaction[key]["blocked"]]
 
@@ -1818,7 +1805,22 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         plan["fahrplan_slot_aktiv_venus_" + name] = automatic_slot_active[key]
         plan["fahrplan_slot_grund_venus_" + name] = automatic_limit_reason[key]
         plan["fahrplan_slot_verriegelt_venus_" + name] = False
-        plan["fahrplan_slot_startgrund_venus_" + name] = automatic_limit_reason[key]
+        stamp = plan["ladefreigabe_venus_" + name + "_seit_ts"]
+        prior_stamp = prior_attributes.get("ladefreigabe_venus_" + name + "_seit_ts")
+        old_origin = prior_attributes.get("ladefreigabe_venus_" + name + "_ursprung")
+        origin = None
+        if stamp is not None:
+            if stamp == prior_stamp and old_origin:
+                origin = old_origin
+            elif stamp == NOW:
+                origin = {"zeit_ts": stamp, "grund": automatic_limit_reason[key],
+                          "tagesklasse": category, "soc_profil": early_profile,
+                          "soc_ziel": early_soc_goals[key], "soc": bats[key]["soc"],
+                          "kurzfristfaktor": short_factor, "tagesfaktor": day_factor}
+            else:
+                origin = {"zeit_ts": stamp, "grund": "Bestehende Freigabe übernommen; ursprünglicher Auslöser nicht aufgezeichnet"}
+        plan["ladefreigabe_venus_" + name + "_ursprung"] = origin
+        plan["fahrplan_slot_startgrund_venus_" + name] = origin["grund"] if origin else None
     for key in BATTERY_KEYS:
         name = key.lower()
         decision = {"zeit_ts": NOW, "bevorzugt_w": efficient_caps[key],
@@ -1857,6 +1859,9 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         plan["ac_leistung_venus_" + name + "_status"] = bats[key]["power_status"]
         plan["ac_leistung_venus_" + name + "_alter_min"] = (round(bats[key]["power_age_min"], 1)
                                                               if bats[key]["power_age_min"] is not None else None)
+        plan["ac_rueckmeldung_venus_" + name] = reaction[key]
+        plan["wechselrichter_status_venus_" + name] = bats[key]["inverter_status"]
+        plan["wechselrichter_status_venus_" + name + "_frisch"] = bats[key]["inverter_fresh"]
         plan["ladeanforderung_venus_" + name + "_seit_ts"] = reaction[key]["requested_since"]
         plan["ladeleistung_venus_" + name + "_bestaetigt"] = reaction[key]["confirmed"]
         plan["ladereaktion_venus_" + name + "_gesperrt"] = reaction[key]["blocked"]
@@ -2097,6 +2102,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     output["write_order"] = order
     output["failure_counts"] = failure_counts
     output["reaction_newly_blocked"] = reaction_newly_blocked
+    output["reaction_resolved"] = reaction_resolved
 
     drifts = {}
     for key in BATTERY_KEYS:
