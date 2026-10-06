@@ -79,14 +79,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     this._historyKey = "";
     this._historyLoadedAt = 0;
     this._historyLoading = false;
-    this._historyHours = {
-      overviewSoc: 24,
-      batteryA: 24,
-      batteryE: 24,
-    };
     this._historySeriesCache = new Map();
-    this._chartModels = new Map();
-    this._chartSerial = 0;
     this._stateRefs = new Map();
     this._liveFrame = null;
     this._rendered = false;
@@ -299,19 +292,9 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 
   _historySourceIds() {
-    if (!["overview", "batteries"].includes(this._tab)) return [];
-    const keys = this._tab === "overview"
-      ? this._models().map((model) => `soc_${model.toLowerCase()}`)
-      : this._models().flatMap((model) => [`power_${model.toLowerCase()}`, `soc_${model.toLowerCase()}`]);
-    const extra = this._tab === "batteries" ? this._models().flatMap((model) => [
-      this._eid(`wirkungsgrad_venus_${model.toLowerCase()}`),
-      ...(Array.isArray(this._config().sources?.[`drift_${model.toLowerCase()}`])
-        ? this._config().sources[`drift_${model.toLowerCase()}`]
-        : [this._sid(`drift_${model.toLowerCase()}`)]),
-    ]) : [];
-    return [...keys
-      .map((key) => this._sid(key))
-      .filter(Boolean), ...extra.filter(Boolean)];
+    // Only power history is needed for today's charged/discharged energy.
+    if (this._tab !== "batteries") return [];
+    return this._models().map((model) => this._sid(`power_${model.toLowerCase()}`)).filter(Boolean);
   }
 
   _dayStart() {
@@ -324,11 +307,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     if (!this.isConnected || !this._hass?.callWS || !this._panel) return;
     const entityIds = [...new Set(this._historySourceIds())];
     if (!entityIds.length || this._historyLoading) return;
-    const selected = this._tab === "batteries" ? Math.max(24, ...this._models().flatMap((model) => [
-      this._historyHours[`efficiency${model}`] || 24, this._historyHours[`drift${model}`] || 24,
-    ])) : 24;
-    const start = selected > 24 ? new Date(Date.now() - selected * 3_600_000) : this._dayStart();
-    if (selected > 24) start.setMinutes(0, 0, 0);
+    const start = this._dayStart();
     const key = `${start.toISOString()}|${entityIds.join(",")}`;
     const fresh = Date.now() - this._historyLoadedAt < 300_000;
     if (!force && this._historyKey === key && fresh) return;
@@ -397,74 +376,6 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return includeGaps ? points : points.filter((point) => Number.isFinite(point.v));
   }
 
-  _downsample(points, maximum = 240) {
-    if (points.length <= maximum) return points;
-    const bucketSize = Math.ceil(points.length / Math.max(1, Math.floor(maximum / 2)));
-    const sampled = [];
-    for (let start = 0; start < points.length; start += bucketSize) {
-      const bucket = points.slice(start, start + bucketSize);
-      const minimum = bucket.reduce((best, point) => point.v < best.v ? point : best, bucket[0]);
-      const maximumPoint = bucket.reduce((best, point) => point.v > best.v ? point : best, bucket[0]);
-      sampled.push(...[minimum, maximumPoint].sort((left, right) => left.t - right.t));
-    }
-    return sampled;
-  }
-
-  _historySummary(points, hours, unitMultiplier = 1) {
-    const visible = points.filter((point) => Number.isFinite(point.v))
-      .map((point) => ({ t: point.t, v: point.v * unitMultiplier }));
-    if (hours <= 24) return visible;
-    const interval = (hours > 168 ? 60 : 10) * 60_000;
-    const groups = new Map();
-    for (const point of visible) {
-      const key = Math.floor(point.t / interval);
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(point);
-    }
-    return [...groups.values()].flatMap((group) => {
-      const mean = group.reduce((sum, point) => sum + point.v, 0) / group.length;
-      const minimum = group.reduce((best, point) => point.v < best.v ? point : best);
-      const maximum = group.reduce((best, point) => point.v > best.v ? point : best);
-      const middle = { t: group[Math.floor(group.length / 2)].t, v: mean };
-      return [minimum, middle, maximum].sort((a, b) => a.t - b.t);
-    });
-  }
-
-  _chartSegments(points, gapMs = 0) {
-    if (!points.length) return [];
-    if (!gapMs) return [points];
-    const segments = [[points[0]]];
-    for (let index = 1; index < points.length; index += 1) {
-      if (points[index].t - points[index - 1].t > gapMs) segments.push([]);
-      segments.at(-1).push(points[index]);
-    }
-    return segments;
-  }
-
-  _mergeSeries(seriesList, reducer) {
-    const usable = seriesList.filter((series) => series.length);
-    if (!usable.length) return [];
-    const times = [...new Set(usable.flatMap((series) => series.map((point) => point.t)))].sort((a, b) => a - b);
-    const indexes = usable.map(() => 0);
-    const current = usable.map(() => NaN);
-    return times.map((time) => {
-      usable.forEach((series, seriesIndex) => {
-        while (indexes[seriesIndex] < series.length && series[indexes[seriesIndex]].t <= time) {
-          current[seriesIndex] = series[indexes[seriesIndex]].v;
-          indexes[seriesIndex] += 1;
-        }
-      });
-      return { t: time, v: reducer(current.filter(Number.isFinite)) };
-    }).filter((point) => Number.isFinite(point.v));
-  }
-
-  _combinedBatteryPower() {
-    return this._mergeSeries(
-      this._models().map((model) => this._historySeries(`power_${model.toLowerCase()}`)),
-      (values) => values.reduce((sum, value) => sum + value, 0),
-    );
-  }
-
   _capacity(slot) {
     const suffix = slot.toLowerCase();
     const planned = this._num(this._attr("planung", `nennkapazitaet_venus_${suffix}_kwh`), NaN);
@@ -473,11 +384,6 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const modules = this._entityNum(this._state(`venus_${suffix}_packs`), model === "A" ? 2 : 1);
     return this._entityNum(this._state(`nennkapazitaet_venus_${suffix}`),
       model === "A" ? modules * 2.08 : 5.12);
-  }
-
-  _historyRangeStart(hours = 24) {
-    const dayStart = this._dayStart().getTime();
-    return hours > 24 ? Date.now() - hours * 3_600_000 : hours === 24 ? dayStart : Math.max(dayStart, Date.now() - hours * 3_600_000);
   }
 
   _integrateEnergy(series, selector) {
@@ -523,177 +429,6 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _historyEnergy(value) {
     return Number.isFinite(value) ? this._energy(value) : "—";
-  }
-
-  _chart(datasets, { min = null, max = null, unit = "", fill = false, hours = 24 } = {}) {
-    const start = this._historyRangeStart(hours);
-    const end = Date.now();
-    const visible = datasets.map((dataset) => {
-      const segments = this._chartSegments(
-        dataset.points.filter((point) => point.t >= start && point.t <= end), dataset.gapMs,
-      );
-      const sampled = segments.map((points) => this._downsample(points, Math.max(4, Math.floor(240 / segments.length))));
-      return { ...dataset, segments: sampled, points: sampled.flat() };
-    }).filter((dataset) => dataset.points.length);
-    if (!visible.length) {
-      return `<div class="chart-empty">${this._historyLoading ? "Verlauf wird geladen …" : "Keine Verlaufsdaten verfügbar"}</div>`;
-    }
-
-    let observedLow = 0;
-    let observedHigh = 0;
-    visible.forEach((dataset) => dataset.points.forEach((point) => {
-      observedLow = Math.min(observedLow, point.v);
-      observedHigh = Math.max(observedHigh, point.v);
-    }));
-    let low = Number.isFinite(min) ? min : observedLow;
-    let high = Number.isFinite(max) ? max : observedHigh;
-    if (low === high) {
-      low -= 1;
-      high += 1;
-    } else if (!Number.isFinite(min) || !Number.isFinite(max)) {
-      const padding = (high - low) * 0.08;
-      low -= padding;
-      high += padding;
-    }
-
-    const width = 640;
-    const height = 190;
-    const left = 42;
-    const right = 628;
-    const top = 12;
-    const bottom = 158;
-    const x = (time) => left + (time - start) / Math.max(1, end - start) * (right - left);
-    const y = (value) => bottom - (value - low) / Math.max(0.001, high - low) * (bottom - top);
-    const ticks = [0, 1, 2, 3].map((index) => {
-      const value = high - index * (high - low) / 3;
-      const position = top + index * (bottom - top) / 3;
-      const label = Math.abs(value) >= 10 ? Math.round(value) : this._decimal(value, 1);
-      return `<line x1="${left}" y1="${position}" x2="${right}" y2="${position}" class="chart-grid-line"></line><text x="2" y="${position + 4}" class="chart-axis">${esc(label)}${esc(unit)}</text>`;
-    }).join("");
-    const zeroLine = low < 0 && high > 0
-      ? `<line x1="${left}" y1="${y(0)}" x2="${right}" y2="${y(0)}" class="chart-zero-line"></line>`
-      : "";
-    const lines = visible.map((dataset) => {
-      const paths = dataset.segments.map((segment) => segment.map((point, index) => `${index ? "L" : "M"}${x(point.t).toFixed(1)},${y(point.v).toFixed(1)}`).join(" "));
-      const path = paths.join(" ");
-      const area = fill && visible.length === 1
-        ? dataset.segments.map((segment, index) => `<path d="M${x(segment[0].t).toFixed(1)},${bottom} ${paths[index].replace(/^M/, "L")} L${x(segment.at(-1).t).toFixed(1)},${bottom} Z" fill="${dataset.color}" opacity=".13"></path>`).join("")
-        : "";
-      return `${area}<path d="${path}" fill="none" stroke="${dataset.color}" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>`;
-    }).join("");
-    const startLabel = new Date(start).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
-    const legend = visible.map((dataset) => `<span${dataset.entityId ? ` class="entity-card" data-entity="${esc(dataset.entityId)}"` : ""}><i style="background:${dataset.color}"></i>${esc(dataset.name)}</span>`).join("");
-    const chartId = `chart-${this._chartSerial++}`;
-    this._chartModels.set(chartId, { datasets: visible, start, end, unit, left, right, width });
-    return `<div class="chart-shell" data-chart-id="${chartId}"><div class="chart-legend">${legend}</div><svg class="history-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">${ticks}${zeroLine}${lines}<rect class="chart-hover-plane" x="${left}" y="${top}" width="${right - left}" height="${bottom - top}"></rect><text x="${left}" y="184" class="chart-axis">${startLabel}</text><text x="${right}" y="184" text-anchor="end" class="chart-axis">jetzt</text></svg><div class="chart-tooltip" role="status"></div></div>`;
-  }
-
-  _nearestPoint(points, time) {
-    if (!points.length) return null;
-    let low = 0;
-    let high = points.length - 1;
-    while (low < high) {
-      const middle = Math.floor((low + high) / 2);
-      if (points[middle].t < time) low = middle + 1;
-      else high = middle;
-    }
-    const right = points[low];
-    const left = points[Math.max(0, low - 1)];
-    return Math.abs(left.t - time) <= Math.abs(right.t - time) ? left : right;
-  }
-
-  _showChartTooltip(shell, event) {
-    const model = this._chartModels.get(shell.dataset.chartId);
-    const svg = shell.querySelector(".history-chart");
-    const tooltip = shell.querySelector(".chart-tooltip");
-    if (!model || !svg || !tooltip) return;
-    const rect = svg.getBoundingClientRect();
-    const shellRect = shell.getBoundingClientRect();
-    const svgX = (event.clientX - rect.left) / Math.max(1, rect.width) * model.width;
-    if (svgX < model.left || svgX > model.right) {
-      tooltip.classList.remove("visible");
-      return;
-    }
-    const ratio = (svgX - model.left) / (model.right - model.left);
-    const time = model.start + ratio * (model.end - model.start);
-    const rows = model.datasets.map((dataset) => {
-      const point = this._nearestPoint(dataset.points, time);
-      if (!point) return "";
-      const raw = dataset.tooltipValue ? dataset.tooltipValue(point.v) : point.v;
-      const value = `${this._decimal(raw, 2)}${dataset.tooltipUnit ?? model.unit}`;
-      return `<div><i style="background:${dataset.color}"></i><span>${esc(dataset.name)}</span><strong>${esc(value)}</strong></div>`;
-    }).join("");
-    const stamp = new Date(time).toLocaleString("de-DE", model.end - model.start > 86_400_000
-      ? { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }
-      : { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    tooltip.innerHTML = `<b>${esc(stamp)}</b>${rows}`;
-    const localX = event.clientX - shellRect.left;
-    tooltip.style.left = `${Math.max(50, Math.min(shellRect.width - 50, localX))}px`;
-    tooltip.style.top = `${Math.max(24, rect.top - shellRect.top + 16)}px`;
-    tooltip.classList.toggle("flip", localX > shellRect.width * 0.67);
-    tooltip.classList.add("visible");
-  }
-
-  _historyButtons(key, extended = false) {
-    const selected = this._historyHours[key] ?? 24;
-    const ranges = extended ? [[24, "Heute"], [168, "7 Tage"], [720, "30 Tage"]] : [[1, "1 h"], [6, "6 h"], [12, "12 h"], [24, "Alles"]];
-    return `<div class="chart-ranges">${ranges.map(([hours, label]) => `<button data-history-key="${key}" data-history-hours="${hours}" class="${selected === hours ? "active" : ""}">${label}</button>`).join("")}</div>`;
-  }
-
-  _overviewSocCard() {
-    const models = this._models();
-    return `<section class="card summary-card soc-overview span-full">${this._cardTitle("mdi:chart-line", "SoC je Speicher")}
-      <div class="soc-summaries">${models.map((model) => {
-        const suffix = model.toLowerCase();
-        const soc = this._entityNum(this._source(`soc_${suffix}`), this._num(this._attr("status", `soc_venus_${suffix}`, NaN)));
-        return `<div class="soc-summary entity-card" data-entity="${esc(this._sid(`soc_${suffix}`))}"><span>${esc(this._storageLabel(model))}</span><strong data-live-flow="soc-${suffix}">${this._percent(soc)}</strong></div>`;
-      }).join("")}</div>
-      ${this._chart(models.map((model, index) => ({
-        name: this._storageLabel(model), color: index ? "#6dd7e2" : "#48d88b",
-        entityId: this._sid(`soc_${model.toLowerCase()}`), points: this._historySeries(`soc_${model.toLowerCase()}`),
-      })), { min: 0, max: 100, unit: " %", hours: this._historyHours.overviewSoc })}
-      ${this._historyButtons("overviewSoc")}</section>`;
-  }
-
-  _batteryHistory(letter) {
-    const suffix = letter.toLowerCase();
-    const historyKey = `battery${letter}`;
-    const limit = this._storageModel(letter) === "A" ? 1.5 : 2.5;
-    return `<div class="battery-history"><div class="battery-history-title">SoC und Leistungsverlauf</div><div class="battery-chart-wrap">${this._chart([
-      { name: "Leistung", color: "#8ea8ff", entityId: this._sid(`power_${suffix}`), points: this._historySeries(`power_${suffix}`).map((point) => ({ ...point, v: point.v / 1000 })) },
-      { name: "SoC", color: "#48d88b", entityId: this._sid(`soc_${suffix}`), tooltipValue: (value) => (value + limit) / (limit * 2) * 100, tooltipUnit: " %", points: this._historySeries(`soc_${suffix}`).map((point) => ({ ...point, v: point.v / 100 * limit * 2 - limit })) },
-    ], { min: -limit, max: limit, unit: " kW", hours: this._historyHours[historyKey] })}<div class="battery-soc-axis"><span>100 %</span><span>50 %</span><span>0 %</span></div></div>${this._historyButtons(historyKey)}</div>`;
-  }
-
-  _batteryDiagnostics(letter) {
-    const suffix = letter.toLowerCase();
-    const efficiencyId = this._eid(`wirkungsgrad_venus_${suffix}`);
-    const efficiencyKey = `efficiency${letter}`;
-    const driftKey = `drift${letter}`;
-    const powerHours = this._historyHours[efficiencyKey] || 24;
-    const driftHours = this._historyHours[driftKey] || 24;
-    const efficiencySeries = this._historySummary(
-      this._historySeriesId(efficiencyId).filter((point) => point.v > 0), powerHours,
-    );
-    const driftStates = this._sourceStates(`drift_${suffix}`);
-    const driftSeries = driftStates.map((state, index) => {
-      const toMv = String(state.attributes?.unit_of_measurement || "mV").toLowerCase() === "v" ? 1000 : 1;
-      return {
-        name: driftStates.length > 1 ? `Pack ${index + 1}` : "Zelldrift",
-        color: ["#48d88b", "#8ea8ff", "#ffbd45", "#b493ff", "#ff8a8a", "#6dd7e2"][index % 6],
-        entityId: state.entity_id,
-        points: this._historySummary(this._historySeriesId(state.entity_id), driftHours, toMv),
-      };
-    });
-    const maxDrift = Math.max(20, ...driftSeries.flatMap((series) => series.points.map((point) => point.v)));
-    return `<div class="battery-diagnostics">
-      <div><strong>Wirkungsgrad</strong>${this._chart([
-        { name: "Wirkungsgrad", color: "#48d88b", entityId: efficiencyId, points: efficiencySeries,
-          gapMs: powerHours > 168 ? 2 * 3_600_000 : 30 * 60_000 },
-      ], { min: 0, max: 100, unit: " %", hours: powerHours })}${this._historyButtons(efficiencyKey, true)}</div>
-      <div><strong>Zelldrift je Pack</strong>${this._chart(driftSeries, { min: 0, max: maxDrift, unit: " mV", hours: driftHours })}${this._historyButtons(driftKey, true)}</div>
-      ${Math.max(powerHours, driftHours) > 24 ? `<small>${Math.max(powerHours, driftHours) > 168 ? "Stunden" : "10-Minuten"}-Mittel mit Messspitzen; keine Werte bei fehlenden Messungen ergänzt.</small>` : ""}
-    </div>`;
   }
 
   _time(timestamp) {
@@ -939,7 +674,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
           ${full ? this._metric("Heute entladen", this._historyEnergy(energy.discharged), "mdi:battery-minus-outline") : ""}
         </div>
         ${full && energy.incomplete ? '<p class="slot-note">Heutige Energie unvollständig: Messlücken oder fehlender Tagesbeginn.</p>' : ""}
-        ${full ? this._batteryDetails(letter) + this._batteryHistory(letter) + this._batteryDiagnostics(letter) : ""}
+        ${full ? this._batteryDetails(letter) : ""}
       </section>`;
   }
 
@@ -1034,7 +769,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 
   _overview() {
-    return `<main class="grid overview">${this._systemCard()}${this._flowCard()}${this._planningCard()}${this._overviewSocCard()}</main>`;
+    return `<main class="grid overview">${this._systemCard()}${this._flowCard()}${this._planningCard()}</main>`;
   }
 
   _batteries() {
@@ -1188,7 +923,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       `fruehes_ladeziel_venus_${model.toLowerCase()}_${key}`, label + (currentClass === key ? " · heute" : ""),
       "0 % = kein zusätzliches SoC-Ziel; der normale PV-Fahrplan bleibt aktiv",
     ])).join("")}</div></div>`).join("");
-    return `<main class="grid control-view">${this._calibrationCard()}<div class="control-columns manual-columns span-full">${this._models().map((model) => this._manualCard(model)).join("")}</div><section class="card span-full">${this._cardTitle("mdi:chart-bell-curve", "Fahrplanfunktionen")}${this._toggleRow("mittagsspitzen", "Mittagsspitzen reduzieren", "An mittleren und starken Tagen, soweit die Vollladung abgesichert ist", "mdi:chart-bell-curve")}<p class="control-explanation">Vorzeitiges Ladeziel je Speicher · Profil aktuell ${esc(currentClass)}. Tagesklassen: schwach, mittel, stark. Wechselhaft nutzt die eigene Einstellung bei gemessener Prognoseunsicherheit. 0 % deaktiviert das zusätzliche Ziel. Vor dem ersten Tagesstart kann 0 W gesetzt werden; nach der Freigabe bleiben positive Grenzen erhalten.</p>${earlyGoals}${this._numberRow(["mittag_vorlauf", "Beginn vor Sonnenhöchststand", "Dynamischer Start des Mittagsfensters"])}${this._numberRow(["mittag_nachlauf", "Ende nach Sonnenhöchststand", "Dynamisches Ende des Mittagsfensters"])}</section><div class="control-columns span-full">${this._numberCard("Leistungsgrenzen", "mdi:battery-charging", "leistung")}${this._numberCard("Planungsparameter", "mdi:shield-sun-outline", "planung")}${this._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen")}</div>${this._modeControl()}</main>`;
+    return `<main class="grid control-view">${this._calibrationCard()}<div class="control-columns manual-columns span-full">${this._models().map((model) => this._manualCard(model)).join("")}</div><section class="card span-full">${this._cardTitle("mdi:chart-bell-curve", "Fahrplanfunktionen")}${this._toggleRow("mittagsspitzen", "Mittagsspitzen reduzieren", "An mittleren und starken Tagen, soweit die Vollladung abgesichert ist", "mdi:chart-bell-curve")}<p class="control-explanation">Vorzeitiges Ladeziel je Speicher · Profil aktuell ${esc(currentClass)}. Tagesklassen: schwach, mittel, stark. Wechselhaft gilt bei Prognoseunsicherheit an mittleren Tagen. Starke Tage behalten ihr eigenes Ziel. 0 % deaktiviert das zusätzliche Ziel. Vor dem ersten Tagesstart kann 0 W gesetzt werden; nach der Freigabe bleiben positive Grenzen erhalten.</p>${earlyGoals}${this._numberRow(["mittag_vorlauf", "Beginn vor Sonnenhöchststand", "Dynamischer Start des Mittagsfensters"])}${this._numberRow(["mittag_nachlauf", "Ende nach Sonnenhöchststand", "Dynamisches Ende des Mittagsfensters"])}</section><div class="control-columns span-full">${this._numberCard("Leistungsgrenzen", "mdi:battery-charging", "leistung")}${this._numberCard("Planungsparameter", "mdi:shield-sun-outline", "planung")}${this._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen")}</div>${this._modeControl()}</main>`;
   }
 
   _formatWriteResult(item) {
@@ -1205,26 +940,64 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return `${battery}: ${register} auf ${target} fehlgeschlagen${item.error ? ` – ${item.error}` : ""}`;
   }
 
+  _chargeDecisions() {
+    return `<section class="card span-full charge-decisions">${this._cardTitle("mdi:timeline-clock-outline", "Entstehung der Ladegrenzen")}
+      <div class="decision-grid">${this._models().map((slot) => this._chargeDecision(slot)).join("")}</div></section>`;
+  }
+
+  _chargeDecision(slot) {
+    const suffix = slot.toLowerCase();
+    const decision = this._attr("planung", `leistungsentscheidung_venus_${suffix}`);
+    if (!decision) return `<article class="decision-card"><h3>${esc(this._storageLabel(slot))}</h3><p>Noch keine Entscheidung gespeichert.</p></article>`;
+    const origin = this._attr("planung", `ladefreigabe_venus_${suffix}_ursprung`);
+    const blocked = this._attr("planung", `daten_gueltig_venus_${suffix}`) === false || decision.grund === "Sicherheitsstopp";
+    const released = this._attr("planung", `ladefreigabe_venus_${suffix}_seit_ts`);
+    const full = this._attr("planung", `ziel_venus_${suffix}_erreicht`, false);
+    const label = blocked ? "Sicherheitsstopp" : full ? "Ziel erreicht" : released ? "Freigegeben" : "Geplant";
+    const preferred = this._entityNum(this._state(`bevorzugte_ladeleistung_venus_${suffix}`), decision.bevorzugt_w);
+    const limit = this._attr("planung", `soll_ladegrenze_venus_${suffix}_w`, decision.stabil_w);
+    const reason = decision.sollwert_grund || decision.grund || "Keine Begründung verfügbar";
+    const reasons = [...new Set([decision.grund, decision.sollwert_grund].filter(Boolean))];
+    const errors = (decision.datenfehler || []).filter((text) => !/^(?:Venus )?[AE]:/.test(text) || text.startsWith(`${slot}:`) || text.startsWith(`Venus ${slot}:`));
+    const field = (label, value) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`;
+    return `<article class="decision-card ${blocked ? "decision-blocked" : ""}">
+      <div class="decision-heading"><h3>${esc(this._storageLabel(slot))}</h3>${this._badge(label, blocked ? "bad" : released || full ? "good" : "neutral")}</div>
+      <p class="decision-reason">${esc(reason)}</p>
+      ${errors.length ? `<ul class="decision-errors">${errors.map((text) => `<li>${esc(text)}</li>`).join("")}</ul>` : ""}
+      <dl class="decision-power">
+        ${field("Bevorzugt", this._power(preferred))}
+        ${field("Neu berechnet", this._power(decision.roh_w))}
+        ${field("Sollgrenze", this._power(limit))}
+      </dl>
+      <dl class="decision-facts">
+        ${field("Restbedarf", this._energy(decision.restbedarf_kwh))}
+        ${field(released ? "Freigegeben seit" : "Geplanter Beginn", this._time(released || decision.fenster_start_ts))}
+        ${field("Planung bis", this._time(decision.simulation_ende_ts))}
+        ${field("Aktualisiert", this._dateTime(decision.zeit_ts))}
+      </dl>
+      <details class="decision-details" data-decision-details="${esc(slot)}"><summary>Planungsdetails und erste Freigabe</summary>
+        <dl>${field("Fehlmenge bei bevorzugter Leistung", this._energy(decision.fehlmenge_bevorzugt_kwh))}</dl>
+        ${decision.fahrplan_grund && !reasons.includes(decision.fahrplan_grund) ? `<p>${esc(decision.fahrplan_grund)}</p>` : ""}
+        ${origin ? `<div class="decision-origin"><strong>Erste Freigabe · ${esc(this._dateTime(origin.zeit_ts))}</strong><p>${esc(origin.grund)}</p>
+          ${origin.soc_profil ? `<span>Profil ${esc(origin.soc_profil)} · Vorzeitiges Ziel ${esc(this._percent(origin.soc_ziel))}</span>` : ""}</div>` : '<p>Heute noch keine Freigabe aufgezeichnet.</p>'}
+      </details>
+    </article>`;
+  }
+
   _diagnostics() {
     const status = this._state("status");
     const warnings = this._attr("status", "warnungen", []) || [];
     const missing = this._attr("status", "fehlende_entitaeten", []) || [];
     const results = (this._attr("status", "letzte_schreibergebnisse", []) || []).map((item) => this._formatWriteResult(item));
     const dataErrors = this._attr("planung", "datenfehler_aktuell", []) || [];
-    const decisions = this._models().map((slot) => {
-      const decision = this._attr("planung", `leistungsentscheidung_venus_${slot.toLowerCase()}`);
-      if (!decision) return null;
-      const origin = this._attr("planung", `ladefreigabe_venus_${slot.toLowerCase()}_ursprung`);
-      const originText = origin ? ` · Erste Freigabe ${this._dateTime(origin.zeit_ts)}: ${origin.grund}` : "";
-      return `${this._storageLabel(slot)} · ${this._dateTime(decision.zeit_ts)}: bevorzugt ${this._power(decision.bevorzugt_w)}, geplant ${this._power(decision.roh_w)}, gehalten ${this._power(decision.stabil_w)} · Restbedarf ${this._energy(decision.restbedarf_kwh)} · Fenster ${this._time(decision.fenster_start_ts)}–${this._time(decision.simulation_ende_ts)} · Fehlmenge bei bevorzugter Leistung ${this._energy(decision.fehlmenge_bevorzugt_kwh)} · ${decision.grund}${originText}${decision.sollwert_grund ? ` · ${decision.fahrplan_status}: ${decision.fahrplan_grund} · ${decision.sollwert_grund}` : ""}`;
-    }).filter(Boolean);
+
     return `
       <main class="grid diagnostics-view">
         <section class="card span-6">${this._cardTitle("mdi:database-check-outline", "Datenquellen")}${this._diagLine("Gemeinsame Daten", this._state("daten_gemeinsam")?.state)}${this._models().map((model) => this._diagLine(this._storageLabel(model), this._state(`daten_venus_${model.toLowerCase()}`)?.state)).join("")}${this._diagLine("Verfügbare Quellen", `${this._attr("status", "quellen_verfuegbar", 0)} / ${this._attr("status", "quellen_gesamt", 0)}`)}</section>
         <section class="card span-6">${this._cardTitle("mdi:timeline-check-outline", "Planung", this._badge(this._attr("status", "planung_aktiv", false) ? "Bereit" : "Fehler", this._attr("status", "planung_aktiv", false) ? "good" : "bad"))}${this._diagLine("Planungsstatus", this._attr("status", "planung_aktiv", false) ? "Aktiv" : "Aus")}${this._diagLine("Planungsfehler", this._attr("status", "planungsfehler", "Keiner") || "Keiner")}${this._diagLine("Letzter Schreibzugriff", this._dateTime(this._attr("status", "letzter_schreibzugriff_ts")))}${this._diagLine("Letzter Schreibfehler", this._attr("status", "letzter_schreibfehler", "Keiner") || "Keiner")}</section>
         ${this._listCard("Aktuelle Hinweise", "mdi:alert-circle-outline", [...warnings, ...dataErrors], "Keine aktuellen Warnungen", "span-6")}
         ${this._listCard("Fehlende Entitäten", "mdi:database-remove-outline", missing, "Keine Entität fehlt", "span-6")}
-        ${this._listCard("Entstehung der Ladegrenzen", "mdi:timeline-clock-outline", decisions, "Noch keine Entscheidung gespeichert", "span-full")}
+        ${this._chargeDecisions()}
         ${this._listCard("Letzte Schreibergebnisse", "mdi:pencil-outline", results, "Noch keine Schreibzugriffe", "span-full")}
         <section class="card span-full ack-card">${this._cardTitle("mdi:shield-lock-open-outline", "Schreibsperren und Quittierung")}<p>Die Quittierung setzt die internen Schreibfehlerzähler der konfigurierten Speicher zurück. Fehlende oder ungültige Sensorwerte werden dadurch nicht verändert.</p><div class="ack-state">${this._diagLine("Schreibzugriffe", this._attr("status", "schreibzugriffe_aktiv", false) ? "Aktiv" : "Gesperrt")}${this._diagLine("Letzter Schreibfehler", this._attr("status", "letzter_schreibfehler", "Keiner"))}</div><div class="ack-row">${this._actionButton("fehler_quittieren", "mdi:check-decagram-outline", "Schreibfehler quittieren")}</div></section>
       </main>`;
@@ -1255,32 +1028,38 @@ class SpeicherLadelogikPanel extends HTMLElement {
       .flow-lines{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible}.flow-lines line{stroke:rgba(132,169,156,.25);stroke-width:3;vector-effect:non-scaling-stroke}.flow-particle{filter:drop-shadow(0 0 5px currentColor)}
       .window-label{display:flex;justify-content:space-between;align-items:baseline;margin-top:13px;color:var(--primary-text-color);font-size:10px;font-weight:700}.window-label small{color:var(--muted);font-weight:400}
       .window-row{margin-top:6px}.number-input{width:100px;justify-content:flex-end}.number-input input{width:58px}.ack-card>p{color:var(--muted);font-size:11px;line-height:1.55;margin:0 0 8px}.ack-state{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px}
-      .summary-grid{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(360px,1.15fr);gap:14px}.summary-card{min-height:360px}.energy-list{display:flex;flex-direction:column;gap:14px}.energy-row>div{display:flex;justify-content:space-between;gap:10px;margin-bottom:5px}.energy-row span{color:var(--muted)}.energy-row strong{font-size:14px}.energy-row>i{display:block;height:6px;border-radius:8px;background:rgba(120,150,140,.12);overflow:hidden}.energy-row>i b{display:block;height:100%;border-radius:8px}.chart-legend{display:flex;justify-content:center;gap:13px;flex-wrap:wrap;color:var(--muted);font-size:11px;margin:-4px 0 5px}.chart-legend span{display:inline-flex;align-items:center;gap:5px}.chart-legend i{width:9px;height:9px;border-radius:2px}.history-chart{display:block;width:100%;height:220px;overflow:visible}.chart-grid-line{stroke:rgba(144,177,164,.12);stroke-width:1;vector-effect:non-scaling-stroke}.chart-axis{fill:var(--muted);font-size:10px}.chart-empty{height:220px;display:grid;place-items:center;color:var(--muted)}.chart-ranges{display:flex;justify-content:flex-end;gap:6px;margin-top:3px}.chart-ranges button{border:1px solid var(--line);border-radius:8px;background:rgba(110,135,125,.07);color:var(--muted);padding:5px 9px;cursor:pointer}.chart-ranges button.active{color:var(--accent);border-color:rgba(56,213,130,.3);background:rgba(56,213,130,.1)}
+      .summary-grid{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(360px,1.15fr);gap:14px}.summary-card{min-height:360px}.energy-list{display:flex;flex-direction:column;gap:14px}.energy-row>div{display:flex;justify-content:space-between;gap:10px;margin-bottom:5px}.energy-row span{color:var(--muted)}.energy-row strong{font-size:14px}.energy-row>i{display:block;height:6px;border-radius:8px;background:rgba(120,150,140,.12);overflow:hidden}.energy-row>i b{display:block;height:100%;border-radius:8px}
       .peak-inline{margin-top:14px;padding-top:13px;border-top:1px solid var(--line)}.peak-inline-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.peak-inline-title>span{display:flex;align-items:center;gap:7px}.peak-inline-title ha-icon{--mdc-icon-size:16px}.peak-inline .metric{padding:8px}.peak-inline .metric strong{font-size:12px}
-      .battery-upper{display:grid;grid-template-columns:minmax(205px,.52fr) minmax(320px,1.48fr);gap:18px;align-items:center}.battery-history{min-width:0}.battery-history-title{color:var(--muted);font-size:12px;font-weight:700;margin:0 0 6px}.battery-history .history-chart{height:175px}.battery-history .chart-empty{height:175px}.battery-chart-wrap{position:relative}.battery-soc-axis{position:absolute;right:0;top:24px;bottom:27px;display:flex;flex-direction:column;justify-content:space-between;color:var(--muted);font-size:10px;pointer-events:none}
+      .battery-upper{display:grid;grid-template-columns:minmax(205px,.52fr) minmax(320px,1.48fr);gap:18px;align-items:center}
       :host{font-size:15px}.brand-copy strong{font-size:18px}.brand-copy span,.live-pill{font-size:13px}.card-title,.badge{font-size:12px}.soc-ring span{font-size:12px}.status-line{font-size:14px}.flow-node strong{font-size:19px}.flow-node span,.flow-core span{font-size:12px}.decision strong{font-size:17px}.decision p{font-size:13px}.metric span{font-size:11px}.metric strong{font-size:14px}.window-label,.window-row,.slot-note{font-size:12px}.battery-now strong{font-size:15px}.battery-now b{font-size:27px}.soc-scale{font-size:11px}.detail span{font-size:11px}.detail strong,.control-row strong,.number-row strong,.cal-state strong{font-size:14px}.comparison p,.diag-line{font-size:14px}.control-row span,.number-row span,.cal-state span{font-size:11px}.action-btn,.message-list>div,.empty,.ack-card>p{font-size:13px}
-      @media(max-width:1350px){.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.battery-upper{grid-template-columns:1fr}.battery-history .history-chart{height:190px}}
+      @media(max-width:1350px){.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.battery-upper{grid-template-columns:1fr}}
       @media(max-width:1050px){.summary-grid{grid-template-columns:1fr}.summary-card{min-height:0}.battery-upper{grid-template-columns:minmax(205px,.52fr) minmax(320px,1.48fr)}}
-      @media(max-width:720px){.flow-canvas{min-height:320px}.window-label{align-items:flex-start;flex-direction:column;gap:3px}.ack-state{grid-template-columns:1fr}.number-input{width:94px}.summary-grid{gap:9px}.battery-upper{grid-template-columns:1fr}.history-chart{height:190px}.chart-empty{height:190px}.brand-copy strong{font-size:15px}.nav-item span{font-size:11px}.flow-node span{font-size:9px}}
-      .flow-canvas{display:block;min-height:260px;position:relative;overflow:hidden}.flow-node,.flow-core{position:absolute;transform:translateX(-50%);z-index:3}.flow-node.grid{left:16%;top:96px}.flow-node.pv{left:50%;top:0}.flow-core{left:50%;top:86px}.flow-node.battery{left:84%;top:96px;color:var(--accent)}.flow-lines{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible}.flow-route,.flow-dots{fill:none;vector-effect:non-scaling-stroke}.flow-route{stroke:rgba(132,169,156,.2);stroke-width:.75;stroke-dasharray:7 8}.flow-route.active{stroke:var(--flow-color);stroke-width:1.05;stroke-dasharray:none;stroke-linecap:round;opacity:.62;filter:drop-shadow(0 0 2px var(--flow-color))}.flow-dots{stroke:transparent;stroke-width:4;stroke-linecap:round;stroke-dasharray:.1 16;pointer-events:none}.flow-dots.active{stroke:var(--flow-color);animation:flow-dots 1.35s linear infinite;filter:drop-shadow(0 0 4px var(--flow-color))}@keyframes flow-dots{to{stroke-dashoffset:-16.1}}.flow-node ha-icon{box-shadow:none}.flow-core ha-icon{box-shadow:0 0 18px rgba(82,184,255,.16)}
-      .chart-shell{position:relative;min-width:0}.chart-hover-plane{fill:transparent;pointer-events:none}.chart-tooltip{position:absolute;z-index:6;min-width:155px;padding:9px 11px;border:1px solid rgba(144,177,164,.22);border-radius:9px;background:rgba(8,15,18,.96);box-shadow:0 8px 24px rgba(0,0,0,.38);opacity:0;visibility:hidden;pointer-events:none;transform:translateX(12px);transition:opacity .08s;color:var(--primary-text-color)}.chart-tooltip.visible{opacity:1;visibility:visible}.chart-tooltip.flip{transform:translateX(calc(-100% - 12px))}.chart-tooltip>b{display:block;margin-bottom:6px;font-size:11px;color:var(--muted)}.chart-tooltip>div{display:grid;grid-template-columns:9px 1fr auto;gap:7px;align-items:center;font-size:12px;padding:2px 0}.chart-tooltip i{width:8px;height:8px;border-radius:2px}.chart-tooltip strong{font-size:12px}.chart-legend .entity-card{cursor:pointer;padding:2px 4px;border-radius:5px}.drift-values{display:flex;gap:5px;flex-wrap:wrap}.drift-value{border:0;border-radius:10px;padding:3px 7px;cursor:pointer}.drift-value.good{color:#61e69a;background:rgba(56,213,130,.13)}.drift-value.warn{color:#ffd078;background:rgba(255,189,69,.14)}.drift-value.bad{color:#ff8a8a;background:rgba(255,107,107,.14)}.drift-value.neutral{color:var(--muted);background:rgba(130,150,145,.12)}.storage-slots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}.storage-slots>div{display:grid;grid-template-columns:auto auto;gap:3px 8px;padding:8px;border-radius:8px;background:rgba(110,135,125,.06)}.storage-slots span{justify-self:end;color:var(--accent)}.storage-slots small{grid-column:1/-1;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.entity-card{transition:border-color .15s,background .15s}.entity-card:hover{border-color:rgba(82,184,255,.3);background-color:rgba(82,184,255,.04)}
-      @media(max-width:720px){.flow-canvas{min-height:250px}.flow-node.grid{left:14%;top:94px}.flow-node.pv{left:50%;top:0}.flow-core{left:50%;top:84px}.flow-node.battery{left:86%;top:94px}.storage-slots{grid-template-columns:1fr}.chart-tooltip{min-width:135px;padding:7px 9px}.chart-tooltip>div{font-size:11px}}
+      @media(max-width:720px){.flow-canvas{min-height:320px}.window-label{align-items:flex-start;flex-direction:column;gap:3px}.ack-state{grid-template-columns:1fr}.number-input{width:94px}.summary-grid{gap:9px}.battery-upper{grid-template-columns:1fr}.brand-copy strong{font-size:15px}.nav-item span{font-size:11px}.flow-node span{font-size:9px}}
+      .flow-canvas{display:block;min-height:260px;position:relative;overflow:hidden}.flow-node,.flow-core{position:absolute;transform:translateX(-50%);z-index:3}.flow-node.grid{left:16%;top:96px}.flow-node.pv{left:50%;top:0}.flow-core{left:50%;top:86px}.flow-node.battery{left:84%;top:96px;color:var(--accent)}.flow-lines{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible}.flow-route,.flow-dots{fill:none;vector-effect:non-scaling-stroke}.flow-route{stroke:rgba(132,169,156,.2);stroke-width:.75;stroke-dasharray:7 8}.flow-route.active{stroke:var(--flow-color);stroke-width:1.05;stroke-dasharray:none;stroke-linecap:round;opacity:.62;filter:drop-shadow(0 0 2px var(--flow-color))}.flow-dots{stroke:transparent;stroke-width:4;stroke-linecap:round;stroke-dasharray:.1 16;pointer-events:none}.flow-dots.active{stroke:var(--flow-color);animation:flow-dots 1.35s linear infinite;filter:drop-shadow(0 0 4px var(--flow-color))}@keyframes flow-dots{to{stroke-dashoffset:-16.1}}.flow-node ha-icon{box-shadow:none}.flow-core ha-icon{box-shadow:0 0 18px rgba(82,184,255,.16)}.drift-values{display:flex;gap:5px;flex-wrap:wrap}.drift-value{border:0;border-radius:10px;padding:3px 7px;cursor:pointer}.drift-value.good{color:#61e69a;background:rgba(56,213,130,.13)}.drift-value.warn{color:#ffd078;background:rgba(255,189,69,.14)}.drift-value.bad{color:#ff8a8a;background:rgba(255,107,107,.14)}.drift-value.neutral{color:var(--muted);background:rgba(130,150,145,.12)}.storage-slots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}.storage-slots>div{display:grid;grid-template-columns:auto auto;gap:3px 8px;padding:8px;border-radius:8px;background:rgba(110,135,125,.06)}.storage-slots span{justify-self:end;color:var(--accent)}.storage-slots small{grid-column:1/-1;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.entity-card{transition:border-color .15s,background .15s}.entity-card:hover{border-color:rgba(82,184,255,.3);background-color:rgba(82,184,255,.04)}
+      @media(max-width:720px){.flow-canvas{min-height:250px}.flow-node.grid{left:14%;top:94px}.flow-node.pv{left:50%;top:0}.flow-core{left:50%;top:84px}.flow-node.battery{left:86%;top:94px}.storage-slots{grid-template-columns:1fr}}
       .flow-card .flow-canvas{min-height:430px}.flow-card .flow-node{position:absolute;transform:translate(-50%,-50%);gap:7px;z-index:3}.flow-card .flow-node.grid{left:12%;top:50%;color:#a98dff}.flow-card .flow-node.pv{left:50%;top:19%;color:#ffbd45;flex-direction:column-reverse}.flow-card .flow-node.home{left:88%;top:50%;color:#ff9a55}.flow-card .flow-node.battery{left:50%;top:81%;color:#38d582}.flow-card .flow-ring{width:116px;height:116px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;background:rgba(9,16,19,.92);border:3px solid currentColor;box-shadow:0 0 20px color-mix(in srgb,currentColor 24%,transparent)}.flow-card .flow-ring ha-icon{width:auto;height:auto;border:0;border-radius:0;background:transparent;color:currentColor;--mdc-icon-size:31px}.flow-card .flow-ring strong{font-size:18px;line-height:1}.flow-card .flow-ring b{font-size:13px;line-height:1}.flow-card .flow-node>span{font-size:12px;color:var(--muted);white-space:nowrap}.flow-card .flow-route{stroke-width:1.1}.flow-card .flow-route.active{stroke-width:1.35;filter:drop-shadow(0 0 3px var(--flow-color))}.flow-card .flow-dots{stroke-width:4.2}
       @media(max-width:720px){.flow-card .flow-canvas{min-height:340px}.flow-card .flow-ring{width:82px;height:82px;border-width:2px}.flow-card .flow-ring ha-icon{--mdc-icon-size:23px}.flow-card .flow-ring strong{font-size:14px}.flow-card .flow-ring b{font-size:10px}.flow-card .flow-node>span{font-size:9px}.flow-card .flow-node.grid{left:14%}.flow-card .flow-node.pv{top:21%}.flow-card .flow-node.home{left:86%}.flow-card .flow-node.battery{top:79%}}
       .battery-pair{grid-template-columns:repeat(auto-fit,minmax(390px,1fr))}.comparison-grid{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}.control-columns.manual-columns{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}.action-groups{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}.storage-slots{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
-      @media(max-width:720px){.battery-pair,.comparison-grid,.control-columns.manual-columns,.action-groups,.storage-slots{grid-template-columns:1fr}}
-      .battery-diagnostics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:15px;padding-top:14px;border-top:1px solid var(--line)}.battery-diagnostics>div{min-width:0}.battery-diagnostics strong{font-size:12px}.battery-diagnostics small{display:block;color:var(--muted);font-size:10px}.battery-diagnostics .history-chart{height:180px}.cal-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}.cal-actions .action-btn{font-size:11px}
-      .battery-diagnostics{grid-template-columns:1fr}.battery-diagnostics>div{min-width:0}.battery-diagnostics .history-chart{height:185px}.chart-zero-line{stroke:rgba(192,215,207,.55);stroke-width:1.2;vector-effect:non-scaling-stroke}
+      @media(max-width:720px){.battery-pair,.comparison-grid,.control-columns.manual-columns,.action-groups,.storage-slots{grid-template-columns:1fr}}.cal-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}.cal-actions .action-btn{font-size:11px}
       .early-goals{margin:14px 0;padding:12px;border:1px solid var(--line);border-radius:10px}.early-goals>strong{display:block;margin-bottom:8px}.early-goal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 15px}.control-explanation{font-size:12px;color:var(--muted);line-height:1.5;margin:8px 0}.early-goal-grid .control-row{min-width:0}
       @media(max-width:720px){.early-goal-grid{grid-template-columns:1fr}}
-      @media(max-width:720px){.battery-diagnostics{grid-template-columns:1fr}}
       .flow-card .flow-canvas{min-height:520px}.flow-card .flow-node.grid{left:14%;top:60%}.flow-card .flow-node.pv{top:16%}.flow-card .flow-node.home{left:50%;top:60%}
       .flow-card .flow-node.battery-a{left:85%;top:36%;color:#38d582}.flow-card .flow-node.battery-e{left:85%;top:78%;color:#6dd7e2}
       .flow-card .flow-node.battery{cursor:pointer}.flow-card .flow-node.battery>span{font-weight:700;color:var(--primary-text-color)}
-      .battery-upper{display:block}.battery-history{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
-      .soc-overview{min-height:0}.soc-summaries{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:12px 0 18px}
-      .soc-summary{display:flex;align-items:center;justify-content:space-between;padding:12px;border-radius:10px;background:rgba(110,135,125,.07)}.soc-summary strong{font-size:21px;color:var(--accent)}
-      @media(max-width:720px){.flow-card .flow-canvas{min-height:390px}.flow-card .flow-node.grid{left:13%}.flow-card .flow-node.pv{top:16%}.flow-card .flow-node.home{left:50%}.flow-card .flow-node.battery-a,.flow-card .flow-node.battery-e{left:87%}.soc-summaries{gap:8px}.soc-summary{padding:9px}.soc-summary strong{font-size:16px}}
+      .battery-upper{display:block}
+      @media(max-width:720px){.flow-card .flow-canvas{min-height:390px}.flow-card .flow-node.grid{left:13%}.flow-card .flow-node.pv{top:16%}.flow-card .flow-node.home{left:50%}.flow-card .flow-node.battery-a,.flow-card .flow-node.battery-e{left:87%}}
+
+      .decision-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+      .decision-card{min-width:0;border:1px solid var(--line);border-radius:12px;padding:18px;background:rgba(110,135,125,.04);overflow-wrap:anywhere}
+      .decision-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}.decision-heading h3{margin:0;font-size:18px}
+      .decision-reason{font-size:14px;line-height:1.55;margin:14px 0;color:var(--primary-text-color)}
+      .decision-power{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:16px 0}.decision-power>div{padding:10px;border-radius:8px;background:rgba(110,135,125,.09)}
+      .decision-card dt{font-size:12px;color:var(--muted);margin:0 0 6px}.decision-card dd{margin:0;font-weight:650;font-size:15px}.decision-power dd{font-size:20px}
+      .decision-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:18px 0}
+      .decision-details{border-top:1px solid var(--line);padding-top:12px;font-size:13px;line-height:1.5}.decision-details summary{cursor:pointer;color:var(--muted);padding:3px 0}.decision-details>div{margin-top:14px}.decision-origin{padding:12px;border-radius:8px;background:rgba(110,135,125,.07)}.decision-origin p{margin:6px 0}.decision-origin span{color:var(--muted)}
+      .decision-blocked{border-color:rgba(255,125,125,.35)}.decision-errors{padding-left:18px;color:#ffaaaa;line-height:1.5;font-size:13px}
+      @media(max-width:900px){.decision-grid{grid-template-columns:1fr}}
+      @media(max-width:420px){.decision-card{padding:12px}.decision-power>div{padding:8px 6px}.decision-power dd{font-size:17px}.decision-card dt{font-size:11px}}
       @media(prefers-reduced-motion:reduce){.flow-dots.active{animation-duration:3s}}
     `;
   }
@@ -1352,12 +1131,12 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _render() {
     if (!this.isConnected || !this._hass || !this._panel) return;
-    this._chartModels = new Map();
-    this._chartSerial = 0;
+    const expanded = [...this.shadowRoot.querySelectorAll("[data-decision-details][open]")].map((el) => el.dataset.decisionDetails);
     const content = this._tab === "overview" ? this._overview()
       : this._tab === "batteries" ? this._batteries()
         : this._tab === "control" ? this._control() : this._diagnostics();
     this.shadowRoot.innerHTML = `<style>${this._styles()}</style>${this._header()}${content}`;
+    this.shadowRoot.querySelectorAll("[data-decision-details]").forEach((el) => { el.open = expanded.includes(el.dataset.decisionDetails); });
     this._rendered = true;
     this._syncStateRefs();
     this._bind();
@@ -1381,17 +1160,6 @@ class SpeicherLadelogikPanel extends HTMLElement {
     }));
     this.shadowRoot.querySelectorAll("[data-number]").forEach((input) => input.addEventListener("change", () => this._setNumber(input.dataset.number, input.value)));
     this.shadowRoot.querySelectorAll("[data-press]").forEach((button) => button.addEventListener("click", () => this._press(button.dataset.press)));
-    this.shadowRoot.querySelectorAll("[data-history-hours]").forEach((button) => button.addEventListener("click", () => {
-      const key = button.dataset.historyKey;
-      if (key) this._historyHours[key] = Number(button.dataset.historyHours);
-      this._render();
-      this._ensureHistory();
-    }));
-    this.shadowRoot.querySelectorAll("[data-chart-id]").forEach((shell) => {
-      const svg = shell.querySelector(".history-chart");
-      svg?.addEventListener("pointermove", (event) => this._showChartTooltip(shell, event));
-      svg?.addEventListener("pointerleave", () => shell.querySelector(".chart-tooltip")?.classList.remove("visible"));
-    });
   }
 
   _moreInfo(entityId) {
@@ -1441,7 +1209,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 }
 
-const PANEL_ELEMENT = "speicher-ladelogik-ae-panel-2-1-1";
+const PANEL_ELEMENT = "speicher-ladelogik-ae-panel-2-1-2";
 
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);

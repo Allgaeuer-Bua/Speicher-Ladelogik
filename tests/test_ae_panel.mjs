@@ -10,7 +10,7 @@ globalThis.customElements = {
   define: (name, klass) => registry.set(name, klass),
 };
 await import("../custom_components/speicher_ladelogik_ae/frontend/speicher-ladelogik-ae-panel.js");
-const Panel = registry.get("speicher-ladelogik-ae-panel-2-1-1");
+const Panel = registry.get("speicher-ladelogik-ae-panel-2-1-2");
 
 function panel() {
   const instance = new Panel();
@@ -49,19 +49,21 @@ test("solar and house nodes have a longer vertical connection", () => {
   assert.match(p._styles(), /\.flow-card \.flow-canvas\{min-height:520px\}/);
 });
 
-test("overview has separate SoC values and no daily energy card", () => {
+test("overview keeps live battery SoC in the flow without a separate history card", () => {
   const p = panel();
   const html = p._overview();
-  assert.match(html, /SoC je Speicher/);
+  assert.doesNotMatch(html, /SoC je Speicher|history-chart|chart-ranges/);
   assert.match(html, /Venus A/);
   assert.match(html, /Venus E/);
   assert.doesNotMatch(html, /Energie heute/i);
 });
 
-test("storage chart follows pack details and duplicate power chart is gone", () => {
+test("storage retains live details and energy totals without history charts", () => {
   const p = panel();
   const html = p._batteryCard("A", true);
-  assert.ok(html.indexOf("Pack-SoC") < html.indexOf("SoC und Leistungsverlauf"));
+  assert.match(html, /Pack-SoC/);
+  assert.match(html, /Heute geladen/);
+  assert.doesNotMatch(html, /SoC und Leistungsverlauf|Zelldrift je Pack|history-chart|chart-ranges/);
   assert.doesNotMatch(html, /AC-Leistung · Laden \/ Entladen/);
 });
 
@@ -106,4 +108,34 @@ test("diagnostics retain the first release reason alongside the current hold", (
   assert.match(html, /Erste Freigabe/);
   assert.match(html, /Eigenes vorzeitiges SoC-Ziel absichern/);
   assert.match(html, /Ladefreigabe bleibt bestehen/);
+});
+
+test("only today's power history is requested for energy totals", () => {
+  const p = panel();
+  p._tab = "overview";
+  assert.deepEqual(p._historySourceIds(), []);
+  p._tab = "batteries";
+  assert.deepEqual(p._historySourceIds(), ["sensor.power_a", "sensor.power_e"]);
+});
+
+test("charge decisions separate limits, reasons and errors per battery", () => {
+  const p = panel();
+  p._panel.config.entities = { planung: "sensor.plan", bevorzugte_ladeleistung_venus_a: "number.preferred_a" };
+  p._hass.states["number.preferred_a"] = { state: "1100", attributes: {} };
+  p._hass.states["sensor.plan"] = { state: "Warten", attributes: {
+    daten_gueltig_venus_a: false, soll_ladegrenze_venus_a_w: 0,
+    leistungsentscheidung_venus_a: { zeit_ts: 1791274300, bevorzugt_w: 0, roh_w: 0, stabil_w: 0,
+      grund: "Sicherheitsstopp", sollwert_grund: "Sicherheitsstopp", restbedarf_kwh: 1.91,
+      datenfehler: ["A: Gerätegrenzen ungültig", "E: anderer Fehler"], fehlmenge_bevorzugt_kwh: 0 },
+  } };
+  const html = p._chargeDecision("A");
+  assert.match(html, /decision-blocked/);
+  assert.match(html, /Bevorzugt/);
+  assert.match(html, /1,1 kW/);
+  assert.match(html, /Neu berechnet/);
+  assert.match(html, /Sollgrenze/);
+  assert.match(html, /Gerätegrenzen ungültig/);
+  assert.doesNotMatch(html, /anderer Fehler/);
+  assert.match(html, /<details[^>]*data-decision-details="A"/);
+  assert.equal((html.match(/<p class="decision-reason">Sicherheitsstopp<\/p>/g) || []).length, 1);
 });
