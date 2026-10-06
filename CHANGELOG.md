@@ -1,5 +1,12 @@
 # Änderungen
 
+## 2.1.2
+
+- Dashboard vereinfacht: „SoC je Speicher“ sowie die Verlaufsgrafiken für SoC/Leistung, Wirkungsgrad und Zelldrift entfernt. Aktuelle Speicherwerte und Energiezählung bleiben erhalten; die Übersicht lädt keine Verlaufsdaten mehr.
+- Ladegrenzen-Diagnose als übersichtliche Karte je Speicher: klare Begründung, bevorzugte Leistung, berechneter Wert, geltende Sollgrenze und Zeitplanung. Zusätzliche Details und der erste Freigabegrund sind aufklappbar.
+- Kalibrierungsmeldungen überstehen HA-Neustarts: Bereits gemeldete Abschlüsse und Abbrüche werden nicht erneut als neues Ereignis gemeldet. Bestehende abgeschlossene Sitzungen werden beim Update berücksichtigt; echte neue Ereignisse bleiben sichtbar.
+- Verhaltenstests für wiederholte Neustarts, neue Ereignisse und fehlgeschlagene Benachrichtigungen ergänzt. Bestehende Ladeplanung und Sicherheitsprüfungen bleiben erhalten.
+
 ## 2.1.1
 
 - Starke Tage verwenden ausschließlich ihr eigenes frühes SoC-Ziel. Kurzfristige Prognoseabweichungen aktivieren nicht mehr das Wechselhaft-Profil. Eine tatsächlich gefährdete Vollladung darf den Start weiterhin vorziehen.

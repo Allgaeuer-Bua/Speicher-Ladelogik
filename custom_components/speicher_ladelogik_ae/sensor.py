@@ -355,6 +355,7 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "letzte_pause_ts",
                 "parallel_erlaubt",
                 "phase",
+                "phase_seit_ts",
                 "batterie",
                 "grund",
                 "grund_code",

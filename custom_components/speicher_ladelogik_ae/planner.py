@@ -1895,6 +1895,7 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
 
 
     calibration = {"phase": session["p"], "batterie": session["b"],
+        "phase_seit_ts": session["t"] or None,
         "grund": cal_reason, "grund_code": session["r"],
         "leistung_w": calibration_power,
         "energie_ac_kwh": round(session["w"] / 1000, 3), "start_ts": session["s"] or None,

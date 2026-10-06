@@ -16,6 +16,7 @@ from homeassistant.util import dt as dt_util
 
 from .compat import legacy_entity_id
 from .calibration_alerts import active_alerts
+from .calibration_notifications import notification_signature, restored_notification_signature
 from .const import (
     COMMON_KEYS,
     CONF_A_AC_POWER,
@@ -348,7 +349,8 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _schedule_state_save(self) -> None:
         """Persist controls, sessions and stability with write coalescing."""
-        payload = {"control": self._control, "stability": self._stored_stability}
+        payload = {"control": self._control, "stability": self._stored_stability,
+                   "calibration_notification": self._calibration_notification_signature}
         self._stability_store.async_delay_save(lambda: payload, 2)
 
     async def _async_load_state(self) -> None:
@@ -363,6 +365,10 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._stored_stability = dict(stored.get("stability", {}))
         else:
             self._control["mode"] = "Beobachten"
+        self._calibration_notification_signature = restored_notification_signature(
+            stored.get("calibration_notification") if isinstance(stored, dict) else None,
+            self._control,
+        )
         # Existing installations had one goal per storage. Copy the stored
         # value to each day class only once; later class edits remain intact.
         migrate_legacy_day_class_goals(self._control, loaded_control, EARLY_DAY_CLASSES)
@@ -968,16 +974,14 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """One notification with the same complete job list as the dashboard."""
         calibration = data.get("calibration", {})
         jobs = calibration.get("auftraege", [])
-        signature = tuple((j.get("batterie"), j.get("phase"), j.get("grund"),
-                           j.get("fruehestens_ts"), j.get("ruhe_ende_ts")) for j in jobs)
-        terminal = calibration.get("phase") in {"done", "incomplete", "cancelled", "error"}
-        if not jobs and terminal:
-            signature = (calibration.get("batterie"), calibration.get("phase"), calibration.get("ende_ts"))
+        signature = notification_signature(calibration)
+        terminal = signature[0] == "result"
         if signature == self._calibration_notification_signature:
             return
-        self._calibration_notification_signature = signature
         if not jobs and not terminal:
             await self._async_dismiss_notification("speicher_ladelogik_ae_kalibrierung")
+            self._calibration_notification_signature = signature
+            self._schedule_state_save()
             return
         lines = []
         for job in jobs:
@@ -992,6 +996,8 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             lines.append(self.storage_name(calibration.get("batterie", "")) + ": " + str(calibration.get("grund", "")))
         await self._async_notification("speicher_ladelogik_ae_kalibrierung",
                                        "Speicher-Ladelogik A/E – Kalibrierung", "\n\n".join(lines))
+        self._calibration_notification_signature = signature
+        self._schedule_state_save()
 
     async def _async_update_calibration_alerts(self, data: dict[str, Any]) -> None:
         """Push each advisory once; rearm low-power alerts after recovery."""
