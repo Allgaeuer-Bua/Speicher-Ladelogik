@@ -58,3 +58,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: home-assistant/actions/hassfest@master
+
+  dashboard:
+    name: Dashboard browser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install browser test tools
+        run: |
+          npm install --no-save --no-package-lock playwright@1.56.1 @mdi/js@7.4.47
+          npx playwright install --with-deps chromium
+      - name: Check dashboard interactions and responsive layouts
+        run: node tests/dashboard_browser.cjs
+      - name: Keep review screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-review
+          path: dashboard-review/
+          retention-days: 7

@@ -3,9 +3,29 @@
 const TABS = [
   ["overview", "mdi:view-dashboard-outline", "Übersicht"],
   ["batteries", "mdi:battery-high", "Speicher"],
+  ["calibration", "mdi:battery-sync-outline", "Kalibrierung"],
   ["control", "mdi:tune-variant", "Steuerung"],
   ["diagnostics", "mdi:stethoscope", "Diagnose"],
 ];
+
+const APPEARANCE_KEY = "speicher_ladelogik_ae.appearance.v1";
+const COLORS = {
+  green: { label: "Grün", dark: "#38d582", light: "#147d46" },
+  cyan: { label: "Türkis", dark: "#6dd7e2", light: "#007783" },
+  blue: { label: "Blau", dark: "#70baff", light: "#1964b5" },
+  violet: { label: "Violett", dark: "#bc9cff", light: "#7542ba" },
+  orange: { label: "Orange", dark: "#ffac64", light: "#a75008" },
+};
+const APPEARANCE_DEFAULTS = { theme: "auto", accent: "green", density: "comfortable",
+  motion: "subtle", batteryA: "green", batteryE: "cyan" };
+const APPEARANCE_CHOICES = {
+  theme: [["auto", "Automatisch (Home Assistant)"], ["dark", "Dunkel"], ["light", "Hell"]],
+  density: [["comfortable", "Komfortabel"], ["compact", "Kompakt"]],
+  motion: [["normal", "Normal"], ["subtle", "Dezent"], ["off", "Aus"]],
+  accent: Object.entries(COLORS).map(([key, value]) => [key, value.label]),
+  batteryA: Object.entries(COLORS).map(([key, value]) => [key, value.label]),
+  batteryE: Object.entries(COLORS).map(([key, value]) => [key, value.label]),
+};
 
 const PHASE_LABELS = {
   idle: "Bereit",
@@ -73,6 +93,10 @@ class SpeicherLadelogikPanel extends HTMLElement {
     super();
     this.attachShadow({ mode: "open" });
     this._tab = "overview";
+    this._appearance = this._readAppearance();
+    this._appearanceOpen = false;
+    this._appearanceSaveFailed = false;
+    this._expandedDetails = new Set();
     this._hass = null;
     this._panel = null;
     this._history = null;
@@ -91,7 +115,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const integrationChanged = this._trackStateChanges("entity", Object.values(this._config().entities || {}));
     const sourceChanged = this._trackStateChanges("source", this._sourceEntityIds());
     if (firstRender || integrationChanged) this._render();
-    else if (sourceChanged) this._scheduleLiveRefresh();
+    else this._applyAppearance();
+    if (!firstRender && !integrationChanged && sourceChanged) this._scheduleLiveRefresh();
     this._ensureHistory();
   }
 
@@ -112,8 +137,89 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 
   connectedCallback() {
+    this._colorScheme = globalThis.matchMedia?.("(prefers-color-scheme: dark)");
+    this._onColorScheme = () => this._applyAppearance();
+    this._colorScheme?.addEventListener?.("change", this._onColorScheme);
+    this._onAppearanceStorage = (event) => {
+      if (event.key !== APPEARANCE_KEY && event.key !== null) return;
+      this._appearance = this._readAppearance();
+      this._appearanceSaveFailed = false;
+      this._render();
+    };
+    globalThis.addEventListener?.("storage", this._onAppearanceStorage);
     this._render();
     this._ensureHistory();
+  }
+
+  disconnectedCallback() {
+    this._colorScheme?.removeEventListener?.("change", this._onColorScheme);
+    globalThis.removeEventListener?.("storage", this._onAppearanceStorage);
+    if (this._liveFrame != null) globalThis.cancelAnimationFrame?.(this._liveFrame);
+    this._liveFrame = null;
+  }
+
+  _readAppearance() {
+    let saved;
+    try { saved = JSON.parse(globalThis.localStorage?.getItem(APPEARANCE_KEY) || "null"); }
+    catch { saved = null; }
+    return Object.fromEntries(Object.entries(APPEARANCE_DEFAULTS).map(([key, fallback]) => [key,
+      APPEARANCE_CHOICES[key].some(([value]) => value === saved?.[key]) ? saved[key] : fallback]));
+  }
+
+  _saveAppearance() {
+    try {
+      if (!globalThis.localStorage) throw new Error("Local storage unavailable");
+      globalThis.localStorage.setItem(APPEARANCE_KEY, JSON.stringify(this._appearance));
+      this._appearanceSaveFailed = false;
+    } catch { this._appearanceSaveFailed = true; }
+  }
+
+  _setAppearance(key, value) {
+    if (!APPEARANCE_CHOICES[key]?.some(([option]) => option === value)) return;
+    this._appearance = { ...this._appearance, [key]: value };
+    this._saveAppearance();
+    this._applyAppearance();
+    const notice = this.shadowRoot?.querySelector("[data-appearance-notice]");
+    if (notice) notice.textContent = this._appearanceNotice();
+  }
+
+  _appearanceNotice() {
+    return this._appearanceSaveFailed
+      ? "Die Auswahl gilt für diese Ansicht. Dieser Browser erlaubt das dauerhafte Speichern gerade nicht."
+      : "Nur die Darstellung in diesem Browser wird gespeichert. Die Speicherregelung bleibt unverändert.";
+  }
+
+  _effectiveTheme() {
+    if (this._appearance.theme !== "auto") return this._appearance.theme;
+    const dark = this._hass?.themes?.darkMode;
+    return typeof dark === "boolean" ? (dark ? "dark" : "light")
+      : (this._colorScheme?.matches ?? true) ? "dark" : "light";
+  }
+
+  _applyAppearance() {
+    const theme = this._effectiveTheme();
+    this.setAttribute("data-theme", theme);
+    this.setAttribute("data-density", this._appearance.density);
+    this.setAttribute("data-motion", this._appearance.motion);
+    for (const [property, key] of [["--accent", "accent"], ["--battery-a", "batteryA"], ["--battery-e", "batteryE"]]) {
+      this.style.setProperty(property, COLORS[this._appearance[key]][theme]);
+    }
+  }
+
+  _appearancePanel() {
+    if (!this._appearanceOpen) return "";
+    const select = (key, label, hint) => `<label class="appearance-option"><span>${esc(label)}</span>
+      <select data-appearance="${key}">${APPEARANCE_CHOICES[key].map(([value, title]) =>
+        `<option value="${value}"${this._appearance[key] === value ? " selected" : ""}>${esc(title)}</option>`).join("")}</select>
+      ${hint ? `<small>${esc(hint)}</small>` : ""}</label>`;
+    return `<section id="appearance-panel" class="appearance-panel" aria-label="Darstellung">
+      <div class="appearance-heading"><div><h2>Darstellung</h2><p data-appearance-notice>${esc(this._appearanceNotice())}</p></div>
+      <button class="icon-button" data-appearance-close aria-label="Darstellung schließen"><ha-icon icon="mdi:close"></ha-icon></button></div>
+      <div class="appearance-options">${select("theme", "Erscheinungsbild")}${select("accent", "Akzentfarbe")}
+      ${select("density", "Ansichtsgröße")}${select("motion", "Energiefluss-Animation", "Bei Stillstand bewegen sich keine Punkte.")}
+      ${select("batteryA", "Farbe Venus A")}${select("batteryE", "Farbe Venus E")}</div>
+      <div class="appearance-footer"><span>Warnungen bleiben gelb, Fehler rot.</span><button class="action-btn" data-appearance-reset>Standard wiederherstellen</button></div>
+    </section>`;
   }
 
   _config() {
@@ -486,10 +592,11 @@ class SpeicherLadelogikPanel extends HTMLElement {
         </div>
         <nav>
           ${TABS.map(([id, icon, label]) => `
-            <button class="nav-item ${this._tab === id ? "active" : ""}" data-tab="${id}">
+            <button class="nav-item ${this._tab === id ? "active" : ""}" data-tab="${id}"${this._tab === id ? ' aria-current="page"' : ""}>
               <ha-icon icon="${icon}"></ha-icon><span>${label}</span>
             </button>`).join("")}
         </nav>
+        <button class="icon-button appearance-toggle" data-appearance-toggle aria-label="Darstellung anpassen" title="Darstellung anpassen" aria-expanded="${this._appearanceOpen}" aria-controls="appearance-panel"><ha-icon icon="mdi:palette-outline"></ha-icon></button>
         <div class="live-pill"><span></span> Live</div>
       </header>`;
   }
@@ -584,9 +691,9 @@ class SpeicherLadelogikPanel extends HTMLElement {
           <div class="flow-node home entity-card" data-entity="${esc(this._sid("house"))}"><div class="flow-ring"><ha-icon icon="mdi:home-lightning-bolt-outline"></ha-icon><strong data-live-flow="home-value">${this._power(flow.home)}</strong></div><span>Haus</span></div>
           ${flow.batteries.map((battery) => `<div class="flow-node battery battery-${battery.suffix} entity-card" data-entity="${esc(this._sid(`power_${battery.suffix}`))}"><div class="flow-ring"><strong data-live-flow="soc-${battery.suffix}">${this._percent(battery.soc)}</strong><ha-icon data-live-flow="icon-${battery.suffix}" icon="${battery.icon}"></ha-icon><b data-live-flow="power-${battery.suffix}">${this._power(Math.abs(battery.power))}</b></div><span>${esc(this._storageLabel(battery.model))}</span></div>`).join("")}
           <svg class="flow-lines" viewBox="0 0 1000 500" preserveAspectRatio="none" aria-hidden="true">
-            ${this._flowPath(Math.abs(flow.grid) > 0, flow.gridPath, "#8f6bff", "grid")}
-            ${this._flowPath(flow.pv > 0, flow.pvPath, "#ffbd45", "pv")}
-            ${flow.batteries.map((battery) => this._flowPath(Math.abs(battery.power) > 10, battery.route, battery.model === "A" ? "#38d582" : "#6dd7e2", `battery-${battery.suffix}`)).join("")}
+            ${this._flowPath(Math.abs(flow.grid) > 0, flow.gridPath, "var(--flow-grid)", "grid")}
+            ${this._flowPath(flow.pv > 0, flow.pvPath, "var(--flow-pv)", "pv")}
+            ${flow.batteries.map((battery) => this._flowPath(Math.abs(battery.power) > 10, battery.route, `var(--battery-${battery.suffix})`, `battery-${battery.suffix}`)).join("")}
           </svg>
         </div>
       </section>`;
@@ -605,7 +712,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
           ${this._metric("Restprognose heute", this._energy(this._attr("planung", "prognose_rest_erwartet_kwh")), "mdi:weather-sunny")}
           ${this._metric("Prognose morgen", this._energy(this._attr("planung", "prognose_morgen_kwh")), "mdi:weather-sunset-up")}
           ${this._metric("Restbedarf Speicherfüllung", this._energy(this._attr("planung", "restbedarf_kwh")), "mdi:battery-arrow-up")}
-          ${this._metric("Sollleistung", this._power(this._attr("planung", "soll_ladeleistung_gesamt_w")), "mdi:flash")}
+          ${this._metric("Ladegrenzen gesamt", this._power(this._attr("planung", "soll_ladeleistung_gesamt_w")), "mdi:flash")}
         </div>
         <div class="slot-note">Live: PV-Prognose derzeit ${esc(this._percent(this._num(this._attr("planung", "prognose_kurzfristfaktor"), NaN) * 100))} bestätigt · Haus ${esc(this._power(this._attr("planung", "hausleistung_aktuell_w")))} · sicherer Überschuss ${esc(this._power(this._attr("planung", "ueberschuss_untergrenze_w")))}</div>
         ${this._attr("planung", "pv_prognose_abweichung_bisher_kwh") != null ? `<div class="slot-note">PV bisher: ${esc(this._energy(this._attr("planung", "pv_real_bis_jetzt_kwh")))} gemessen · ${esc(this._energy(this._attr("planung", "prognose_bis_jetzt_kwh")))} prognostiziert</div>` : ""}
@@ -624,6 +731,23 @@ class SpeicherLadelogikPanel extends HTMLElement {
     return `<div class="metric"><ha-icon icon="${icon}"></ha-icon><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`;
   }
 
+  _storageStatus(letter) {
+    const suffix = letter.toLowerCase();
+    const valid = this._attr("planung", `daten_gueltig_venus_${suffix}`);
+    const reason = String(this._attr("planung", `fahrplan_slot_grund_venus_${suffix}`, ""));
+    if (valid === false || /Sicherheitsstopp|Schreibsperre/.test(reason)) return { label: "Gesperrt", tone: "bad" };
+    const power = this._entityNum(this._source(`power_${suffix}`),
+      this._num(this._attr("planung", `ac_leistung_venus_${suffix}_roh_w`), NaN));
+    if (Number.isFinite(power) && power < -10) return { label: "Lädt", tone: "good" };
+    if (Number.isFinite(power) && power > 10) return { label: "Entlädt", tone: "neutral" };
+    if (this._attr("planung", `ziel_venus_${suffix}_erreicht`, false)) {
+      return { label: this._num(this._attr("planung", `obere_geraetegrenze_venus_${suffix}_prozent`), 100) >= 100 ? "Voll" : "Ziel erreicht", tone: "good" };
+    }
+    if (this._attr("planung", `fahrplan_slot_aktiv_venus_${suffix}`, false)) return { label: "Freigegeben", tone: "accent" };
+    const planned = this._attr("planung", `ladebeginn_venus_${suffix}_ts`);
+    return { label: planned && planned > Date.now() / 1000 ? `Wartet bis ${this._time(planned)}` : "Wartet", tone: "neutral" };
+  }
+
   _storageSlot(letter, suffix) {
     const active = Boolean(this._attr("planung", `fahrplan_slot_aktiv_venus_${suffix}`, false));
     const goalReached = Boolean(this._attr("planung", `ziel_venus_${suffix}_erreicht`, false));
@@ -631,9 +755,9 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const planned = this._attr("planung", `ladebeginn_venus_${suffix}_ts`);
     const reason = this._attr("planung", `fahrplan_slot_grund_venus_${suffix}`, "—");
     const currentGoal = this._attr("planung", "fruehe_soc_ziele_prozent", {})?.[letter] || 0;
-    const label = goalReached ? "Ziel erreicht" : active ? `freigegeben seit ${this._time(released)}`
-      : planned ? `Beginn geplant ${this._time(planned)}` : "wartet";
-    return `<div><strong>${esc(this._storageLabel(letter))}</strong><span>${esc(label)}</span><small>${esc(reason)} · Vorzeitiges Ziel ${esc(currentGoal)} %</small></div>`;
+    const status = this._storageStatus(letter);
+    const label = status.label;
+    return `<div class="storage-${suffix}"><strong>${esc(this._storageLabel(letter))}</strong>${this._badge(label, status.tone)}<small>${active && released ? `Freigegeben seit ${this._time(released)} · ` : ""}${esc(reason)} · Vorzeitiges Ziel ${esc(currentGoal)} %</small></div>`;
   }
 
   _batteryCard(letter, full = false) {
@@ -650,23 +774,22 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const loss = this._state(`verlustleistung_venus_${suffix}`)?.state;
     const remaining = this._attr("planung", `restbedarf_venus_${suffix}_kwh`);
     const mode = this._batteryMode(power);
+    const status = this._storageStatus(letter);
     const energy = this._batteryEnergy(suffix);
     return `
-      <section class="card battery-card ${full ? "battery-full" : ""}">
+      <section class="card battery-card storage-${suffix} ${full ? "battery-full" : ""}">
         ${this._cardTitle("mdi:battery-high", this._storageLabel(letter), this._badge(valid ? "Daten bereit" : "Daten fehlen", valid ? "good" : "bad"))}
         <div class="battery-upper">
           <div class="battery-current">
             <div class="battery-main">
               <div class="battery-gauge entity-card" data-entity="${esc(this._sid(`soc_${suffix}`))}"><div data-live-battery="${suffix}-fill" style="height:${Math.max(4, Math.min(100, soc))}%"></div><span data-live-battery="${suffix}-soc">${Math.round(soc)}%</span></div>
-              <div class="battery-now entity-card" data-entity="${esc(this._sid(`power_${suffix}`))}"><span data-live-battery="${suffix}-dot" class="mode-dot ${mode.tone}"></span><strong data-live-battery="${suffix}-mode">${mode.label}</strong><b data-live-battery="${suffix}-power">${this._power(Math.abs(power))}</b><small>Sollgrenze ${this._power(target)}</small></div>
+              <div class="battery-now entity-card" data-entity="${esc(this._sid(`power_${suffix}`))}"><span data-live-battery="${suffix}-dot" class="mode-dot ${mode.tone}"></span><strong data-live-battery="${suffix}-mode">${status.label}</strong><b data-live-battery="${suffix}-power">${this._power(Math.abs(power))}</b><small>Sollgrenze ${this._power(target)}</small></div>
             </div>
             <div class="soc-scale"><span>Min ${this._percent(minSoc)}</span><i><b data-live-battery="${suffix}-scale" style="left:${Math.max(0, Math.min(100, soc))}%"></b></i><span>Max ${this._percent(maxSoc)}</span></div>
           </div>
         </div>
         <div class="cal-result" data-live-estimate="${suffix}">${this._remainingTime(letter)}</div>
         <div class="metric-pairs compact">
-          ${this._metric("Verlust", this._power(loss), "mdi:lightning-bolt-outline")}
-          ${this._metric("Wirkungsgrad", this._percent(efficiency, 1), "mdi:percent-outline")}
           ${this._metric("Restbedarf", this._energy(remaining), "mdi:battery-arrow-up-outline")}
           ${this._metric("Ladegrenze", this._power(chargeLimit), "mdi:battery-arrow-up-outline")}
           ${full ? this._metric("Heute geladen", this._historyEnergy(energy.charged), "mdi:battery-plus-outline") : ""}
@@ -674,7 +797,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
           ${full ? this._metric("Heute entladen", this._historyEnergy(energy.discharged), "mdi:battery-minus-outline") : ""}
         </div>
         ${full && energy.incomplete ? '<p class="slot-note">Heutige Energie unvollständig: Messlücken oder fehlender Tagesbeginn.</p>' : ""}
-        ${full ? this._batteryDetails(letter) : ""}
+        ${full ? `<details class="storage-details" data-remember-details="battery-${suffix}"><summary>Packdaten und technische Details</summary>
+          <div class="metric-pairs">${this._metric("Verlust", this._power(loss), "mdi:lightning-bolt-outline")}${this._metric("Wirkungsgrad", this._percent(efficiency, 1), "mdi:percent-outline")}</div>${this._batteryDetails(letter)}</details>` : ""}
       </section>`;
   }
 
@@ -724,7 +848,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const voltage = this._measurement(this._source(`cell_voltage_${s}`), "V");
     const maxTemp = this._measurement(this._source(`cell_temp_max_${s}`), "°C");
     const minTemp = this._measurement(this._source(`cell_temp_min_${s}`), "°C");
-    const latch = Boolean(this._attr("planung", `ziel_venus_${s}_latch_aktiv`, false));
+    const latch = Boolean(this._attr("planung", `ziel_venus_${s}_erreicht`, false));
     return `
       <div class="detail-grid">
         ${this._detail("Pack-SoC", packs.length ? packs.join(" / ") : "—")}
@@ -916,6 +1040,10 @@ class SpeicherLadelogikPanel extends HTMLElement {
       </section>`;
   }
 
+  _calibration() {
+    return `<main class="grid calibration-view">${this._calibrationCard()}</main>`;
+  }
+
   _control() {
     const classes = [["schwach", "Schwach"], ["wechselhaft", "Wechselhaft"], ["mittel", "Mittel"], ["stark", "Stark"]];
     const currentClass = this._attr("planung", "tagesklasse", "—");
@@ -923,7 +1051,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       `fruehes_ladeziel_venus_${model.toLowerCase()}_${key}`, label + (currentClass === key ? " · heute" : ""),
       "0 % = kein zusätzliches SoC-Ziel; der normale PV-Fahrplan bleibt aktiv",
     ])).join("")}</div></div>`).join("");
-    return `<main class="grid control-view">${this._calibrationCard()}<div class="control-columns manual-columns span-full">${this._models().map((model) => this._manualCard(model)).join("")}</div><section class="card span-full">${this._cardTitle("mdi:chart-bell-curve", "Fahrplanfunktionen")}${this._toggleRow("mittagsspitzen", "Mittagsspitzen reduzieren", "An mittleren und starken Tagen, soweit die Vollladung abgesichert ist", "mdi:chart-bell-curve")}<p class="control-explanation">Vorzeitiges Ladeziel je Speicher · Profil aktuell ${esc(currentClass)}. Tagesklassen: schwach, mittel, stark. Wechselhaft gilt bei Prognoseunsicherheit an mittleren Tagen. Starke Tage behalten ihr eigenes Ziel. 0 % deaktiviert das zusätzliche Ziel. Vor dem ersten Tagesstart kann 0 W gesetzt werden; nach der Freigabe bleiben positive Grenzen erhalten.</p>${earlyGoals}${this._numberRow(["mittag_vorlauf", "Beginn vor Sonnenhöchststand", "Dynamischer Start des Mittagsfensters"])}${this._numberRow(["mittag_nachlauf", "Ende nach Sonnenhöchststand", "Dynamisches Ende des Mittagsfensters"])}</section><div class="control-columns span-full">${this._numberCard("Leistungsgrenzen", "mdi:battery-charging", "leistung")}${this._numberCard("Planungsparameter", "mdi:shield-sun-outline", "planung")}${this._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen")}</div>${this._modeControl()}</main>`;
+    return `<main class="grid control-view"><div class="control-columns manual-columns span-full">${this._models().map((model) => this._manualCard(model)).join("")}</div><section class="card span-full">${this._cardTitle("mdi:chart-bell-curve", "Fahrplanfunktionen")}${this._toggleRow("mittagsspitzen", "Mittagsspitzen reduzieren", "An mittleren und starken Tagen, soweit die Vollladung abgesichert ist", "mdi:chart-bell-curve")}<p class="control-explanation">Vorzeitiges Ladeziel je Speicher · Profil aktuell ${esc(currentClass)}. Tagesklassen: schwach, mittel, stark. Wechselhaft gilt bei Prognoseunsicherheit an mittleren Tagen. Starke Tage behalten ihr eigenes Ziel. 0 % deaktiviert das zusätzliche Ziel. Vor dem ersten Tagesstart kann 0 W gesetzt werden; nach der Freigabe bleiben positive Grenzen erhalten.</p>${earlyGoals}${this._numberRow(["mittag_vorlauf", "Beginn vor Sonnenhöchststand", "Dynamischer Start des Mittagsfensters"])}${this._numberRow(["mittag_nachlauf", "Ende nach Sonnenhöchststand", "Dynamisches Ende des Mittagsfensters"])}</section><div class="control-columns span-full">${this._numberCard("Leistungsgrenzen", "mdi:battery-charging", "leistung")}${this._numberCard("Planungsparameter", "mdi:shield-sun-outline", "planung")}${this._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen")}</div>${this._modeControl()}</main>`;
   }
 
   _formatWriteResult(item) {
@@ -960,7 +1088,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const reasons = [...new Set([decision.grund, decision.sollwert_grund].filter(Boolean))];
     const errors = (decision.datenfehler || []).filter((text) => !/^(?:Venus )?[AE]:/.test(text) || text.startsWith(`${slot}:`) || text.startsWith(`Venus ${slot}:`));
     const field = (label, value) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`;
-    return `<article class="decision-card ${blocked ? "decision-blocked" : ""}">
+    return `<article class="decision-card storage-${suffix} ${blocked ? "decision-blocked" : ""}">
       <div class="decision-heading"><h3>${esc(this._storageLabel(slot))}</h3>${this._badge(label, blocked ? "bad" : released || full ? "good" : "neutral")}</div>
       <p class="decision-reason">${esc(reason)}</p>
       ${errors.length ? `<ul class="decision-errors">${errors.map((text) => `<li>${esc(text)}</li>`).join("")}</ul>` : ""}
@@ -970,12 +1098,12 @@ class SpeicherLadelogikPanel extends HTMLElement {
         ${field("Sollgrenze", this._power(limit))}
       </dl>
       <dl class="decision-facts">
-        ${field("Restbedarf", this._energy(decision.restbedarf_kwh))}
         ${field(released ? "Freigegeben seit" : "Geplanter Beginn", this._time(released || decision.fenster_start_ts))}
+        ${field("Restbedarf", this._energy(decision.restbedarf_kwh))}
         ${field("Planung bis", this._time(decision.simulation_ende_ts))}
         ${field("Aktualisiert", this._dateTime(decision.zeit_ts))}
       </dl>
-      <details class="decision-details" data-decision-details="${esc(slot)}"><summary>Planungsdetails und erste Freigabe</summary>
+      <details class="decision-details" data-decision-details="${esc(slot)}" data-remember-details="decision-${esc(slot)}"><summary>Planungsdetails und erste Freigabe</summary>
         <dl>${field("Fehlmenge bei bevorzugter Leistung", this._energy(decision.fehlmenge_bevorzugt_kwh))}</dl>
         ${decision.fahrplan_grund && !reasons.includes(decision.fahrplan_grund) ? `<p>${esc(decision.fahrplan_grund)}</p>` : ""}
         ${origin ? `<div class="decision-origin"><strong>Erste Freigabe · ${esc(this._dateTime(origin.zeit_ts))}</strong><p>${esc(origin.grund)}</p>
@@ -1010,6 +1138,65 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _listCard(title, icon, items, empty, width) {
     return `<section class="card ${width}">${this._cardTitle(icon, title)}<div class="message-list">${items.length ? items.map((item) => `<div><ha-icon icon="mdi:chevron-right"></ha-icon>${esc(typeof item === "string" ? item : JSON.stringify(item))}</div>`).join("") : `<p class="empty"><ha-icon icon="mdi:check-circle-outline"></ha-icon>${esc(empty)}</p>`}</div></section>`;
+  }
+
+  _appearanceStyles() {
+    return `
+      :host{--good:#61e69a;--warn:#ffd078;--bad:#ff8a8a;--surface:#0d1418;--flow-grid:#b497ff;--flow-pv:#ffbd45;--flow-home:#ffac64;--flow-fill:#091013;color-scheme:dark}
+      :host([data-theme="light"]){--primary-background-color:#eef3f5;--primary-text-color:#192a32;--secondary-text-color:#52666e;--card:#ffffff;--surface:#f7fafb;--muted:#52666e;--line:#d7e1e5;--good:#147d46;--warn:#855800;--bad:#b42332;--flow-grid:#7542ba;--flow-pv:#8b6100;--flow-home:#a75008;--flow-fill:#fff;color-scheme:light}
+      :host{background:var(--primary-background-color);color:var(--primary-text-color)}
+      header{background:var(--surface);flex-wrap:wrap;gap:10px}
+      .card{background:var(--card);box-shadow:0 6px 20px rgba(0,0,0,.05)}
+      nav{min-width:0;overflow-x:auto;scrollbar-width:thin}.nav-item{white-space:nowrap;min-height:48px;padding:0 12px;flex-shrink:0}
+      .brand-mark{background:var(--accent);color:var(--card)}
+      .live-pill{margin-left:0;border-color:color-mix(in srgb,var(--accent) 35%,transparent)}
+      .icon-button{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;flex-shrink:0;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--primary-text-color);cursor:pointer}
+      .appearance-toggle{margin-left:auto}.appearance-toggle[aria-expanded="true"]{border-color:var(--accent);color:var(--accent)}
+      button:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+      .appearance-panel{margin:14px auto;padding:20px;max-width:1000px;background:var(--card);border:1px solid var(--line);border-radius:14px}
+      .appearance-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}.appearance-heading h2{margin:0;font-size:20px}.appearance-heading p{margin:8px 0 20px;color:var(--muted);font-size:13px;line-height:1.5}
+      .appearance-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
+      .appearance-option{display:flex;flex-direction:column;gap:8px;min-width:0;font-size:13px}.appearance-option>span{font-weight:650}.appearance-option small{font-size:12px;line-height:1.4;color:var(--muted)}
+      .appearance-option select{width:100%;min-height:44px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--primary-text-color);font:inherit}
+      .appearance-footer{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;border-top:1px solid var(--line);margin-top:20px;padding-top:14px;font-size:12px;color:var(--muted)}
+      .system-grid{grid-template-columns:100px minmax(0,1fr);gap:20px}.soc-ring{width:92px;height:92px;filter:none}.soc-ring:before{inset:6px;box-shadow:none}.soc-ring strong{font-size:27px}.soc-ring small{font-size:12px}.soc-ring span{font-size:10px;margin-top:5px}
+      .status-line{gap:12px}.badge{max-width:100%;white-space:normal;overflow-wrap:anywhere;line-height:1.4}.card-title{gap:10px}.card-title>span{min-width:0}
+      .badge.good,.drift-value.good,.diag-line strong.ok,.empty{color:var(--good)}
+      .badge.good,.drift-value.good{background:color-mix(in srgb,var(--good) 10%,transparent);border-color:color-mix(in srgb,var(--good) 22%,transparent)}
+      .badge.warn,.drift-value.warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 12%,transparent)}
+      .badge.bad,.drift-value.bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 10%,transparent)}
+      .decision-errors{color:var(--bad)}.decision-blocked{border-color:color-mix(in srgb,var(--bad) 40%,transparent)}
+      .badge.accent{color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+      .decision,.cal-result,.mode-select button.active{background:color-mix(in srgb,var(--accent) 6%,transparent)}
+      .storage-a{--storage-color:var(--battery-a)}.storage-e{--storage-color:var(--battery-e)}
+      .battery-card>.card-title>span,.decision-card .decision-heading h3,.storage-slots>div>strong{color:var(--storage-color,var(--primary-text-color))}
+      .battery-card{border-top:3px solid var(--storage-color)}.battery-gauge>div{background:var(--storage-color);box-shadow:none}.battery-gauge>span{color:#fff;text-shadow:0 1px 3px #000,0 0 3px #000}
+      .battery-now b{color:var(--storage-color)}.battery-card .cal-result{border-color:var(--storage-color);background:color-mix(in srgb,var(--storage-color) 6%,transparent)}
+      .storage-details{border-top:1px solid var(--line);padding-top:14px;margin-top:18px}.storage-details summary{cursor:pointer;color:var(--muted);font-size:13px;padding:8px 0;min-height:40px}.storage-details .metric-pairs{margin-top:12px}
+      .battery-card .metric-pairs{grid-template-columns:repeat(2,minmax(0,1fr))}.battery-now{min-width:0}.battery-now strong{overflow-wrap:anywhere}
+      .flow-card .flow-ring{background:var(--flow-fill);box-shadow:0 0 16px color-mix(in srgb,currentColor 12%,transparent)}
+      .flow-card .flow-node.grid{color:var(--flow-grid)}.flow-card .flow-node.pv{color:var(--flow-pv)}.flow-card .flow-node.home{color:var(--flow-home)}
+      .flow-card .flow-node.battery-a{color:var(--battery-a)}.flow-card .flow-node.battery-e{color:var(--battery-e)}
+      :host([data-motion="subtle"]) .flow-dots.active{animation-duration:3s;filter:none;opacity:.65}
+      :host([data-motion="off"]) .flow-dots{animation:none;display:none}
+      :host([data-motion="off"]) .flow-route.active{filter:none}
+      :host([data-density="compact"]) .grid{gap:10px;padding:10px}
+      :host([data-density="compact"]) .card{padding:12px}
+      :host([data-density="compact"]) .card-title{margin-bottom:10px}
+      :host([data-density="compact"]) .status-line{padding:6px 0}
+      :host([data-density="compact"]) .metric{padding:8px}
+      :host([data-density="compact"]) .decision-card{padding:12px}
+      :host([data-density="compact"]) .decision-facts{gap:12px;margin:12px 0}
+      :host([data-density="compact"]) .control-row,:host([data-density="compact"]) .number-row{padding-top:8px;padding-bottom:8px}
+      :host([data-density="compact"]) .flow-card .flow-canvas{min-height:450px}
+      .control-row,.number-row,.diag-line{gap:12px}.number-row>div,.control-row>div{min-width:0}
+      .calibration-view .calibration-card{max-width:1200px;width:100%;justify-self:center}
+      @media(max-width:1200px){nav{order:3;width:100%;margin:0;min-height:48px}.nav-item{flex:1;justify-content:center}header{padding:10px 16px}}
+      @media(max-width:900px){.appearance-panel{margin:12px}.appearance-options{grid-template-columns:repeat(2,minmax(0,1fr))}}
+      @media(max-width:720px){header{padding:8px 10px}.brand-copy strong{font-size:15px}.live-pill{display:none}nav{margin:0 -10px -8px;width:calc(100% + 20px)}.nav-item{min-width:100px;flex:1;padding:0 10px}.nav-item span{font-size:12px}.system-grid{grid-template-columns:80px minmax(0,1fr);gap:14px;align-items:start}.soc-ring{width:76px;height:76px;margin-top:6px}.soc-ring strong{font-size:23px}.status-table{grid-template-columns:1fr;gap:0}.status-line{flex-wrap:wrap;padding:6px 0;font-size:12px;gap:4px}.status-line .badge{font-size:11px}.diagnostics-view>.span-6{grid-column:1/-1}.appearance-options{gap:14px}.appearance-panel{padding:16px}.flow-card .flow-canvas{min-height:390px}:host([data-density="compact"]) .flow-card .flow-canvas{min-height:350px}}
+      @media(max-width:410px){.appearance-options{grid-template-columns:1fr}.appearance-footer .action-btn{width:100%;justify-content:center}.system-grid{gap:10px}.decision-power{gap:5px}.brand-copy strong{font-size:14px}.appearance-toggle{width:40px;height:40px}.flow-card .flow-ring{width:72px;height:72px}.flow-card .flow-ring strong{font-size:13px}.flow-card .flow-ring b{font-size:10px}}
+      @media(prefers-reduced-motion:reduce){.flow-dots{animation:none!important;display:none}.toggle i{transition:none}}
+    `;
   }
 
   _styles() {
@@ -1060,7 +1247,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       .decision-blocked{border-color:rgba(255,125,125,.35)}.decision-errors{padding-left:18px;color:#ffaaaa;line-height:1.5;font-size:13px}
       @media(max-width:900px){.decision-grid{grid-template-columns:1fr}}
       @media(max-width:420px){.decision-card{padding:12px}.decision-power>div{padding:8px 6px}.decision-power dd{font-size:17px}.decision-card dt{font-size:11px}}
-      @media(prefers-reduced-motion:reduce){.flow-dots.active{animation-duration:3s}}
+      ${this._appearanceStyles()}
     `;
   }
 
@@ -1102,14 +1289,14 @@ class SpeicherLadelogikPanel extends HTMLElement {
     this._setLiveText('[data-live-flow="pv-value"]', this._power(flow.pv));
     this._setLiveText('[data-live-flow="grid-value"]', this._power(Math.abs(flow.grid)));
     this._setLiveText('[data-live-flow="home-value"]', this._power(flow.home));
-    this._refreshFlowRoute("grid", Math.abs(flow.grid) > 0, flow.gridPath, "#8f6bff");
-    this._refreshFlowRoute("pv", flow.pv > 0, flow.pvPath, "#ffbd45");
+    this._refreshFlowRoute("grid", Math.abs(flow.grid) > 0, flow.gridPath, "var(--flow-grid)");
+    this._refreshFlowRoute("pv", flow.pv > 0, flow.pvPath, "var(--flow-pv)");
     flow.batteries.forEach((battery) => {
       this._setLiveText(`[data-live-flow="soc-${battery.suffix}"]`, this._percent(battery.soc));
       this._setLiveText(`[data-live-flow="power-${battery.suffix}"]`, this._power(Math.abs(battery.power)));
       this.shadowRoot.querySelector(`[data-live-flow="icon-${battery.suffix}"]`)?.setAttribute("icon", battery.icon);
       this._refreshFlowRoute(`battery-${battery.suffix}`, Math.abs(battery.power) > 10,
-        battery.route, battery.model === "A" ? "#38d582" : "#6dd7e2");
+        battery.route, `var(--battery-${battery.suffix})`);
     });
 
     this._models().forEach((model) => {
@@ -1118,7 +1305,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       const power = this._entityNum(this._source(`power_${suffix}`), this._num(this._attr("status", `ac_leistung_venus_${suffix}_w`, 0)));
       const mode = this._batteryMode(power);
       this._setLiveText(`[data-live-battery="${suffix}-soc"]`, `${Math.round(soc)}%`);
-      this._setLiveText(`[data-live-battery="${suffix}-mode"]`, mode.label);
+      this._setLiveText(`[data-live-battery="${suffix}-mode"]`, this._storageStatus(model).label);
       this._setLiveText(`[data-live-battery="${suffix}-power"]`, this._power(Math.abs(power)));
       const fill = this.shadowRoot.querySelector(`[data-live-battery="${suffix}-fill"]`);
       fill?.style.setProperty("height", `${Math.max(4, Math.min(100, soc))}%`);
@@ -1131,18 +1318,46 @@ class SpeicherLadelogikPanel extends HTMLElement {
 
   _render() {
     if (!this.isConnected || !this._hass || !this._panel) return;
-    const expanded = [...this.shadowRoot.querySelectorAll("[data-decision-details][open]")].map((el) => el.dataset.decisionDetails);
+    this.shadowRoot.querySelectorAll("[data-remember-details]").forEach((el) => {
+      if (el.open) this._expandedDetails.add(el.dataset.rememberDetails);
+      else this._expandedDetails.delete(el.dataset.rememberDetails);
+    });
+    const focusKey = this.shadowRoot.activeElement?.dataset?.appearance;
     const content = this._tab === "overview" ? this._overview()
       : this._tab === "batteries" ? this._batteries()
-        : this._tab === "control" ? this._control() : this._diagnostics();
-    this.shadowRoot.innerHTML = `<style>${this._styles()}</style>${this._header()}${content}`;
-    this.shadowRoot.querySelectorAll("[data-decision-details]").forEach((el) => { el.open = expanded.includes(el.dataset.decisionDetails); });
+        : this._tab === "calibration" ? this._calibration()
+          : this._tab === "control" ? this._control() : this._diagnostics();
+    this.shadowRoot.innerHTML = `<style>${this._styles()}</style>${this._header()}${this._appearancePanel()}${content}`;
+    this.shadowRoot.querySelectorAll("[data-remember-details]").forEach((el) => { el.open = this._expandedDetails.has(el.dataset.rememberDetails); });
+    this._applyAppearance();
+    if (focusKey && APPEARANCE_CHOICES[focusKey]) this.shadowRoot.querySelector(`[data-appearance="${focusKey}"]`)?.focus();
     this._rendered = true;
     this._syncStateRefs();
     this._bind();
   }
 
   _bind() {
+    this.shadowRoot.querySelector("[data-appearance-toggle]")?.addEventListener("click", () => {
+      this._appearanceOpen = !this._appearanceOpen;
+      this._render();
+      this.shadowRoot.querySelector(this._appearanceOpen ? "[data-appearance]" : "[data-appearance-toggle]")?.focus();
+    });
+    const closeAppearance = () => {
+      this._appearanceOpen = false;
+      this._render();
+      this.shadowRoot.querySelector("[data-appearance-toggle]")?.focus();
+    };
+    this.shadowRoot.querySelector("[data-appearance-close]")?.addEventListener("click", closeAppearance);
+    this.shadowRoot.querySelector(".appearance-panel")?.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") { event.stopPropagation(); closeAppearance(); }
+    });
+    this.shadowRoot.querySelectorAll("[data-appearance]").forEach((input) => input.addEventListener("change", () => this._setAppearance(input.dataset.appearance, input.value)));
+    this.shadowRoot.querySelector("[data-appearance-reset]")?.addEventListener("click", () => {
+      this._appearance = { ...APPEARANCE_DEFAULTS };
+      this._saveAppearance();
+      this._render();
+      this.shadowRoot.querySelector("[data-appearance-reset]")?.focus();
+    });
     this.shadowRoot.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", () => {
       this._tab = button.dataset.tab;
       this._render();
@@ -1209,7 +1424,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
   }
 }
 
-const PANEL_ELEMENT = "speicher-ladelogik-ae-panel-2-1-2";
+const PANEL_ELEMENT = "speicher-ladelogik-ae-panel-2-2-0";
 
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);
