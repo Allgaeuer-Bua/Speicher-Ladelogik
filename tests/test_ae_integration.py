@@ -580,3 +580,56 @@ def test_upgrading_existing_release_does_not_invent_a_cause_or_stop_charging():
     assert plan['soll_ladegrenze_venus_a_w'] == 1100
     assert 'nicht aufgezeichnet' in plan['ladefreigabe_venus_a_ursprung']['grund']
     assert plan['ladefreigabe_venus_a_ursprung']['zeit_ts'] == fx.NOW - 60
+
+
+def diagnostic_plan(changes):
+    hass, payload = fx.scenario(primary_phase="idle", secondary_phase="idle")
+    for entity_id, entity in changes.items():
+        hass.states.states[entity_id] = entity
+    return planner.calculate_plan(hass, payload)["plan"]
+
+
+def test_invalid_soc_limits_name_values_without_spurious_pack_errors():
+    plan = diagnostic_plan({"number.marstek_venus_a_maximaler_soc": fx.state(0, fx.NOW)})
+    errors = plan["datenfehler_aktuell"]
+    own = [message for message in errors if message.startswith("A:")]
+    assert len(own) == 1, own
+    assert "unten 12 %, oben 0 %" in own[0]
+    assert "number.marstek_venus_a_maximaler_soc" in own[0]
+    assert not plan["daten_gueltig_venus_a"]
+    assert plan["soll_ladegrenze_venus_a_w"] == 0
+    assert plan["daten_gueltig_venus_e"]
+
+
+def test_invalid_soc_measurements_identify_pack_and_unit():
+    plan = diagnostic_plan({
+        "sensor.marstek_venus_a_soc_batteriepack_2": fx.state(40, fx.NOW, "W"),
+        "sensor.marstek_venus_a_soc_batterie": fx.state("unavailable", fx.NOW, "%"),
+    })
+    errors = plan["datenfehler_aktuell"]
+    assert any("Pack 2-SoC" in message and "Einheit 'W'" in message for message in errors)
+    assert any("Gesamt-SoC" in message and "kein numerischer Wert" in message for message in errors)
+    assert not any("SoC-Grenzen" in message for message in errors)
+    assert plan["soll_ladegrenze_venus_a_w"] == 0
+
+
+def test_invalid_charge_range_reports_which_target_cannot_be_set():
+    plan = diagnostic_plan({
+        "number.marstek_venus_a_maximale_ladeleistung": fx.state(500, fx.NOW, min=50, max=1500, step=50),
+    })
+    own = [message for message in plan["datenfehler_aktuell"] if message.startswith("A:")]
+    assert len(own) == 1, own
+    assert "0 W nicht einstellbar" in own[0]
+    assert "Bereich 50–1500 W, Schritt 50 W" in own[0]
+    assert not plan["daten_gueltig_venus_a"]
+
+
+def test_charge_attribute_failure_and_out_of_range_soc_are_separate():
+    plan = diagnostic_plan({
+        "number.marstek_venus_a_maximale_ladeleistung": fx.state(500, fx.NOW, min=0, max=1500),
+        "sensor.marstek_venus_a_soc_batteriepack_1": fx.state(101, fx.NOW, "%"),
+    })
+    errors = plan["datenfehler_aktuell"]
+    assert any("Stellbereich ungültig" in message and "step=None" in message for message in errors)
+    assert any("Pack 1-SoC" in message and "außerhalb 0–100 %" in message for message in errors)
+    assert not any("Gesamt-/Pack" in message for message in errors)

@@ -3,14 +3,16 @@ import test from "node:test";
 
 const registry = new Map();
 globalThis.HTMLElement = class {
-  attachShadow() { this.shadowRoot = { querySelector: () => null }; return this.shadowRoot; }
+  constructor() { this.attributes = {}; this.properties = {}; this.style = { setProperty: (key, value) => { this.properties[key] = value; } }; }
+  setAttribute(key, value) { this.attributes[key] = value; }
+  attachShadow() { this.shadowRoot = { querySelector: () => null, querySelectorAll: () => [] }; return this.shadowRoot; }
 };
 globalThis.customElements = {
   get: (name) => registry.get(name),
   define: (name, klass) => registry.set(name, klass),
 };
 await import("../custom_components/speicher_ladelogik_ae/frontend/speicher-ladelogik-ae-panel.js");
-const Panel = registry.get("speicher-ladelogik-ae-panel-2-1-2");
+const Panel = registry.get("speicher-ladelogik-ae-panel-2-2-0");
 
 function panel() {
   const instance = new Panel();
@@ -91,8 +93,9 @@ test("daily release is shown per battery and effective peak state wins over its 
     ladefreigabe_venus_a_seit_ts: Date.now() / 1000 - 300,
     ladebeginn_venus_e_ts: Date.now() / 1000 + 3600,
   } };
-  assert.match(p._storageSlot("A", "a"), /freigegeben seit/);
-  assert.match(p._storageSlot("E", "e"), /Beginn geplant/);
+  assert.match(p._storageSlot("A", "a"), /Freigegeben seit/);
+  p._hass.states["sensor.power_e"].state = "0";
+  assert.match(p._storageSlot("E", "e"), /Wartet bis/);
   assert.match(p._peakDetails(), />Aus</);
   assert.doesNotMatch(p._planningCard(), /Entscheidung fixiert|Pausenslot|15-Minuten/);
 });
@@ -138,4 +141,95 @@ test("charge decisions separate limits, reasons and errors per battery", () => {
   assert.doesNotMatch(html, /anderer Fehler/);
   assert.match(html, /<details[^>]*data-decision-details="A"/);
   assert.equal((html.match(/<p class="decision-reason">Sicherheitsstopp<\/p>/g) || []).length, 1);
+});
+
+test("calibration moves to its own navigation and keeps all actions", () => {
+  const p = panel();
+  p._panel.config.entities = { kalibrierung_ruhe_unten: "number.rest" };
+  p._hass.states["number.rest"] = { state: "45", attributes: { min: 0, max: 240, step: 1, unit_of_measurement: "min" } };
+  assert.match(p._header(), /data-tab="calibration"/);
+  assert.doesNotMatch(p._control(), /calibration-card|data-press="kalibrierung/);
+  const html = p._calibration();
+  assert.match(html, /calibration-card/);
+  assert.match(html, /Ruhezeit vor dem Laden/);
+  assert.match(html, /data-press="kalibrierung_abbrechen"/);
+  assert.match(html, /data-press="kalibrierung_venus_e_morgen"/);
+});
+
+test("diagnostics place beginning over end and preserve technical details", () => {
+  const p = panel();
+  p._panel.config.entities = { planung: "sensor.plan" };
+  p._hass.states["sensor.plan"] = { state: "Warten", attributes: {
+    leistungsentscheidung_venus_a: { fenster_start_ts: 1791283020, simulation_ende_ts: 1791302400, restbedarf_kwh: 1.9 },
+  } };
+  const html = p._chargeDecision("A");
+  assert.ok(html.indexOf("Geplanter Beginn") < html.indexOf("Restbedarf"));
+  assert.ok(html.indexOf("Restbedarf") < html.indexOf("Planung bis"));
+  assert.match(p._batteryCard("A", true), /<details[^>]*data-remember-details="battery-a"/);
+  assert.match(p._batteryCard("A", true), /Pack-SoC/);
+});
+
+test("appearance survives recreation, validates values and never invokes HA services", () => {
+  const saved = new Map();
+  globalThis.localStorage = { getItem: (key) => saved.get(key) || null, setItem: (key, value) => saved.set(key, value) };
+  try {
+    const p = panel();
+    p._hass.callService = () => { throw new Error("Presentation must not write controls"); };
+    p._setAppearance("accent", "violet");
+    p._setAppearance("theme", "light");
+    p._setAppearance("density", "compact");
+    p._setAppearance("batteryE", "blue");
+    p._setAppearance("motion", "off");
+    const restored = panel();
+    assert.deepEqual(restored._appearance, p._appearance);
+    restored._applyAppearance();
+    assert.equal(restored.attributes["data-theme"], "light");
+    assert.equal(restored.attributes["data-density"], "compact");
+    assert.equal(restored.properties["--battery-e"], "#1964b5");
+    assert.equal(restored.properties["--accent"], "#7542ba");
+    restored._setAppearance("accent", 'red;display:none');
+    assert.equal(restored._appearance.accent, "violet");
+    saved.set("speicher_ladelogik_ae.appearance.v1", '{"accent":"invalid","theme":"broken","batteryA":"orange"}');
+    const sanitized = panel();
+    assert.equal(sanitized._appearance.accent, "green");
+    assert.equal(sanitized._appearance.theme, "auto");
+    assert.equal(sanitized._appearance.batteryA, "orange");
+  } finally { delete globalThis.localStorage; }
+});
+
+test("automatic theme follows HA and storage failures do not break rendering", () => {
+  globalThis.localStorage = { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); } };
+  try {
+    const p = panel();
+    p._hass.themes = { darkMode: false };
+    assert.equal(p._effectiveTheme(), "light");
+    p._hass.themes.darkMode = true;
+    assert.equal(p._effectiveTheme(), "dark");
+    p._setAppearance("theme", "light");
+    assert.equal(p._effectiveTheme(), "light");
+    assert.match(p._appearanceNotice(), /dauerhafte Speichern/);
+    p._appearanceOpen = true;
+    assert.match(p._appearancePanel(), /Darstellung schließen/);
+    assert.match(p._styles(), /prefers-reduced-motion/);
+  } finally { delete globalThis.localStorage; }
+});
+
+test("storage status distinguishes permission, real flow, target and safety", () => {
+  const p = panel();
+  p._panel.config.entities = { planung: "sensor.plan" };
+  const plan = { fahrplan_slot_aktiv_venus_a: true, daten_gueltig_venus_a: true };
+  p._hass.states["sensor.plan"] = { attributes: plan };
+  p._hass.states["sensor.power_a"].state = "0";
+  assert.equal(p._storageStatus("A").label, "Freigegeben");
+  p._hass.states["sensor.power_a"].state = "-700";
+  assert.equal(p._storageStatus("A").label, "Lädt");
+  p._hass.states["sensor.power_a"].state = "250";
+  assert.equal(p._storageStatus("A").label, "Entlädt");
+  p._hass.states["sensor.power_a"].state = "0";
+  plan.ziel_venus_a_erreicht = true;
+  assert.equal(p._storageStatus("A").label, "Voll");
+  plan.obere_geraetegrenze_venus_a_prozent = 80;
+  assert.equal(p._storageStatus("A").label, "Ziel erreicht");
+  plan.daten_gueltig_venus_a = false;
+  assert.equal(p._storageStatus("A").label, "Gesperrt");
 });

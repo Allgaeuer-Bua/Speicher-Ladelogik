@@ -260,6 +260,40 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
                 and lo <= value <= hi and abs((value - lo) / step - round((value - lo) / step)) < 0.001)
 
 
+    def source_description(entity):
+        state = hass.states.get(entity)
+        source = getattr(state, "entity_id", None) or entity
+        value = raw(entity)
+        return f"{source}: {value}"
+
+
+    def soc_error(entity, label):
+        state = hass.states.get(entity)
+        value = number(raw(entity))
+        if value is None:
+            detail = "kein numerischer Wert"
+        elif not 0 <= value <= 100:
+            detail = "Wert außerhalb 0–100 %"
+        else:
+            unit = state.attributes.get("unit_of_measurement", "") if state else ""
+            detail = f"Einheit {unit!r}; erwartet '%'"
+        return f"{label} ungültig ({source_description(entity)}; {detail})"
+
+
+    def charge_limit_error(entity, maximum):
+        state = hass.states.get(entity)
+        if state is None or number(state.state) is None:
+            return f"Ladegrenze nicht verfügbar ({source_description(entity)}; numerischen Zustand erwartet)"
+        attrs = state.attributes
+        lo, hi, step = (number(attrs.get(key)) for key in ("min", "max", "step"))
+        if lo is None or hi is None or step is None or step <= 0:
+            return (f"Ladegrenze: Stellbereich ungültig ({source_description(entity)}; "
+                    f"min={attrs.get('min')}, max={attrs.get('max')}, step={attrs.get('step')})")
+        targets = ", ".join(f"{value:g} W" for value in (0, maximum) if not writable(entity, value))
+        return (f"Ladegrenze: {targets} nicht einstellbar ({source_description(entity)}; "
+                f"Bereich {lo:g}–{hi:g} W, Schritt {step:g} W)")
+
+
     def write_needed(current, target):
         return current is None or abs(current - target) >= 25
 
@@ -814,7 +848,11 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
             and 0 <= floor < top <= 100
         )
         if not limits_ok:
-            errors.append(key + ": Gerätegrenzen ungültig")
+            errors.append(
+                f"{key}: SoC-Grenzen ungültig: unten {floor:g} %, oben {top:g} %. "
+                "Erwartet: 0 ≤ unten < oben ≤ 100 %. "
+                f"[{source_description(cfg['bottom'])}; {source_description(cfg['top'])}]"
+            )
             floor = cfg["floor"]
             top = 100
         model_nominal = (
@@ -833,16 +871,20 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         usable = nominal * (1 - floor / 100)
         capacity_ok = 0 < usable < 20
         if not capacity_ok:
-            errors.append(key + ": Kapazität ungültig")
+            errors.append(f"{key}: Nutzbare Kapazität {usable:g} kWh ungültig; erwartet größer 0 und kleiner 20 kWh")
             nominal = model_nominal
             usable = nominal * (1 - floor / 100)
         pack_count = pack_counts.get(key, 1)
         packs = []
+        if soc is None:
+            errors.append(key + ": " + soc_error(cfg["soc"], "Gesamt-SoC"))
         if cfg["has_packs"]:
-            for entity in PACKS[key][:pack_count]:
+            if len(PACKS[key]) < pack_count:
+                errors.append(f"{key}: Pack-SoC-Zuordnung unvollständig: {len(PACKS[key])} Sensoren für {pack_count} erwartete Packs")
+            for index, entity in enumerate(PACKS[key][:pack_count], start=1):
                 value = measurement(entity, "soc")
                 if value is None:
-                    warnings.append(entity + ": erwarteter Pack-Sensor fehlt")
+                    errors.append(key + ": " + soc_error(entity, f"Pack {index}-SoC"))
                 else:
                     packs.append(value)
             packs_ok = len(packs) == pack_count
@@ -879,10 +921,10 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         owns = (raw(cfg["auto"]) == "on" and raw(cfg["active"]) == "on"
                 and raw(cfg["override"]) != "on")
 
-        usable_data = (soc is not None and packs_ok and capacity_ok and limits_ok
-                       and writable(cfg["charge"], 0) and writable(cfg["charge"], cap))
-        if not usable_data:
-            errors.append(key + ": Gesamt-/Pack-SoC oder Ladegrenze fehlt/ist ungueltig")
+        charge_limit_ok = writable(cfg["charge"], 0) and writable(cfg["charge"], cap)
+        usable_data = (soc is not None and packs_ok and capacity_ok and limits_ok and charge_limit_ok)
+        if not charge_limit_ok:
+            errors.append(key + ": " + charge_limit_error(cfg["charge"], cap))
         values.update({"soc": soc, "power": power, "power_live": power_usable,
                        "power_display": power_display,
                        "inverter_status": inverter_status, "inverter_fresh": inverter_fresh,

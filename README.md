@@ -16,8 +16,13 @@ Die neue Kennung lautet `speicher_ladelogik_ae`. Einstellungen, Kalibrierhistori
 
 - **Übersicht:** Solar, Netz, Haus, Venus A und Venus E mit eigener Leistung und SoC; darunter Tagesplanung und Mittagsspitzenkappung. Keine zusätzliche SoC-Verlaufskarte.
 - **Speicher:** Je Speicher aktueller Status, Restzeit, Energiezählung und Packdaten. Die Verlaufsgrafiken für SoC/Leistung, Wirkungsgrad und Zelldrift entfallen.
-- **Steuerung:** Kalibrierung, Handbetrieb, Fahrplanfunktionen und Leistungsgrenzen; Betriebsart am Ende.
+- **Kalibrierung:** Eigener Reiter für Einstellungen, Vormerkungen, laufende Aufträge und Ergebnisse.
+- **Steuerung:** Handbetrieb, Fahrplanfunktionen und Leistungsgrenzen; Betriebsart am Ende.
 - **Diagnose:** Datenverfügbarkeit und Schreibergebnisse. Die Ladegrenze wird je Speicher in einer eigenen Karte erklärt: Begründung, bevorzugte Leistung, neu berechneter Wert und geltende Sollgrenze; weitere Planungsdetails lassen sich aufklappen.
+
+Über das **Palettensymbol** im Kopfbereich lassen sich Akzentfarbe, Farben der beiden Speicher, Hell/Dunkel/Automatisch, Kompakt/Komfortabel und die Energiefluss-Animation einstellen. Automatisch folgt der Hell-/Dunkel-Einstellung von Home Assistant, ersatzweise dem Browser. Die Auswahl wird im jeweiligen Browser gespeichert; andere Geräte und die Speicherregelung bleiben unverändert. Browserdaten löschen setzt diese Auswahl zurück. Warnungen bleiben gelb und Fehler rot.
+
+Der Gesamt-SoC wird kompakter angezeigt. Die Speicherkarten zeigen aktuelle Leistung, SoC, Ladegrenzen und Restzeit zuerst; Packdaten und technische Werte sind aufklappbar. „Freigegeben“ bedeutet eine bestehende Ladeerlaubnis, „Lädt“ einen gemessenen Ladefluss. In der Diagnose stehen Beginn und Ende des Ladefensters untereinander. Ungültige SoC-Grenzen, einzelne Pack-Sensoren und nicht einstellbare Ladegrenzen werden konkret mit betroffenen Werten benannt.
 
 ## Ladeplanung ab v2.1.0
 

@@ -1,5 +1,13 @@
 # Änderungen
 
+## 2.2.0
+
+- Kalibrierung aus „Steuerung“ in einen eigenen Reiter mit sämtlichen Einstellungen, Vormerkungen, Aufträgen und Ergebnissen verschoben.
+- Lokale Darstellungseinstellungen über das Palettensymbol: fünf Akzentfarben, unabhängige Speicherfarben, Hell/Dunkel/Automatisch, Kompakt/Komfortabel und normale/dezente/ausgeschaltete Animation. Browser-Speicherfehler beeinträchtigen die Bedienung nicht; Warnungs- und Fehlerfarben bleiben fest.
+- Kompakter Gesamt-SoC, aufklappbare Pack- und Technikdetails, klarere Unterscheidung zwischen Ladefreigabe und tatsächlichem Energiefluss. Reduzierte Bewegung des Betriebssystems wird berücksichtigt.
+- Diagnose: Beginn und Ende stehen untereinander. Konkrete Fehlermeldungen benennen ungültige SoC-Grenzen, Gesamt-/Pack-Sensoren und Stellbereiche. Keine zusätzliche pauschale Fehlermeldung für denselben Grenzfehler.
+- Ladeplanung, insbesondere das Verhalten an schwachen Tagen, und bestehende Sicherheitsbedingungen bleiben unverändert.
+
 ## 2.1.2
 
 - Dashboard vereinfacht: „SoC je Speicher“ sowie die Verlaufsgrafiken für SoC/Leistung, Wirkungsgrad und Zelldrift entfernt. Aktuelle Speicherwerte und Energiezählung bleiben erhalten; die Übersicht lädt keine Verlaufsdaten mehr.
