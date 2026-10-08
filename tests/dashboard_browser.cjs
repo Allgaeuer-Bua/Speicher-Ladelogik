@@ -126,6 +126,7 @@ fs.mkdirSync(out, { recursive: true });
     // Calibration controls still target their original HA services.
     await page.evaluate(() => { window.panel._panel.config.entities.kalibrierung_venus_e_morgen = 'button.fixture_calibrate_e'; });
     await page.locator('[data-tab="calibration"]').click();
+    page.once('dialog', dialog => dialog.accept());
     await page.locator('[data-press="kalibrierung_venus_e_morgen"]').click();
     assert.deepEqual(await page.evaluate(() => window.serviceCalls), [['button', 'press', { entity_id: 'button.fixture_calibrate_e' }]]);
     await page.locator('[data-tab="control"]').click();
