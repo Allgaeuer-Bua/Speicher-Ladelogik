@@ -26,7 +26,8 @@ fs.mkdirSync(out, {recursive:true});
       class Icon extends HTMLElement {connectedCallback(){this.style.display='inline-block';this.style.width='18px';this.style.height='18px';}}
       customElements.define('ha-icon',Icon);
       await import('/speicher-ladelogik-ae-card.js?v=test');
-      window.calls=[];window.histories=[];
+      window.calls=[];window.histories=[];window.infos=[];
+      document.addEventListener('hass-more-info',event=>window.infos.push(event.detail.entityId));
       const states={},entities={},sources={};
       const set=(key,value,attributes={},domain='sensor')=>{
         const id=`${domain}.test_${key}`;states[id]={entity_id:id,state:String(value),attributes,last_updated:new Date().toISOString()};return id;
@@ -58,11 +59,11 @@ fs.mkdirSync(out, {recursive:true});
       sources.pack_soc_a=[set('pack1',55,{unit_of_measurement:'%'}),set('pack2',55,{unit_of_measurement:'%'})];
       sources.drift_a=[sources.drift_a,sources.drift_a];
       for(const p of [1,2])for(let i=1;i<=13;i++)extra[`a_p${p}_cell_${i}`]=set(`p${p}c${i}`,3.28+i*.0001,{unit_of_measurement:'V'});
-      native('status','Bereit',{version:'2.3.0',betriebsart:'Automatik',schreibzugriffe_aktiv:true,planung_aktiv:true,quellen_verfuegbar:43,quellen_gesamt:43,warnungen:[],fehlende_entitaeten:[]});
+      native('status','Bereit',{version:'2.3.1',betriebsart:'Automatik',schreibzugriffe_aktiv:true,planung_aktiv:true,quellen_verfuegbar:43,quellen_gesamt:43,warnungen:[],fehlende_entitaeten:[]});
       native('planung','Ladefreigabe aktiv',plan);native('kalibrierung','Bereit',{auftraege:[],phase:'idle'});native('betriebsart','Automatik',{},'select');native('mittagsspitzen','on',{},'switch');
       native('kalibrierung_venus_e_morgen','',{},'button');
       for(const [key,value,unit] of [['prognose_sicherheit',90,'%'],['unplanbare_reserve',1,'kWh'],['ladewirkungsgrad',90,'%'],['planung_hysterese',.2,'kWh'],['knappheitsreserve',125,'%'],['schwacher_tag',20,'kWh'],['mittlerer_tag',50,'kWh'],['starker_tag',85,'kWh'],['mittag_vorlauf',1.5,'h'],['mittag_nachlauf',2,'h'],['kalibrierleistung',500,'W'],['kalibrierung_ruhe_unten',0,'min'],['kalibrierung_ruhe_oben',90,'min']])native(key,value,{min:0,max:2500,step:.1,unit_of_measurement:unit},'number');
-      window.entry={entry_id:'test',version:'2.3.0',models:['A','E'],entities,sources};
+      window.entry={entry_id:'test',version:'2.3.1',models:['A','E'],entities,sources};
       window.fixture={states,entities,sources,extra};
       window.hass={states,user:{is_admin:true},themes:{darkMode:false},config:{time_zone:'Europe/Berlin'},
         callWS:async msg=>{if(msg.type==='speicher_ladelogik_ae/config')return {entries:[window.entry]};throw new Error('Unexpected WS command '+msg.type)},
@@ -88,6 +89,14 @@ fs.mkdirSync(out, {recursive:true});
     assert.match(await page.locator('.summary-status').innerText(),/Stark/);
     assert.match(await page.locator('.summary-status').innerText(),/Ladefreigabe aktiv/);
     assert.deepEqual(await page.evaluate(()=>window.calls),[],'Mounting performs no writes');
+    await page.locator('[data-live-battery="a-soc"]').click();
+    assert.equal(await page.evaluate(()=>window.infos.at(-1)),await page.evaluate(()=>window.fixture.sources.soc_a));
+    await page.locator('[data-battery="a"] .metric[aria-label="Ladegrenze · Entität oder Quellen öffnen"]').click();
+    assert.equal(await page.evaluate(()=>window.infos.at(-1)),await page.evaluate(()=>window.fixture.sources.charge_limit_a));
+    await page.locator('[data-battery="a"] .detail.value-link').filter({hasText:'Pack-SoC'}).click();
+    assert.equal(await page.locator('dialog.value-sources .value-source-row').count(),2,'Composite values list their real sources');
+    await page.locator('dialog.value-sources .value-source-row').first().click();
+    assert.equal(await page.evaluate(()=>window.infos.at(-1)),await page.evaluate(()=>window.fixture.sources.pack_soc_a[0]));
     await page.locator('[data-remember-details="control-a"] summary').click();
     await page.locator('[data-remember-details="electric-a"] summary').click();
     const a=page.locator('[data-manual-form="A"]');
@@ -111,6 +120,29 @@ fs.mkdirSync(out, {recursive:true});
     assert.equal(await a.locator('[data-manual-range="charge"]').inputValue(),'1150');
     // Charts retain both custom ranges and chosen view through card renders.
     const main=page.locator('speicher-ladelogik-telemetry');
+    const order=await main.evaluate(el=>[...el.shadowRoot.querySelector('.vs-app').children].map(node=>node.className));
+    assert.ok(order.indexOf('vs-pack-charts')<order.indexOf('vs-lower'),'Pack charts precede current cells and energy balance');
+    assert.equal(await main.locator('.vs-lower > section').first().getAttribute('aria-label'),'Zellspannungen beider Speicher');
+    // Identity alone misses detach/reattach: native date pickers also require
+    // uninterrupted connection and focus across real HA and timer updates.
+    for(const chart of ['main','pack1','pack2'])for(const boundary of ['from','to']){
+      const kept=await main.evaluate((el,{chart,boundary})=>{
+        const input=el.shadowRoot.querySelector(`#vs-${chart}-${boundary}`),value=input.value;
+        let blurred=0;const onBlur=()=>blurred++;
+        input.addEventListener('blur',onBlur);input.focus();
+        window.card.hass={...window.hass,states:{...window.hass.states}};
+        el._update();window.card._render();
+        const result={same:input===el.shadowRoot.querySelector(`#vs-${chart}-${boundary}`),connected:input.isConnected,focused:el.shadowRoot.activeElement===input,blurred,unchanged:input.value===value};
+        input.removeEventListener('blur',onBlur);input.blur();return result;
+      },{chart,boundary});
+      assert.deepEqual(kept,{same:true,connected:true,focused:true,blurred:0,unchanged:true},`${chart} ${boundary}: native picker focus retained`);
+    }
+    await page.evaluate(()=>{
+      const id=window.fixture.extra.a_charge_today,next={...window.hass.states,[id]:{...window.hass.states[id],state:'3.5'}};
+      window.fixture.states=next;window.hass={...window.hass,states:next};window.card.hass=window.hass;
+    });
+    await page.waitForTimeout(80);
+    assert.match(await main.locator('#vs-energy-rows').innerText(),/3,50/,'Persistent analytics still receive immutable HA state changes');
     await main.locator('[data-view="soc"]').click();
     await main.locator('#vs-main-from').fill('2026-10-17T08:15');
     await main.locator('#vs-main-to').fill('2026-10-17T10:45');
@@ -130,6 +162,35 @@ fs.mkdirSync(out, {recursive:true});
         assert.deepEqual(overflow.cards,[],`${width} ${view}: card overflow`);
         if(width!==320)await page.screenshot({path:path.join(out,`lovelace-${width}-${view}.png`),fullPage:true});
         if(view==='overview')assert.equal(await page.locator('.plan-card').evaluate(el=>Math.round(el.getBoundingClientRect().width)),await page.locator('main.overview').evaluate(el=>Math.round(el.getBoundingClientRect().width)),'Planning uses full width');
+        if(view==='overview'){
+          const collisions=await page.locator('.metric').evaluateAll(metrics=>metrics.filter(metric=>{
+            const label=metric.querySelector(':scope > span')?.getBoundingClientRect(),value=metric.querySelector(':scope > strong')?.getBoundingClientRect();
+            return label&&value&&value.top<label.bottom+2;
+          }).map(metric=>metric.textContent));
+          assert.deepEqual(collisions,[],`${width}: labels and metric values never overlap`);
+          const summaries=await page.evaluate(()=>{
+            const root=window.card.shadowRoot,below=(first,second)=>second.getBoundingClientRect().top>=first.getBoundingClientRect().bottom;
+            return {ring:below(root.querySelector('.soc-ring strong'),root.querySelector('.soc-ring .value-link>span')),
+              energy:below(root.querySelector('[data-summary-energy]'),root.querySelector('[data-summary-reference]')),
+              battery:below(root.querySelector('[data-live-battery="a-power"]'),root.querySelector('[data-live-battery="a-mode"]'))};
+          });
+          assert.deepEqual(summaries,{ring:true,energy:true,battery:true},`${width}: linked summary values keep their line breaks`);
+          if(width===390){
+            const telemetry=page.locator('speicher-ladelogik-telemetry');
+            for(const chart of ['main','pack1','pack2']){
+              const layout=await telemetry.evaluate((el,chart)=>{
+                const svg=el.shadowRoot.querySelector(`#vs-${chart}-chart svg`),r=svg.getBoundingClientRect();
+                svg.dispatchEvent(new PointerEvent('pointerdown',{clientX:r.left+r.width/2,clientY:r.top+70,pointerType:'touch',bubbles:true}));
+                const tip=svg.parentNode.querySelector('.vs-tooltip');
+                return {below:tip.getBoundingClientRect().top>=r.bottom+8,position:getComputedStyle(tip).position,visible:!tip.hidden};
+              },chart);
+              assert.deepEqual(layout,{below:true,position:'static',visible:true},`${chart}: mobile readout is below the plot`);
+            }
+            await telemetry.locator('#vs-pack1-chart .vs-tooltip .entity-info').first().click();
+            assert.equal(await page.evaluate(()=>window.infos.at(-1)),await page.evaluate(()=>window.fixture.extra.a_p1_cell_1),'Chart values open their sensor');
+            await page.screenshot({path:path.join(out,'lovelace-390-chart-readout.png'),fullPage:true});
+          }
+        }
         if(view==='control')assert.equal(await page.locator('[data-manual-form]').count(),0);
       }
     }
