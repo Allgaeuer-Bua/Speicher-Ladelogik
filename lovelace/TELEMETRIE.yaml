@@ -1,0 +1,112 @@
+# Vollständige Referenz der optionalen Venus-Cockpit-Zuordnungen.
+# Kernquellen stammen automatisch aus der Integration. Nur nötige Abweichungen
+# in die neue Karte übernehmen. Diese Datei ist eine Referenz, kein Pflicht-Setup.
+# Optional: statt KARTE.yaml verwenden. Nur abweichende Werte sind nötig.
+# Referenzkapazitäten und Vorzeichen-Helfer sind optional und werden nur gelesen.
+type: custom:speicher-ladelogik-ae-card
+view: overview
+theme: light
+history_hours: 24
+history_refresh_seconds: 120
+history_max_points: 720
+power_deadband_w: 10
+capacity_kwh:
+  a: 3.66
+  e: 4.56
+power_sign:
+  a: 1
+  e: 1
+grid_power_sign: 1
+colors:
+  a: '#14814f'
+  e: '#007e8c'
+entities:
+  a_power: sensor.marstek_venus_a_ac_leistung_invertiert
+  a_ac_raw: sensor.marstek_venus_a_ac_leistung
+  a_dc: sensor.marstek_venus_a_batterieleistung
+  a_voltage: sensor.marstek_venus_a_batteriespannung
+  a_current: sensor.marstek_venus_a_batteriestrom
+  a_soc: sensor.marstek_venus_a_soc_batterie
+  a_temperature: sensor.marstek_venus_a_innentemperatur
+  a_mos1: sensor.marstek_venus_a_interne_mos1_temperatur
+  a_mos2: sensor.marstek_venus_a_interne_mos2_temperatur
+  a_status: sensor.marstek_venus_a_wechselrichter_status
+  a_usable: sensor.venus_a_nutzbare_kapazitat
+  a_load: sensor.marstek_venus_a_venus_a_auslastung
+  a_eta_min: sensor.venus_a_zeit_bis_soc_min
+  a_eta_max: sensor.venus_a_zeit_bis_soc_max
+  a_mode: select.marstek_venus_a_benutzer_modus
+  a_charge_limit: number.marstek_venus_a_maximale_ladeleistung
+  a_discharge_limit: number.marstek_venus_a_maximale_entladeleistung
+  a_fan: switch.lufter_venus_a
+  a_efficiency: sensor.venus_a_ac_wirkungsgrad
+  a_charge_today: sensor.marstek_venus_a_tagliche_ladeenergie
+  a_discharge_today: sensor.marstek_venus_a_tagliche_entladeenergie
+  a_charge_month: sensor.marstek_venus_a_monatliche_ladeenergie
+  a_discharge_month: sensor.marstek_venus_a_monatliche_entladeenergie
+  a_charge_total: sensor.marstek_venus_a_venus_a_gesamte_ladeenergie
+  a_discharge_total: sensor.marstek_venus_a_venus_a_gesamte_entladeenergie
+  a_p1_soc: sensor.marstek_venus_a_soc_batteriepack_1
+  a_p2_soc: sensor.marstek_venus_a_soc_batteriepack_2
+  a_p1_drift: sensor.venus_a_pack_1_zelldrift
+  a_p2_drift: sensor.venus_a_pack_2_zelldrift
+  e_power: sensor.marstek_venus_e_venus_e_ac_leistung_invertiert
+  e_ac_raw: sensor.marstek_venus_e_ac_leistung
+  e_dc: sensor.marstek_venus_e_dc_leistung
+  e_voltage: sensor.marstek_venus_e_dc_spannung
+  e_current: sensor.marstek_venus_e_dc_strom
+  e_soc: sensor.marstek_venus_e_soc
+  e_temperature: sensor.marstek_venus_e_interne_temperatur
+  e_mos1: sensor.marstek_venus_e_mos1_interne_temperatur
+  e_mos2: sensor.marstek_venus_e_mos2_interne_temperatur
+  e_status: sensor.marstek_venus_e_wechselrichter_status
+  e_usable: sensor.venus_e_nutzbare_kapazitat
+  e_load: sensor.marstek_venus_e_venus_e_auslastung
+  e_eta_min: sensor.venus_e_zeit_bis_soc_min
+  e_eta_max: sensor.venus_e_zeit_bis_soc_max
+  e_mode: select.marstek_venus_e_betriebsmodus
+  e_charge_limit: number.marstek_venus_e_ladeleistung
+  e_discharge_limit: number.marstek_venus_e_entladeleistung
+  e_fan: switch.haus_lufter_wr_und_speicher
+  e_efficiency: sensor.venus_e_ac_wirkungsgrad
+  e_charge_today: sensor.marstek_venus_e_tagliche_ladeenergie
+  e_discharge_today: sensor.marstek_venus_e_tagliche_entladeenergie
+  e_charge_month: sensor.marstek_venus_e_monatliche_ladeenergie
+  e_discharge_month: sensor.marstek_venus_e_monatliche_entladeenergie
+  e_charge_total: sensor.marstek_venus_e_gesamte_ladung
+  e_discharge_total: sensor.marstek_venus_e_gesamt_entladen
+  e_drift: sensor.marstek_venus_e_zellspannungs_differenz
+  e_cell_min: sensor.marstek_venus_e_min_zellspannung
+  e_cell_max: sensor.marstek_venus_e_max_zellspannung
+  grid_power: sensor.stromzahler_leistung
+  a_reference: input_number.batterie_gesamt_referenzkapazitaet_a
+  e_reference: input_number.batterie_gesamt_referenzkapazitaet_e
+  reference_ready: input_boolean.batterie_gesamt_initialisiert
+  sign_setting: input_boolean.batterie_gesamt_positive_leistung_ist_entladen
+  a_p1_cell_1: sensor.marstek_venus_a_batteriepack_1_zelle_1_spannung
+  a_p1_cell_2: sensor.marstek_venus_a_batteriepack_1_zelle_2_spannung
+  a_p1_cell_3: sensor.marstek_venus_a_batteriepack_1_zelle_3_spannung
+  a_p1_cell_4: sensor.marstek_venus_a_batteriepack_1_zelle_4_spannung
+  a_p1_cell_5: sensor.marstek_venus_a_batteriepack_1_zelle_5_spannung
+  a_p1_cell_6: sensor.marstek_venus_a_batteriepack_1_zelle_6_spannung
+  a_p1_cell_7: sensor.marstek_venus_a_batteriepack_1_zelle_7_spannung
+  a_p1_cell_8: sensor.marstek_venus_a_batteriepack_1_zelle_8_spannung
+  a_p1_cell_9: sensor.marstek_venus_a_batteriepack_1_zelle_9_spannung
+  a_p1_cell_10: sensor.marstek_venus_a_batteriepack_1_zelle_10_spannung
+  a_p1_cell_11: sensor.marstek_venus_a_batteriepack_1_zelle_11_spannung
+  a_p1_cell_12: sensor.marstek_venus_a_batteriepack_1_zelle_12_spannung
+  a_p1_cell_13: sensor.marstek_venus_a_batteriepack_1_zelle_13_spannung
+  a_p2_cell_1: sensor.marstek_venus_a_batteriepack_2_zelle_1_spannung
+  a_p2_cell_2: sensor.marstek_venus_a_batteriepack_2_zelle_2_spannung
+  a_p2_cell_3: sensor.marstek_venus_a_batteriepack_2_zelle_3_spannung
+  a_p2_cell_4: sensor.marstek_venus_a_batteriepack_2_zelle_4_spannung
+  a_p2_cell_5: sensor.marstek_venus_a_batteriepack_2_zelle_5_spannung
+  a_p2_cell_6: sensor.marstek_venus_a_batteriepack_2_zelle_6_spannung
+  a_p2_cell_7: sensor.marstek_venus_a_batteriepack_2_zelle_7_spannung
+  a_p2_cell_8: sensor.marstek_venus_a_batteriepack_2_zelle_8_spannung
+  a_p2_cell_9: sensor.marstek_venus_a_batteriepack_2_zelle_9_spannung
+  a_p2_cell_10: sensor.marstek_venus_a_batteriepack_2_zelle_10_spannung
+  a_p2_cell_11: sensor.marstek_venus_a_batteriepack_2_zelle_11_spannung
+  a_p2_cell_12: sensor.marstek_venus_a_batteriepack_2_zelle_12_spannung
+  a_p2_cell_13: sensor.marstek_venus_a_batteriepack_2_zelle_13_spannung
+

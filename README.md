@@ -1,6 +1,41 @@
 # Speicher-Ladelogik A/E
 
-Eine Home-Assistant-Integration für **eine Marstek Venus A und eine Venus E** mit PV-Ladeplanung, Kalibrierung und einem eigenen Dashboard. Venus D und weitere Speicherbelegungen werden in dieser Variante nicht angeboten.
+Eine Home-Assistant-Integration für **eine Marstek Venus A und eine Venus E** mit PV-Ladeplanung, Kalibrierung und normalen Lovelace-Karten. Ab **2.3.0** sind Speicher-Ladelogik und Venus Speicher-Cockpit 1.0.4 zusammengeführt. Venus D wird in dieser Variante nicht angeboten.
+
+## Update von 2.2.0 auf 2.3.0 – vorhandene Installation
+
+**Die Integration nicht löschen oder neu einrichten.** Entitäten, Einstellungen, Vormerkungen und Kalibrierhistorie bleiben bestehen.
+
+1. In HACS dieses Integrations-Repository aktualisieren. Alternativ nur den vollständigen Ordner `custom_components/speicher_ladelogik_ae` ersetzen. Home Assistant neu starten.
+2. Unter **Einstellungen → Dashboards → Ressourcen** die folgende Ressource als **JavaScript-Modul** einmal hinzufügen:
+
+   ```yaml
+   url: /speicher_ladelogik_ae_static/speicher-ladelogik-ae-card.js?v=2.3.0
+   type: module
+   ```
+
+3. Die Karte im gewünschten normalen Dashboard verwenden. Für ein neues leeres Dashboard enthält [`lovelace/DASHBOARD.yaml`](lovelace/DASHBOARD.yaml) die vollständige Konfiguration mit **Übersicht · Kalibrieren · Steuerung · Diagnose** als nativen HA-Reitern. Bei einem vorhandenen Dashboard nur die Listeneinträge aus [`lovelace/ANSICHTEN.yaml`](lovelace/ANSICHTEN.yaml) unter dessen vorhandenes `views:` einfügen; nicht das ganze Dashboard überschreiben.
+4. Für eine einzelne Karte: Dashboard bearbeiten → Karte hinzufügen → Manuell:
+
+   ```yaml
+   type: custom:speicher-ladelogik-ae-card
+   view: overview
+   theme: light
+   ```
+
+   Andere Ansichten: `calibration`, `control`, `diagnostics`. Die Ansicht am PC breit platzieren; am Handy stehen A und E untereinander. Eine Ansicht mit Typ `panel` nutzt die volle Breite. Es wird **kein eigener Seitenleisteneintrag** mehr automatisch angelegt. Ein vorhandenes benutzerdefiniertes HA-Dashboard bleibt unverändert.
+5. Vor dem Entfernen der alten separaten Venus-Karte ihre optionalen `entities:`, `capacity_kwh:` und `colors:`-Anpassungen in die neue Übersichtskarte übernehmen. Die Kernquellen (SoC, AC/DC, Grenzen und Packdaten) werden automatisch aus der Integration gelesen. Zusätzliche Zell-, Temperatur- und Energiequellen sind wie in Venus-Cockpit 1.0.4 vorbelegt und können über `entities:` geändert oder mit `''` deaktiviert werden. Die vollständige bisherige Schlüsselreferenz liegt in [`lovelace/TELEMETRIE.yaml`](lovelace/TELEMETRIE.yaml).
+6. App/Browser vollständig neu laden. Wenn alles geprüft ist, die bisherige Venus-Cockpit-Karte und deren alte JS-Ressource entfernen; die neue Oberfläche enthält ihre Verläufe und Zellwerte bereits. Keine zwei aktiven Steuerungsoberflächen parallel benutzen.
+
+### Handbetrieb und Sicherheit
+
+Der Handbetrieb sitzt direkt beim jeweiligen Speicher unter **Steuerung**. Einschalten, Lade-/Entladegrenze wählen und **Übernehmen** drücken. Bis zum Klick werden nur lokale Entwürfe geändert. Die Integration übernimmt beide Grenzwerte in einem Schritt und führt dann ihre bestehende Sicherheitsprüfung und Geräte-Schreiblogik aus; die Karte schreibt diese Grenzen nicht an der Integration vorbei. Mit ausgeschaltetem Handbetrieb und **Übernehmen** kehrt nur dieser Speicher in die Automatik zurück. Die Betriebsart der Integration muss für echte Gerätezugriffe **Automatik** sein; in Beobachten/Aus bleiben die Werte Einstellungen ohne aktive Regelung.
+
+Die neue Aktion `speicher_ladelogik_ae.apply_manual` ist nur für HA-Administratoren verfügbar. Die andere Batterie bleibt unbeeinflusst. Physische Gerätegrenzen und die 50-W-Schritte werden vor Aktivierung geprüft. Keine SoC-Grenze wird geschrieben. Ein ausdrücklich geänderter **Geräte-Betriebsmodus** wird danach separat über dessen `select`-Entität übernommen; scheitert das, zeigt die Karte den bereits übernommenen Handbetrieb und den Teilfehler an. Lüfter werden ausdrücklich über ihren eigenen Schalter bedient.
+
+Öffnen, Neuladen, Ändern der Darstellung und Abfragen der Historie senden keine Gerätebefehle. Fehlende Quellen erscheinen als `—`; es gibt keine Beispielkurven in der installierten Karte. Historie nutzt ausschließlich vorhandene Recorder-Aufzeichnungen. Ausfälle der Historie blockieren weder Live-Werte noch Ladeplanung.
+
+Gespeicherte Energie bleibt eine **SoC-Schätzung**. Gesamt-SoC und Energie verwenden wie Venus-Cockpit die vorhandenen Referenz-Helfer oder die Fallbacks A 3,66 / E 4,56 kWh. Die Ladeplanung verwendet weiterhin ihre separat konfigurierten Nennkapazitäten. Bei anderer Packbestückung die Referenz-Helfer beziehungsweise `capacity_kwh:` prüfen. Das Energieverhältnis Entladen/Geladen ist kein Wirkungsgrad.
 
 ## Installation
 
@@ -12,17 +47,16 @@ Eine Home-Assistant-Integration für **eine Marstek Venus A und eine Venus E** m
 
 Die neue Kennung lautet `speicher_ladelogik_ae`. Einstellungen, Kalibrierhistorie und Verlaufsdaten der alten Integration werden nicht automatisch übernommen. Die alten HA-Entitäten können nach dem Entfernen als verwaist erscheinen; sie sind kein Bestandteil des neuen Pakets.
 
-## Dashboard
+## Lovelace-Oberfläche ab 2.3.0
 
-- **Übersicht:** Solar, Netz, Haus, Venus A und Venus E mit eigener Leistung und SoC; darunter Tagesplanung und Mittagsspitzenkappung. Keine zusätzliche SoC-Verlaufskarte.
-- **Speicher:** Je Speicher aktueller Status, Restzeit, Energiezählung und Packdaten. Die Verlaufsgrafiken für SoC/Leistung, Wirkungsgrad und Zelldrift entfallen.
+- **Übersicht:** Gemeinsamer SoC-Kreis, gespeicherte Energie, Gesamtleistung, Tagesprofil und Planstatus; darunter beide Speicher mit eigenem Handbetrieb sowie Elektrik/Temperaturen, Tagesplanung, Mittagsspitzenkappung, gemeinsamer Verlauf, Energiebilanz, Zellwerte und die beiden 13-Zellen-Verläufe. Kein Energiefluss und kein separater Speicher-Reiter.
 - **Kalibrierung:** Eigener Reiter für Einstellungen, Vormerkungen, laufende Aufträge und Ergebnisse.
-- **Steuerung:** Handbetrieb, Fahrplanfunktionen und Leistungsgrenzen; Betriebsart am Ende.
+- **Steuerung:** Gemeinsame Fahrplanfunktionen, Leistungsgrenzen, Planungsparameter und Betriebsart. Der Handbetrieb befindet sich direkt bei A/E in der Übersicht.
 - **Diagnose:** Datenverfügbarkeit und Schreibergebnisse. Die Ladegrenze wird je Speicher in einer eigenen Karte erklärt: Begründung, bevorzugte Leistung, neu berechneter Wert und geltende Sollgrenze; weitere Planungsdetails lassen sich aufklappen.
 
-Über das **Palettensymbol** im Kopfbereich lassen sich Akzentfarbe, Farben der beiden Speicher, Hell/Dunkel/Automatisch, Kompakt/Komfortabel und die Energiefluss-Animation einstellen. Automatisch folgt der Hell-/Dunkel-Einstellung von Home Assistant, ersatzweise dem Browser. Die Auswahl wird im jeweiligen Browser gespeichert; andere Geräte und die Speicherregelung bleiben unverändert. Browserdaten löschen setzt diese Auswahl zurück. Warnungen bleiben gelb und Fehler rot.
+Standard ist das helle Venus-Cockpit-Design. Die Anzeige kann über `theme: light / dark / auto` konfiguriert werden. Das Palettensymbol öffnet zusätzliche Darstellungsoptionen. Warnungen bleiben gelb und Fehler rot. Die Darstellung verändert keine Speicherregelung.
 
-Der Gesamt-SoC wird kompakter angezeigt. Die Speicherkarten zeigen aktuelle Leistung, SoC, Ladegrenzen und Restzeit zuerst; Packdaten und technische Werte sind aufklappbar. „Freigegeben“ bedeutet eine bestehende Ladeerlaubnis, „Lädt“ einen gemessenen Ladefluss. In der Diagnose stehen Beginn und Ende des Ladefensters untereinander. Ungültige SoC-Grenzen, einzelne Pack-Sensoren und nicht einstellbare Ladegrenzen werden konkret mit betroffenen Werten benannt.
+„Freigegeben“ bedeutet eine bestehende Ladeerlaubnis, „Lädt“ einen gemessenen Ladefluss. In der Diagnose stehen Beginn und Ende des Ladefensters untereinander. Ungültige SoC-Grenzen, einzelne Pack-Sensoren und nicht einstellbare Ladegrenzen werden konkret mit betroffenen Werten benannt.
 
 ## Ladeplanung ab v2.1.0
 

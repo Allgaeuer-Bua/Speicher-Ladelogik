@@ -1429,3 +1429,6 @@ const PANEL_ELEMENT = "speicher-ladelogik-ae-panel-2-2-0";
 if (!customElements.get(PANEL_ELEMENT)) {
   customElements.define(PANEL_ELEMENT, SpeicherLadelogikPanel);
 }
+
+// The Lovelace card reuses the proven planning, calibration and diagnostic UI.
+export { SpeicherLadelogikPanel, esc };

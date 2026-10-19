@@ -1,0 +1,4 @@
+# In der gewünschten Ansicht: Karte hinzufügen → Manuell.
+type: custom:speicher-ladelogik-ae-card
+view: overview
+theme: light

@@ -309,6 +309,33 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._async_update_manual_notification()
         await self.async_request_refresh()
 
+    async def async_apply_manual(self, slot: str, *, active: bool, charge=None, discharge=None) -> None:
+        """Apply a complete manual draft in one refresh, with no intermediate 0 W."""
+        from .control import manual_control_update
+        if slot not in self.enabled_models:
+            raise HomeAssistantError("Speicher ist nicht konfiguriert")
+        try:
+            changes = manual_control_update(slot, self.storage_model(slot), active, charge, discharge)
+        except (ValueError, TypeError) as err:
+            raise HomeAssistantError(str(err)) from err
+        if active:
+            config, _ = normalize_config(dict(self.entry.data))
+            for key, target in ((f"{slot.lower()}_charge_limit", charge), (f"{slot.lower()}_discharge_limit", discharge)):
+                state = self.hass.states.get(config.get(key, ""))
+                error = validate_number_target(
+                    current=state.state if state else None,
+                    minimum=state.attributes.get("min") if state else None,
+                    maximum=state.attributes.get("max") if state else None,
+                    step=state.attributes.get("step") if state else None,
+                    target=target,
+                )
+                if error:
+                    raise HomeAssistantError(f"{key}: {error}")
+        self._control.update(changes)
+        self._schedule_state_save()
+        await self._async_update_manual_notification()
+        await self.async_request_refresh()
+
     async def async_request_action(self, request: str) -> None:
         """Queue one native calibration or acknowledgement action."""
         valid = {"cancel", "ack"}

@@ -1,0 +1,70 @@
+name: Publish stable release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - custom_components/speicher_ladelogik_ae/manifest.json
+      - .github/workflows/publish.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-stable
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run behavior tests
+        run: |
+          python -m compileall -q custom_components tests
+          python - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          for path in sorted(Path('tests').glob('test_*.py')):
+              spec = importlib.util.spec_from_file_location(path.stem, path)
+              module = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(module)
+              for name, test in vars(module).items():
+                  if name.startswith('test_') and callable(test):
+                      test()
+          PY
+          node --check custom_components/speicher_ladelogik_ae/frontend/speicher-ladelogik-ae-card.js
+          node --check custom_components/speicher_ladelogik_ae/frontend/speicher-telemetry.js
+          node --test tests/test_ae_panel.mjs
+      - name: Verify new Lovelace surface
+        run: |
+          npm install --no-save --no-package-lock playwright@1.56.1 @mdi/js@7.4.47
+          npx playwright install --with-deps chromium
+          node tests/lovelace_browser.cjs
+      - name: Package installation and release notes
+        id: package
+        run: |
+          python scripts/package_release.py
+          echo "version=$(python -c 'import json; print(json.load(open("custom_components/speicher_ladelogik_ae/manifest.json"))["version"])')" >> "$GITHUB_OUTPUT"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          if gh release view "v${VERSION}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "v${VERSION}" dist/*.zip --repo "${{ github.repository }}" --clobber
+          else
+            gh release create "v${VERSION}" dist/*.zip --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "v${VERSION} – Speicher-Ladelogik A/E" --notes-file dist/RELEASE.md
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-review
+          path: dashboard-review/
+          retention-days: 7
