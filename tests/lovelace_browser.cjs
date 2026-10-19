@@ -97,6 +97,8 @@ fs.mkdirSync(out, {recursive:true});
     assert.equal(await page.locator('dialog.value-sources .value-source-row').count(),2,'Composite values list their real sources');
     await page.locator('dialog.value-sources .value-source-row').first().click();
     assert.equal(await page.evaluate(()=>window.infos.at(-1)),await page.evaluate(()=>window.fixture.sources.pack_soc_a[0]));
+    await page.locator('[data-battery="a"] .drift-value').first().click();
+    assert.equal(await page.evaluate(()=>window.infos.at(-1)),await page.evaluate(()=>window.fixture.sources.drift_a[0]),'Drift chips open their sensor too');
     await page.locator('[data-remember-details="control-a"] summary').click();
     await page.locator('[data-remember-details="electric-a"] summary').click();
     const a=page.locator('[data-manual-form="A"]');

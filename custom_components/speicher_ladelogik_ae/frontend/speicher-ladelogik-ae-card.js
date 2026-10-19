@@ -317,7 +317,7 @@ class SpeicherLadelogikCard extends SpeicherLadelogikPanel {
       ["Bis SoC-Minimum", a._duration(`${s}_eta_min`), "eta_min"], ["Bis SoC-Maximum", a._duration(`${s}_eta_max`), "eta_max"],
     ];
     const fan = a._state(`${s}_fan`);
-    return `<details class="electrical-details" data-remember-details="electric-${s}"><summary>Elektrik & Temperaturen</summary><div class="electric-grid">${fields.map(([name, value, key]) => `<button class="electric-value" data-info="${esc(a._config.entities[`${s}_${key}`] || "")}"><span>${esc(name)}</span><strong>${esc(value)}</strong></button>`).join("")}</div><p class="slot-note">${esc(electrical.note)}</p><label class="fan-row"><span>${slot === "A" ? "Lüfter Venus A" : "Lüfter WR & Speicher"}</span><input type="checkbox" data-fan="${esc(a._config.entities[`${s}_fan`])}" ${fan?.state === "on" ? "checked" : ""} ${!this._available(fan) ? "disabled" : ""}></label></details>`;
+    return `<details class="electrical-details" data-remember-details="electric-${s}"><summary>Elektrik & Temperaturen</summary><div class="electric-grid">${fields.map(([name, value, key], index) => this._valueLink(`<span>${esc(name)}</span><strong>${esc(value)}</strong>`, this._telemetryIds(...(index === 2 || index === 3 ? [`${s}_ac_raw`, `${s}_dc`, `${s}_power`] : [`${s}_${key}`])), name, "electric-value")).join("")}</div><p class="slot-note">${esc(electrical.note)}</p><label class="fan-row"><span>${slot === "A" ? "Lüfter Venus A" : "Lüfter WR & Speicher"}</span><input type="checkbox" data-fan="${esc(a._config.entities[`${s}_fan`])}" ${fan?.state === "on" ? "checked" : ""} ${!this._available(fan) ? "disabled" : ""}></label></details>`;
   }
 
   _overview() {
@@ -402,6 +402,10 @@ class SpeicherLadelogikCard extends SpeicherLadelogikPanel {
     }));
     this.shadowRoot.querySelectorAll("[data-info]").forEach(button => button.addEventListener("click", event => {
       event.preventDefault(); event.stopPropagation(); const id = button.dataset.info; if (id && id !== "null") this._moreInfo(id);
+    }));
+    this.shadowRoot.querySelectorAll("button[data-entity]").forEach(button => button.addEventListener("click", event => {
+      event.preventDefault(); event.stopPropagation();
+      if (button.dataset.entity && button.dataset.entity !== "null") this._moreInfo(button.dataset.entity);
     }));
     this.shadowRoot.querySelectorAll("[data-manual-form]").forEach(form => {
       const slot = form.dataset.manualForm;
