@@ -1327,13 +1327,17 @@ class SpeicherLadelogikPanel extends HTMLElement {
       : this._tab === "batteries" ? this._batteries()
         : this._tab === "calibration" ? this._calibration()
           : this._tab === "control" ? this._control() : this._diagnostics();
-    this.shadowRoot.innerHTML = `<style>${this._styles()}</style>${this._header()}${this._appearancePanel()}${content}`;
+    this._commitRender(`<style>${this._styles()}</style>${this._header()}${this._appearancePanel()}${content}`);
     this.shadowRoot.querySelectorAll("[data-remember-details]").forEach((el) => { el.open = this._expandedDetails.has(el.dataset.rememberDetails); });
     this._applyAppearance();
     if (focusKey && APPEARANCE_CHOICES[focusKey]) this.shadowRoot.querySelector(`[data-appearance="${focusKey}"]`)?.focus();
     this._rendered = true;
     this._syncStateRefs();
     this._bind();
+  }
+
+  _commitRender(html) {
+    this.shadowRoot.innerHTML = html;
   }
 
   _bind() {

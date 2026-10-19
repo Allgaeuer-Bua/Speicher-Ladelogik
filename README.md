@@ -2,7 +2,7 @@
 
 Eine Home-Assistant-Integration für **eine Marstek Venus A und eine Venus E** mit PV-Ladeplanung, Kalibrierung und normalen Lovelace-Karten. Ab **2.3.0** sind Speicher-Ladelogik und Venus Speicher-Cockpit 1.0.4 zusammengeführt. Venus D wird in dieser Variante nicht angeboten.
 
-## Update von 2.2.0 auf 2.3.0 – vorhandene Installation
+## Update auf 2.3.1 – vorhandene Installation
 
 **Die Integration nicht löschen oder neu einrichten.** Entitäten, Einstellungen, Vormerkungen und Kalibrierhistorie bleiben bestehen.
 
@@ -10,7 +10,7 @@ Eine Home-Assistant-Integration für **eine Marstek Venus A und eine Venus E** m
 2. Unter **Einstellungen → Dashboards → Ressourcen** die folgende Ressource als **JavaScript-Modul** einmal hinzufügen:
 
    ```yaml
-   url: /speicher_ladelogik_ae_static/speicher-ladelogik-ae-card.js?v=2.3.0
+   url: /speicher_ladelogik_ae_static/speicher-ladelogik-ae-card.js?v=2.3.1
    type: module
    ```
 
@@ -26,6 +26,8 @@ Eine Home-Assistant-Integration für **eine Marstek Venus A und eine Venus E** m
    Andere Ansichten: `calibration`, `control`, `diagnostics`. Die Ansicht am PC breit platzieren; am Handy stehen A und E untereinander. Eine Ansicht mit Typ `panel` nutzt die volle Breite. Es wird **kein eigener Seitenleisteneintrag** mehr automatisch angelegt. Ein vorhandenes benutzerdefiniertes HA-Dashboard bleibt unverändert.
 5. Vor dem Entfernen der alten separaten Venus-Karte ihre optionalen `entities:`, `capacity_kwh:` und `colors:`-Anpassungen in die neue Übersichtskarte übernehmen. Die Kernquellen (SoC, AC/DC, Grenzen und Packdaten) werden automatisch aus der Integration gelesen. Zusätzliche Zell-, Temperatur- und Energiequellen sind wie in Venus-Cockpit 1.0.4 vorbelegt und können über `entities:` geändert oder mit `''` deaktiviert werden. Die vollständige bisherige Schlüsselreferenz liegt in [`lovelace/TELEMETRIE.yaml`](lovelace/TELEMETRIE.yaml).
 6. App/Browser vollständig neu laden. Wenn alles geprüft ist, die bisherige Venus-Cockpit-Karte und deren alte JS-Ressource entfernen; die neue Oberfläche enthält ihre Verläufe und Zellwerte bereits. Keine zwei aktiven Steuerungsoberflächen parallel benutzen.
+
+Wer bereits 2.3.0 nutzt, behält seine Karten und Ansichten: Integration aktualisieren, HA neu starten und in der vorhandenen Ressource nur `v=2.3.0` in `v=2.3.1` ändern. Keine zweite Ressource hinzufügen. Messwerte lassen sich antippen; bei berechneten Werten öffnet sich eine Quellenauswahl. In der Handyansicht stehen ausgewählte Diagrammwerte unter den Kurven.
 
 ### Handbetrieb und Sicherheit
 

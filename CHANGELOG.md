@@ -1,5 +1,14 @@
 # Änderungen
 
+## 2.3.1
+
+- Messwertkacheln zeigen Beschriftung und Zahl untereinander, einschließlich Tagesplanung und Mittagsspitze.
+- Native Datum-/Zeitauswahl und Eingaben bleiben bei Live-Updates verbunden und fokussiert. Die Verläufe erhalten aktualisierte Zustände ohne erneutes Einhängen der gesamten Karte.
+- Auf schmalen Ansichten stehen die Messwerte zum gewählten Verlaufspunkt unter dem Diagramm und verdecken keine Kurven. Auch diese Werte öffnen ihren Sensor.
+- Reihenfolge unter der Tagesplanung: gemeinsamer Verlauf, beide Pack-Zellspannungsverläufe, danach aktuelle Zellen links und Energiebilanz rechts. Am Handy dieselbe Reihenfolge untereinander.
+- Messwerte und Planungswerte öffnen ihre zugehörigen Entitäten. Zusammengesetzte Werte bieten die beteiligten Quellen zur Auswahl; Konfigurationswerte werden entsprechend gekennzeichnet. Zusätzliche Quellenlinks für Einstellungsfelder, Kalibrierung und Diagnose.
+- Browserprüfungen für Text-/Wertabstände, verbundene Datumseingaben, Live-Aktualisierung, mobile Messwertanzeige, Quellenöffnung und Kartenreihenfolge ergänzt.
+
 ## 2.3.0
 
 - Die Oberfläche ist jetzt eine normale Lovelace-Karte mit vier nativen Ansichten: Übersicht, Kalibrieren, Steuerung und Diagnose. Kein automatisch erzeugter Seitenleisteneintrag.

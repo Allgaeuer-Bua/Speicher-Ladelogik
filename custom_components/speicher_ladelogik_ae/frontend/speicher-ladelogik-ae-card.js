@@ -1,6 +1,6 @@
-/* Speicher-Ladelogik A/E 2.3.0 — native Lovelace views, no sidebar panel. */
-import { SpeicherLadelogikPanel, esc } from "./speicher-ladelogik-ae-panel.js?v=2.3.0";
-import "./speicher-telemetry.js?v=2.3.0";
+/* Speicher-Ladelogik A/E 2.3.1 — native Lovelace views, no sidebar panel. */
+import { SpeicherLadelogikPanel, esc } from "./speicher-ladelogik-ae-panel.js?v=2.3.1";
+import "./speicher-telemetry.js?v=2.3.1";
 
 const TAG = "speicher-ladelogik-ae-card";
 const VIEWS = { overview: "Übersicht", calibration: "Kalibrieren", control: "Steuerung", diagnostics: "Diagnose" };
@@ -54,6 +54,7 @@ class SpeicherLadelogikCard extends SpeicherLadelogikPanel {
   }
   disconnectedCallback() {
     super.disconnectedCallback();
+    this._valueDialog?.close();
     this._analytics?.remove();
   }
 
@@ -130,8 +131,77 @@ class SpeicherLadelogikCard extends SpeicherLadelogikPanel {
       this._analytics.setConfig(config);
       this._analyticsSignature = signature;
     }
-    this._analytics._hass = this._hass;
+    this._analytics._issues ||= new Set();
     return this._analytics;
+  }
+
+  _sourceIds(...keys) {
+    return keys.flatMap(key => this._config().sources?.[key] || []).filter(Boolean);
+  }
+
+  _telemetryIds(...keys) {
+    return keys.map(key => this._getAnalytics()._config.entities[key]).filter(Boolean);
+  }
+
+  _valueLink(content, ids, label, className = "") {
+    return `<button type="button" class="value-link ${className}" data-value-sources="${esc(JSON.stringify([...new Set(ids.filter(Boolean))]))}" aria-label="${esc(label)} · Entität oder Quellen öffnen">${content}</button>`;
+  }
+
+  _metric(label, value, icon, ids = [this._eid("planung")]) {
+    return this._valueLink(`<span>${esc(label)}</span><strong>${esc(value)}</strong>`, ids, label, "metric");
+  }
+
+  _statusLine(label, value, tone) {
+    const key = label === "Kalibrierung" ? "kalibrierung" : label === "Betriebsart" ? "betriebsart" : label === "Regelung" ? "status" : "planung";
+    return `<div class="status-line"><span>${esc(label)}</span>${this._valueLink(this._badge(value, tone), [this._eid(key)], label)}</div>`;
+  }
+
+  _numberRow(item) {
+    const html = super._numberRow(item), id = this._eid(item[0]);
+    if (!html || !id) return html;
+    return html.replace(`<strong>${esc(item[1])}</strong>`, `<strong>${esc(item[1])}</strong>${this._valueLink("↗", [id], item[1], "setting-source")}`);
+  }
+
+  _batteryDetails(slot) {
+    this._detailSlot = slot;
+    try { return super._batteryDetails(slot); }
+    finally { this._detailSlot = null; }
+  }
+
+  _detail(label, value) {
+    if (!this._detailSlot) return super._detail(label, value);
+    const s = this._detailSlot.toLowerCase();
+    const ids = label === "Pack-SoC" ? this._sourceIds(`pack_soc_${s}`, ...(s === "e" ? ["soc_e"] : []))
+      : label === "Zellspannung max." ? this._sourceIds(`cell_voltage_${s}`)
+        : label === "Zelltemperatur" ? this._sourceIds(`cell_temp_min_${s}`, `cell_temp_max_${s}`)
+          : label === "Messwert" ? this._sourceIds(`power_${s}`) : [this._eid("planung")];
+    return this._valueLink(`<span>${esc(label)}</span><strong>${esc(value)}</strong>`, ids, label, "detail");
+  }
+
+  _openValueSources(ids, label) {
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (unique.length === 1) { this._moreInfo(unique[0]); return; }
+    this._valueDialog?.close();
+    const dialog = document.createElement("dialog");
+    dialog.className = "value-sources";
+    dialog.setAttribute("aria-label", label);
+    const heading = document.createElement("h3"); heading.textContent = label.replace(/ · Entität oder Quellen öffnen$/, "");
+    const note = document.createElement("p");
+    note.textContent = unique.length ? "Berechneter oder zusammengesetzter Wert. Quelle zum Öffnen auswählen." : "Dieser Wert stammt aus der Kartenkonfiguration. Kein Sensor zugeordnet.";
+    dialog.append(heading, note);
+    for (const id of unique) {
+      const state = this._hass.states[id], button = document.createElement("button"), name = document.createElement("strong"), identity = document.createElement("small"), value = document.createElement("span");
+      button.type = "button"; button.className = "value-source-row";
+      name.textContent = state?.attributes?.friendly_name || id; identity.textContent = id;
+      value.textContent = state ? `${state.state} ${state.attributes?.unit_of_measurement || ""}`.trim() : "Nicht verfügbar";
+      button.append(name, identity, value);
+      button.addEventListener("click", () => { dialog.close(); this._moreInfo(id); });
+      dialog.append(button);
+    }
+    const close = document.createElement("button"); close.type = "button"; close.className = "action-btn"; close.textContent = "Schließen";
+    close.addEventListener("click", () => dialog.close()); dialog.append(close);
+    dialog.addEventListener("close", () => { dialog.remove(); if (this._valueDialog === dialog) this._valueDialog = null; }, { once: true });
+    this.shadowRoot.append(dialog); this._valueDialog = dialog; dialog.showModal();
   }
 
   _telemetryRead(key, kind, unit) {
@@ -152,18 +222,19 @@ class SpeicherLadelogikCard extends SpeicherLadelogikPanel {
 
   _header() {
     const name = this._tab === "overview" ? "Speicher-Ladelogik A/E" : VIEWS[this._tab];
-    return `<header class="cockpit-header"><div class="brand-copy"><strong>${esc(name)}</strong><span>Speicher · ${esc(this._config().version || "2.3.0")}</span></div><button class="icon-button appearance-toggle" data-appearance-toggle aria-label="Darstellung anpassen"><ha-icon icon="mdi:palette-outline"></ha-icon></button></header>`;
+    return `<header class="cockpit-header"><div class="brand-copy"><strong>${esc(name)}</strong><span>Speicher · ${esc(this._config().version || "2.3.1")}</span></div><button class="icon-button appearance-toggle" data-appearance-toggle aria-label="Darstellung anpassen"><ha-icon icon="mdi:palette-outline"></ha-icon></button></header>`;
   }
 
   _systemCard() {
     const d = this._summaryData();
     const profile = this._attr("planung", "fruehes_soc_ziel_tagesklasse", this._attr("planung", "tagesklasse", "—"));
     const labels = { schwach: "Schwach", wechselhaft: "Wechselhaft", mittel: "Mittel", stark: "Stark" };
+    const weighted = this._telemetryIds("a_soc", "e_soc", "a_reference", "e_reference", "reference_ready");
     return `<section class="card system-card span-full">
       ${this._cardTitle("mdi:shield-check-outline", "Systemstatus", this._badge(this._state("status")?.state === "Bereit" ? "Daten bereit" : "Daten prüfen", this._state("status")?.state === "Bereit" ? "good" : "warn"))}
-      <div class="summary-grid"><div class="soc-ring" data-live-combined-ring style="--soc:${finite(d.soc) ? d.soc : 0}"><div><strong><b data-live-combined>${finite(d.soc) ? Math.round(d.soc) : "—"}</b><small>%</small></strong><span>Gesamt</span></div></div>
-      <div class="summary-metric"><span>Gespeicherte Energie</span><strong data-summary-energy>${finite(d.energy) ? this._energy(d.energy) : "—"}</strong><small data-summary-reference>SoC-Schätzung · Referenz ${this._energy(d.cap)}</small></div>
-      <div class="summary-metric"><span>Leistung · beide Speicher</span><strong data-summary-power>${finite(d.power) ? this._power(Math.abs(d.power) * 1000) : "—"}</strong><small data-summary-flow>${!finite(d.power) ? "Daten fehlen" : Math.abs(d.power) <= .01 ? "Bereit" : d.power < 0 ? "Laden" : "Entladen"}</small></div></div>
+      <div class="summary-grid"><div class="soc-ring" data-live-combined-ring style="--soc:${finite(d.soc) ? d.soc : 0}"><div>${this._valueLink(`<strong><b data-live-combined>${finite(d.soc) ? Math.round(d.soc) : "—"}</b><small>%</small></strong><span>Gesamt</span>`, weighted, "Gesamt-Ladezustand")}</div></div>
+      <div class="summary-metric"><span>Gespeicherte Energie</span>${this._valueLink(`<strong data-summary-energy>${finite(d.energy) ? this._energy(d.energy) : "—"}</strong>`, weighted, "Gespeicherte Energie")}${this._valueLink(`<small data-summary-reference>SoC-Schätzung · Referenz ${this._energy(d.cap)}</small>`, this._telemetryIds("a_reference", "e_reference", "reference_ready"), "Referenzkapazität")}</div>
+      <div class="summary-metric"><span>Leistung · beide Speicher</span>${this._valueLink(`<strong data-summary-power>${finite(d.power) ? this._power(Math.abs(d.power) * 1000) : "—"}</strong>`, this._telemetryIds("a_power", "e_power", "sign_setting"), "Leistung beider Speicher")}<small data-summary-flow>${!finite(d.power) ? "Daten fehlen" : Math.abs(d.power) <= .01 ? "Bereit" : d.power < 0 ? "Laden" : "Entladen"}</small></div></div>
       <div class="summary-status">${this._statusLine("Tagesklasse heute", labels[profile] || profile, "accent")}${this._statusLine("Planstatus", this._statusLabel(this._state("planung")?.state || "—"), "accent")}</div>
       ${profile === "wechselhaft" ? '<p class="slot-note">Wechselhaft ist das Sicherheitsprofil eines mittleren Tages bei Prognoseunsicherheit.</p>' : ""}
     </section>`;
@@ -179,17 +250,17 @@ class SpeicherLadelogikCard extends SpeicherLadelogikPanel {
     const limit = key => this._power(this._entityNum(this._source(`${key}_${s}`), NaN));
     return `<article class="battery-card storage-${s}" data-battery="${s}">
       <div class="battery-heading"><h3>${esc(this._storageLabel(slot))}</h3>${this._badge(this._storageStatus(slot).label, this._storageStatus(slot).tone)}</div>
-      <div class="battery-current"><strong class="battery-soc" data-live-battery="${s}-soc">${this._percent(soc)}</strong><div class="battery-power"><strong data-live-battery="${s}-power">${this._power(Math.abs(power))}</strong><span data-live-battery="${s}-mode">${this._batteryMode(power).label}</span></div></div>
-      <div class="battery-track"><i data-track="${s}" style="width:${finite(soc) ? soc : 0}%"></i></div><div class="battery-caption"><span>${finite(soc) ? this._energy(soc / 100 * cap) : "—"} · SoC-Schätzung</span><span>Referenz ${this._energy(cap)}</span></div>
-      <div class="cal-result">${this._remainingTime(slot)}</div>
+      <div class="battery-current">${this._valueLink(`<strong class="battery-soc" data-live-battery="${s}-soc">${this._percent(soc)}</strong>`, this._sourceIds(`soc_${s}`), `${this._storageLabel(slot)} · SoC`)}<div class="battery-power">${this._valueLink(`<strong data-live-battery="${s}-power">${this._power(Math.abs(power))}</strong>`, this._sourceIds(`power_${s}`), `${this._storageLabel(slot)} · AC-Leistung`)}<span data-live-battery="${s}-mode">${this._batteryMode(power).label}</span></div></div>
+      <div class="battery-track"><i data-track="${s}" style="width:${finite(soc) ? soc : 0}%"></i></div><div class="battery-caption">${this._valueLink(`${finite(soc) ? this._energy(soc / 100 * cap) : "—"} · SoC-Schätzung`, this._telemetryIds(`${s}_soc`, `${s}_reference`, "reference_ready"), "Gespeicherte Energie")}${this._valueLink(`Referenz ${this._energy(cap)}`, this._telemetryIds(`${s}_reference`, "reference_ready"), "Referenzkapazität")}</div>
+      ${this._valueLink(this._remainingTime(slot), [this._eid("planung")], "Restzeit", "cal-result")}
       <div class="metric-pairs">
         ${this._metric("Restbedarf", this._energy(this._attr("planung", `restbedarf_venus_${s}_kwh`)), "mdi:battery-arrow-up-outline")}
-        ${this._metric("Verlustleistung", this._power(electrical.loss), "mdi:flash")}
-        ${this._metric("Wirkungsgrad", this._percent(electrical.ratio, 1), "mdi:percent-outline")}
-        ${this._metric("Ladegrenze", limit("charge_limit"), "mdi:battery-arrow-up-outline")}
-        ${this._metric("Entladegrenze", limit("discharge_limit"), "mdi:battery-arrow-down-outline")}
-        ${this._metric("Heute geladen", this._energy(energy[0]), "mdi:battery-plus-outline")}
-        ${this._metric("Heute entladen", this._energy(energy[1]), "mdi:battery-minus-outline")}
+        ${this._metric("Verlustleistung", this._power(electrical.loss), "mdi:flash", this._telemetryIds(`${s}_ac_raw`, `${s}_dc`))}
+        ${this._metric("Wirkungsgrad", this._percent(electrical.ratio, 1), "mdi:percent-outline", this._telemetryIds(`${s}_ac_raw`, `${s}_dc`, `${s}_power`))}
+        ${this._metric("Ladegrenze", limit("charge_limit"), "mdi:battery-arrow-up-outline", this._sourceIds(`charge_limit_${s}`))}
+        ${this._metric("Entladegrenze", limit("discharge_limit"), "mdi:battery-arrow-down-outline", this._sourceIds(`discharge_limit_${s}`))}
+        ${this._metric("Heute geladen", this._energy(energy[0]), "mdi:battery-plus-outline", this._telemetryIds(`${s}_charge_today`))}
+        ${this._metric("Heute entladen", this._energy(energy[1]), "mdi:battery-minus-outline", this._telemetryIds(`${s}_discharge_today`))}
       </div>
       ${this._batteryDetails(slot)}
       ${this._deviceControls(slot)}
@@ -246,11 +317,11 @@ class SpeicherLadelogikCard extends SpeicherLadelogikPanel {
       ["Bis SoC-Minimum", a._duration(`${s}_eta_min`), "eta_min"], ["Bis SoC-Maximum", a._duration(`${s}_eta_max`), "eta_max"],
     ];
     const fan = a._state(`${s}_fan`);
-    return `<details class="electrical-details" data-remember-details="electric-${s}"><summary>Elektrik & Temperaturen</summary><div class="electric-grid">${fields.map(([name, value, key]) => `<button class="electric-value" data-info="${esc(a._config.entities[`${s}_${key}`] || "")}"><span>${esc(name)}</span><strong>${esc(value)}</strong></button>`).join("")}</div><p class="slot-note">${esc(electrical.note)}</p><label class="fan-row"><span>${slot === "A" ? "Lüfter Venus A" : "Lüfter WR & Speicher"}</span><input type="checkbox" data-fan="${esc(a._config.entities[`${s}_fan`])}" ${fan?.state === "on" ? "checked" : ""} ${!this._available(fan) ? "disabled" : ""}></label></details>`;
+    return `<details class="electrical-details" data-remember-details="electric-${s}"><summary>Elektrik & Temperaturen</summary><div class="electric-grid">${fields.map(([name, value, key], index) => this._valueLink(`<span>${esc(name)}</span><strong>${esc(value)}</strong>`, this._telemetryIds(...(index === 2 || index === 3 ? [`${s}_ac_raw`, `${s}_dc`, `${s}_power`] : [`${s}_${key}`])), name, "electric-value")).join("")}</div><p class="slot-note">${esc(electrical.note)}</p><label class="fan-row"><span>${slot === "A" ? "Lüfter Venus A" : "Lüfter WR & Speicher"}</span><input type="checkbox" data-fan="${esc(a._config.entities[`${s}_fan`])}" ${fan?.state === "on" ? "checked" : ""} ${!this._available(fan) ? "disabled" : ""}></label></details>`;
   }
 
   _overview() {
-    return `<main class="grid overview">${this._systemCard()}<section class="card span-full">${this._cardTitle("mdi:battery-high", "Speicher")}<div class="battery-pair">${this._models().map(slot => this._batteryCard(slot)).join("")}</div><div class="comparison-grid">${this._models().map(slot => this._comparison(slot, slot.toLowerCase())).join("")}</div></section>${this._planningCard()}<div class="span-full analytics-mount"></div></main>`;
+    return `<main class="grid overview">${this._systemCard()}<section class="card span-full">${this._cardTitle("mdi:battery-high", "Speicher")}<div class="battery-pair">${this._models().map(slot => this._batteryCard(slot)).join("")}</div><div class="comparison-grid">${this._models().map(slot => this._comparison(slot, slot.toLowerCase())).join("")}</div></section>${this._planningCard()}</main>`;
   }
 
   _planningCard() {
@@ -280,19 +351,61 @@ class SpeicherLadelogikCard extends SpeicherLadelogikPanel {
       this._refreshLive();
       return;
     }
-    // Keep the actual chart element and its cached histories/ranges across HA renders.
-    this._analytics?.remove();
     for (const [slot, draft] of this._manualDrafts) if (!draft.dirty) this._manualDrafts.delete(slot);
     super._render();
-    const mount = this.shadowRoot.querySelector(".analytics-mount");
-    if (mount) { const analytics = this._getAnalytics(); analytics.hass = this._hass; mount.append(analytics); }
+    if (this._tab === "overview") {
+      const analytics = this._getAnalytics(); analytics.hass = this._hass;
+      if (analytics.parentNode !== this._analyticsHost) this._analyticsHost.append(analytics);
+    }
+    this._analyticsHost.hidden = this._tab !== "overview";
     this._renderDeferred = false;
+  }
+
+  _commitRender(html) {
+    // Never detach the Recorder controls during a live update. Reattaching the
+    // same node preserves values but still closes native date/time pickers.
+    if (!this._surface?.isConnected) {
+      this._surface = document.createElement("div");
+      this._analyticsHost = document.createElement("div");
+      this._analyticsHost.className = "analytics-host";
+      this.shadowRoot.replaceChildren(this._surface, this._analyticsHost);
+    }
+    this._surface.innerHTML = html;
   }
 
   _bind() {
     super._bind();
+    const wrapValue = (el, ids, label) => {
+      if (el.querySelector("button,input,select")) return;
+      const button = document.createElement("button");
+      button.type = "button"; button.className = "value-link";
+      button.dataset.valueSources = JSON.stringify(ids.filter(Boolean));
+      button.setAttribute("aria-label", `${label} · Entität oder Quellen öffnen`);
+      button.append(...el.childNodes); el.append(button);
+    };
+    this.shadowRoot.querySelectorAll(".diag-line strong").forEach(el => {
+      const label = el.previousElementSibling?.textContent || "Status";
+      const key = label === "Kalibrierung" ? "kalibrierung" : label === "Fahrplan" ? "planung" : label === "Betriebsart" ? "betriebsart" : "status";
+      wrapValue(el, [this._eid(key)], label);
+    });
+    this.shadowRoot.querySelectorAll(".decision-card dd").forEach(el => {
+      const label = el.previousElementSibling?.textContent || "Planung";
+      const slot = el.closest(".storage-a") ? "a" : "e";
+      wrapValue(el, [this._eid(label === "Bevorzugt" ? `bevorzugte_ladeleistung_venus_${slot}` : "planung")], label);
+    });
+    this.shadowRoot.querySelectorAll(".cal-window,.cal-state>div strong,.calibration-card .cal-result>span").forEach(el => {
+      wrapValue(el, [this._eid("kalibrierung")], "Kalibrierung");
+    });
+    this.shadowRoot.querySelectorAll("[data-value-sources]").forEach(button => button.addEventListener("click", event => {
+      event.preventDefault(); event.stopPropagation();
+      this._openValueSources(JSON.parse(button.dataset.valueSources), button.getAttribute("aria-label") || "Quellen");
+    }));
     this.shadowRoot.querySelectorAll("[data-info]").forEach(button => button.addEventListener("click", event => {
-      event.preventDefault(); const id = button.dataset.info; if (id && id !== "null") this._moreInfo(id);
+      event.preventDefault(); event.stopPropagation(); const id = button.dataset.info; if (id && id !== "null") this._moreInfo(id);
+    }));
+    this.shadowRoot.querySelectorAll("button[data-entity]").forEach(button => button.addEventListener("click", event => {
+      event.preventDefault(); event.stopPropagation();
+      if (button.dataset.entity && button.dataset.entity !== "null") this._moreInfo(button.dataset.entity);
     }));
     this.shadowRoot.querySelectorAll("[data-manual-form]").forEach(form => {
       const slot = form.dataset.manualForm;
@@ -385,6 +498,17 @@ class SpeicherLadelogikCard extends SpeicherLadelogikPanel {
       @container(max-width:820px){.battery-pair{grid-template-columns:1fr}.summary-grid{grid-template-columns:150px 1fr 1fr}.summary-metric{padding:16px}.summary-metric strong{font-size:23px}.plan-card>.metric-pairs{grid-template-columns:repeat(2,minmax(0,1fr))}}
       @container(max-width:540px){.summary-grid,.summary-status{grid-template-columns:1fr}.soc-ring{margin:0 auto 20px}.summary-metric{border-left:0;border-top:1px solid var(--line);text-align:center;padding:21px 0}.summary-status{margin-top:0}.battery-caption{font-size:10px}.system-diagnostics{grid-template-columns:1fr}.brand-copy strong{font-size:21px}.electric-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
       @media(max-width:600px){:host{padding:13px}.card{padding:15px}.battery-card{padding:13px}.detail-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+      .analytics-host{margin-top:16px}.analytics-host[hidden]{display:none}
+      .value-link{font:inherit;color:inherit;background:none;border:0;margin:0;padding:0;text-align:inherit;cursor:pointer;min-width:0;max-width:100%;overflow-wrap:anywhere}
+      .value-link:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.soc-ring .value-link{position:relative;z-index:1;text-align:center;display:flex;flex-direction:column;align-items:center;gap:6px}.soc-ring .value-link>span{display:block}
+      .summary-metric>.value-link,.battery-power>.value-link{display:block;width:100%}.battery-power>span{display:block;margin-top:4px}
+      .metric-pairs>.metric,.peak-layout>.metric{display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:7px;text-align:left;width:100%;padding:12px;min-height:72px;background:var(--surface);border-radius:9px}
+      .metric-pairs>.metric>span,.peak-layout>.metric>span{grid-area:auto;display:block;width:100%;font-size:11px;line-height:1.4;white-space:normal}
+      .metric-pairs>.metric>strong,.peak-layout>.metric>strong{grid-area:auto;display:block;width:100%;font-size:14px;line-height:1.4;white-space:normal}
+      .detail-grid>.detail.value-link{display:flex;flex-direction:column;gap:7px;padding:10px;background:var(--surface);border-radius:9px;text-align:left}.detail-grid>.detail.value-link>strong{margin:0;line-height:1.5}
+      .battery-card .cal-result.value-link{display:flex;flex-direction:column;align-items:flex-start;width:100%;text-align:left;gap:5px}.battery-caption>.value-link{font-size:inherit;color:inherit}
+      .number-row>div:first-of-type{position:relative;padding-right:20px}.setting-source{position:absolute;right:0;top:0;color:var(--accent);font-size:18px}
+      .value-sources{max-width:min(580px,calc(100vw - 32px));max-height:80vh;overflow:auto;box-sizing:border-box;border:1px solid var(--line);border-radius:12px;padding:20px;background:var(--card);color:var(--primary-text-color);font:inherit}.value-sources::backdrop{background:#0005}.value-sources h3{margin:0 0 12px}.value-sources p{font-size:13px;color:var(--muted)}.value-source-row{display:flex;flex-direction:column;gap:6px;text-align:left;width:100%;padding:12px;margin:10px 0;background:var(--surface);color:inherit;border:1px solid var(--line);border-radius:8px;cursor:pointer;overflow-wrap:anywhere}.value-source-row small{color:var(--muted)}
     `;
   }
 }
