@@ -1,0 +1,29 @@
+# Nur von den Vorgaben abweichende Werte eintragen.
+type: custom:speicher-ladelogik-ae-card
+view: overview # overview / calibration / control / diagnostics
+theme: light # light / dark / auto
+history_hours: 24
+history_refresh_seconds: 120
+history_max_points: 720
+capacity_kwh:
+  a: 3.66
+  e: 4.56
+colors:
+  a: '#14814f'
+  e: '#007e8c'
+# Die Kernquellen kommen automatisch aus der Integration. Zusätzliche
+# Telemetrie und Gerätemodi können bei anderen Entitäts-IDs überschrieben werden.
+entities:
+  a_mode: select.marstek_venus_a_benutzer_modus
+  e_mode: select.marstek_venus_e_betriebsmodus
+  a_fan: switch.lufter_venus_a
+  e_fan: switch.haus_lufter_wr_und_speicher
+  a_temperature: sensor.marstek_venus_a_innentemperatur
+  e_temperature: sensor.marstek_venus_e_interne_temperatur
+  a_voltage: sensor.marstek_venus_a_batteriespannung
+  a_current: sensor.marstek_venus_a_batteriestrom
+  e_voltage: sensor.marstek_venus_e_dc_spannung
+  e_current: sensor.marstek_venus_e_dc_strom
+# Weitere Schlüssel wie a_p1_cell_1, a_charge_today oder e_efficiency
+# sind identisch zur bisherigen Venus-Cockpit-1.0.4-Konfiguration.
+# Eine Zuordnung auf '' deaktiviert die entsprechende optionale Quelle.

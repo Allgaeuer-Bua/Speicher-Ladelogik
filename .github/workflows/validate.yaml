@@ -41,6 +41,8 @@ jobs:
         with:
           node-version: 22
       - run: node --check custom_components/speicher_ladelogik_ae/frontend/speicher-ladelogik-ae-panel.js
+      - run: node --check custom_components/speicher_ladelogik_ae/frontend/speicher-ladelogik-ae-card.js
+      - run: node --check custom_components/speicher_ladelogik_ae/frontend/speicher-telemetry.js
       - run: node --test tests/test_ae_panel.mjs
 
   hacs:
@@ -72,7 +74,9 @@ jobs:
           npm install --no-save --no-package-lock playwright@1.56.1 @mdi/js@7.4.47
           npx playwright install --with-deps chromium
       - name: Check dashboard interactions and responsive layouts
-        run: node tests/dashboard_browser.cjs
+        run: |
+          node tests/dashboard_browser.cjs
+          node tests/lovelace_browser.cjs
       - name: Keep review screenshots
         if: always()
         uses: actions/upload-artifact@v4

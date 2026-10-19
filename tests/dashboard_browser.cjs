@@ -33,7 +33,7 @@ fs.mkdirSync(out, { recursive: true });
         }
         customElements.define('ha-icon', Icon);
       }, icons);
-      await page.addScriptTag({ content: script });
+      await page.addScriptTag({ content: script, type: 'module' });
       await page.evaluate(tagName => {
         const p = document.createElement(tagName);
         const states = {}, entities = {}, sources = {};

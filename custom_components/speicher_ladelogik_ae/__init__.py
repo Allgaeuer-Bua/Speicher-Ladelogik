@@ -8,8 +8,14 @@ from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import CONF_ENABLED_MODELS, CONF_STORAGE_INSTANCES, PLATFORMS
 from .coordinator import SpeicherLadelogikCoordinator
-from .panel import async_register_panel, async_unregister_panel
+from .frontend_api import async_register_api, async_register_frontend, async_unregister_frontend
 from .storage import legacy_instances
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Register the read-only frontend API and administrator manual action."""
+    async_register_api(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -27,7 +33,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    await async_register_panel(hass, entry)
+    await async_register_frontend(hass, entry)
     return True
 
 
@@ -48,7 +54,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a Speicher-Ladelogik A/E config entry."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
-        async_unregister_panel(hass)
+        async_unregister_frontend(hass, entry)
     return unloaded
 
 

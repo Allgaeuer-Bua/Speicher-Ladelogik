@@ -1,5 +1,15 @@
 # Änderungen
 
+## 2.3.0
+
+- Die Oberfläche ist jetzt eine normale Lovelace-Karte mit vier nativen Ansichten: Übersicht, Kalibrieren, Steuerung und Diagnose. Kein automatisch erzeugter Seitenleisteneintrag.
+- Helles Venus-Cockpit-Design: gemeinsamer SoC-Kreis, gespeicherte Energie, gemeinsame Leistung, Tagesprofil und Planstatus. Der Energiefluss entfällt.
+- Speicher A/E und Tagesplanung bleiben erhalten. Der gemeinsame Verlauf, Energiebilanz, Zellwerte und beide Pack-Verläufe aus Venus-Cockpit 1.0.4 sind integriert.
+- Handbetrieb liegt direkt beim jeweiligen Speicher unter Steuerung. Entwürfe schreiben erst nach Übernehmen; beide Leistungsgrenzen werden gemeinsam validiert und über die Integration übernommen. Nur Administratoren dürfen diese neue Aktion verwenden. Keine SoC-Schreibzugriffe.
+- Betriebsmodus, Elektrik, Temperaturen und Lüfter sind je Speicher erreichbar. Gerätemodus-Änderungen werden nur beim ausdrücklich übernommenen Handbetrieb gesendet.
+- Kalibrierung und Diagnose bleiben erhalten. Ladeplanung und Kalibrier-State-Machine wurden nicht verändert. Vorhandene Integrations-Einstellungen und Entitäten bleiben bestehen.
+- Browserprüfungen für vier Ansichten, Mobil/Desktop, Schreibfreiheit beim Laden, unabhängigen Handbetrieb, Fehlerfälle und behaltene Chart-Zeiträume ergänzt.
+
 ## 2.2.0
 
 - Kalibrierung aus „Steuerung“ in einen eigenen Reiter mit sämtlichen Einstellungen, Vormerkungen, Aufträgen und Ergebnissen verschoben.

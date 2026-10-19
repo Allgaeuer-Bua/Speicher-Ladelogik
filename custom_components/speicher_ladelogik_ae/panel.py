@@ -141,6 +141,10 @@ PANEL_ENTITIES: Final = {
 }
 
 SOURCE_ENTITIES: Final = {
+    "dc_a": "a_dc_power",
+    "dc_e": "e_dc_power",
+    "inverter_a": "a_inverter_status",
+    "inverter_e": "e_inverter_status",
     "pv": CONF_PV_AC,
     "grid": CONF_GRID_POWER,
     "house": CONF_HOUSE_POWER,

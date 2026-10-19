@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+# Local browser tools and review artifacts (never part of the integration).
+node_modules/
+dashboard-review/
+dist/

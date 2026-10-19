@@ -1,0 +1,38 @@
+apply_manual:
+  name: Handbetrieb übernehmen
+  description: Übernimmt beide manuellen Leistungsgrenzen gemeinsam. Nur für Administratoren. Schreibt keine SoC-Grenzen.
+  fields:
+    entry_id:
+      name: Konfiguration
+      required: true
+      selector:
+        text:
+    battery:
+      name: Speicher
+      required: true
+      selector:
+        select:
+          options: [A, E]
+    active:
+      name: Handbetrieb aktiv
+      required: true
+      selector:
+        boolean:
+    charge_w:
+      name: Maximale Ladeleistung
+      description: Beim Aktivieren erforderlich. Physische Gerätegrenzen gelten zusätzlich.
+      selector:
+        number:
+          min: 0
+          max: 2500
+          step: 50
+          unit_of_measurement: W
+    discharge_w:
+      name: Maximale Entladeleistung
+      description: Beim Aktivieren erforderlich. Physische Gerätegrenzen gelten zusätzlich.
+      selector:
+        number:
+          min: 0
+          max: 2500
+          step: 50
+          unit_of_measurement: W
