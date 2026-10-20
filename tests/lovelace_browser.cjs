@@ -59,14 +59,14 @@ fs.mkdirSync(out, {recursive:true});
       sources.pack_soc_a=[set('pack1',55,{unit_of_measurement:'%'}),set('pack2',55,{unit_of_measurement:'%'})];
       sources.drift_a=[sources.drift_a,sources.drift_a];
       for(const p of [1,2])for(let i=1;i<=13;i++)extra[`a_p${p}_cell_${i}`]=set(`p${p}c${i}`,3.28+i*.0001,{unit_of_measurement:'V'});
-      native('status','Bereit',{version:'2.3.1',betriebsart:'Automatik',schreibzugriffe_aktiv:true,planung_aktiv:true,quellen_verfuegbar:43,quellen_gesamt:43,warnungen:[],fehlende_entitaeten:[]});
+      native('status','Bereit',{version:'2.4.0',betriebsart:'Automatik',schreibzugriffe_aktiv:true,planung_aktiv:true,quellen_verfuegbar:43,quellen_gesamt:43,warnungen:[],fehlende_entitaeten:[]});
       native('planung','Ladefreigabe aktiv',plan);native('kalibrierung','Bereit',{auftraege:[],phase:'idle'});native('betriebsart','Automatik',{},'select');native('mittagsspitzen','on',{},'switch');
       native('kalibrierung_venus_e_morgen','',{},'button');
       for(const [key,value,unit] of [['prognose_sicherheit',90,'%'],['unplanbare_reserve',1,'kWh'],['ladewirkungsgrad',90,'%'],['planung_hysterese',.2,'kWh'],['knappheitsreserve',125,'%'],['schwacher_tag',20,'kWh'],['mittlerer_tag',50,'kWh'],['starker_tag',85,'kWh'],['mittag_vorlauf',1.5,'h'],['mittag_nachlauf',2,'h'],['kalibrierleistung',500,'W'],['kalibrierung_ruhe_unten',0,'min'],['kalibrierung_ruhe_oben',90,'min']])native(key,value,{min:0,max:2500,step:.1,unit_of_measurement:unit},'number');
-      window.entry={entry_id:'test',version:'2.3.1',models:['A','E'],entities,sources};
+      window.entry={entry_id:'test',version:'2.4.0',models:['A','E'],entities,sources};
       window.fixture={states,entities,sources,extra};
       window.hass={states,user:{is_admin:true},themes:{darkMode:false},config:{time_zone:'Europe/Berlin'},
-        callWS:async msg=>{if(msg.type==='speicher_ladelogik_ae/config')return {entries:[window.entry]};throw new Error('Unexpected WS command '+msg.type)},
+        callWS:async msg=>{if(msg.type==='speicher_ladelogik_ae/config')return {entries:[JSON.parse(JSON.stringify(window.entry))]};throw new Error('Unexpected WS command '+msg.type)},
         callApi:async (method,url)=>{window.histories.push(url);return []},
         callService:async (...args)=>{window.calls.push(args);if(window.rejectNext){window.rejectNext=false;throw new Error('Simulierter Schreibfehler')}return {}}
       };
@@ -202,6 +202,52 @@ fs.mkdirSync(out, {recursive:true});
     assert.equal(await a.locator('[data-manual-active]').isDisabled(),true);
     await page.evaluate(()=>{window.fixture.states[window.fixture.sources.soc_a]={state:'unavailable',attributes:{}};window.card._render()});
     assert.equal(await page.locator('[data-live-combined]').innerText(),'—','Missing SoC never becomes zero');
+    // Pack additions must update an already mounted card without a YAML edit.
+    for(const count of [3,4]){
+      await page.evaluate(async count=>{
+        const states={...window.hass.states};
+        const put=(id,value,unit)=>{states[id]={entity_id:id,state:String(value),attributes:{unit_of_measurement:unit},last_updated:new Date().toISOString()};return id;};
+        window.entry.sources={...window.entry.sources,
+          pack_soc_a:Array.from({length:count},(_,i)=>put(`sensor.custom_venus_a_soc_batteriepack_${i+1}`,50+i,'%')),
+          drift_a:Array.from({length:count},(_,i)=>put(`sensor.custom_venus_a_zellendrift_batteriepack_${i+1}`,.002+i*.001,'V'))};
+        for(let pack=1;pack<=count;pack++)for(let cell=1;cell<=13;cell++)put(`sensor.custom_venus_a_batteriepack_${pack}_zelle_${cell}_spannung`,3.2+cell*.001,'V');
+        window.hass={...window.hass,states};window.card._nextConfigRefresh=0;window.card.hass=window.hass;
+      },count);
+      await page.waitForFunction(count=>document.querySelector('speicher-ladelogik-ae-card')?.shadowRoot.querySelector('speicher-ladelogik-telemetry')?.shadowRoot.querySelectorAll('.vs-pack-charts > section').length===count,count);
+      const telemetry=page.locator('speicher-ladelogik-telemetry');
+      assert.equal(await telemetry.locator('#vs-cell-pack option').count(),count);
+      assert.equal(await telemetry.locator('#vs-cell-summary tr').count(),count+1);
+      assert.match(await telemetry.locator('#vs-cell-details summary').innerText(),new RegExp(`${count*13} Einzelzellen`));
+      await telemetry.locator('#vs-cell-pack').selectOption(String(count));
+      assert.match(await telemetry.locator('#vs-cell-count').innerText(),/13\/13/);
+      await telemetry.locator('#vs-cell-values .entity-info').first().click();
+      assert.equal(await page.evaluate(()=>window.infos.at(-1)),`sensor.custom_venus_a_batteriepack_${count}_zelle_1_spannung`);
+      await telemetry.locator('#vs-cell-summary tr').nth(count-1).locator('.entity-info').last().click();
+      assert.equal(await page.evaluate(()=>window.infos.at(-1)),`sensor.custom_venus_a_zellendrift_batteriepack_${count}`);
+      assert.match(await telemetry.locator('#vs-cell-summary tr').nth(count-1).innerText(),new RegExp(String(count+1)));
+      const specKeys=await telemetry.evaluate(el=>el._specs('overview').map(s=>s.key));
+      assert.ok(specKeys.includes(`a_p${count}_soc`)&&specKeys.includes(`a_p${count}_drift`));
+      await telemetry.evaluate(el=>el._refreshHistory(true));
+      assert.ok(await page.evaluate(count=>window.histories.some(url=>decodeURIComponent(url).includes(`sensor.custom_venus_a_batteriepack_${count}_zelle_1_spannung`)),count));
+    }
+    for(const width of [390,1280]){
+      await page.setViewportSize({width,height:900});
+      await page.waitForTimeout(100);
+      const telemetry=page.locator('speicher-ladelogik-telemetry');
+      assert.equal(await telemetry.evaluate(el=>el.scrollWidth>el.clientWidth+1),false);
+      await page.screenshot({path:path.join(out,`lovelace-${width}-four-packs.png`),fullPage:true});
+    }
+    const focus=await page.locator('speicher-ladelogik-telemetry').evaluate(el=>{
+      const input=el.shadowRoot.querySelector('#vs-pack4-from');input.focus();
+      window.card.hass={...window.hass,states:{...window.hass.states}};el._update();window.card._render();
+      return input.isConnected&&el.shadowRoot.activeElement===input;
+    });
+    assert.equal(focus,true,'New pack date input retains focus across live updates');
+    await page.evaluate(()=>{
+      window.entry.sources={...window.entry.sources,pack_soc_a:window.entry.sources.pack_soc_a.slice(0,3),drift_a:window.entry.sources.drift_a.slice(0,3)};
+      window.card._nextConfigRefresh=0;window.card.hass={...window.hass};
+    });
+    await page.waitForFunction(()=>document.querySelector('speicher-ladelogik-ae-card').shadowRoot.querySelector('speicher-ladelogik-telemetry').shadowRoot.querySelectorAll('.vs-pack-charts > section').length===3);
     assert.deepEqual(errors,[]);
     console.log('Lovelace browser checks passed: 4 native views; 320/390/1280px; no writes on mount/edit; independent atomic manual action; failed draft; admin guard; retained chart ranges; missing telemetry.');
   }finally{await browser.close()}

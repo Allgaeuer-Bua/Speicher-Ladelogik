@@ -236,6 +236,7 @@ class SpeicherLadelogikSensor(SpeicherLadelogikEntity, SensorEntity):
                 "ueberschuss_quelle",
                 "netto_ueberschuss_w",
                 "effizienzmodus",
+                "effizienzverteilung",
                 "sollwertstrategie",
                 "pv_prognose_abweichung_bisher_kwh",
                 "pv_real_bis_jetzt_kwh",

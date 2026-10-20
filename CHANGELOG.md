@@ -1,5 +1,16 @@
 # Änderungen
 
+## 2.4.0
+
+- Venus-A-Packs werden aus den konfigurierten SoC-/Zelldrift-Quellen dynamisch übernommen: Pack 3 und 4 erscheinen in Auswahl, Tabellen, SoC-/Drift-Verläufen und Einzelzell-Diagrammen. Vorhandene Standard-Zellsensoren werden automatisch zugeordnet; eigene Zuordnungen bleiben vorrangig.
+
+- Schwache/wechselhafte Profile konzentrieren knappen Überschuss zunächst auf einen Speicher. Der zweite wartet ausdrücklich mit 0 W Ladegrenze. Frühes SoC-Ziel und niedriger Pack-SoC bestimmen die erste Auswahl.
+- Zweiten Speicher nach 30 Sekunden mit mindestens 250 W verbleibendem Überschuss zuschalten; auch reduzierte Ladeaufnahme und 2.000 W Gesamtüberschuss werden berücksichtigt. Rückschaltung erst nach drei Minuten mit niedriger Leistung und Hysterese.
+- Gesamtüberschuss berücksichtigt laufende Ladung. Die Zielfüllungsprüfung kann beide sofort freigeben. Handbetrieb, Kalibrierung, Sicherheitsprüfungen und maximale Geräte-/Benutzergrenzen behalten Vorrang.
+- Auswahl und Zeitbedingungen überstehen kurze Aktualisierungen; bei längeren Unterbrechungen werden Stabilitätszeiten neu beobachtet. Die Tagesfreigabe bleibt separat gespeichert.
+- Übersicht und Diagnose zeigen Effizienzpausen. Keine SoC-Schreibzugriffe. Neue Verhaltenstests prüfen Zeitreihen, Endphase, Neustart, Zielschutz und tatsächliche Schreibbefehle.
+- Nach Installation und HA-Neustart die bestehende Lovelace-Ressource auf `?v=2.4.0` ändern und die App vollständig neu laden.
+
 ## 2.3.1
 
 - Messwertkacheln zeigen Beschriftung und Zahl untereinander, einschließlich Tagesplanung und Mittagsspitze.

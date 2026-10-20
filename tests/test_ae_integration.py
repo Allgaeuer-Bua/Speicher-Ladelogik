@@ -461,7 +461,62 @@ def test_weak_day_ignores_configured_peak_switch_in_actual_planner():
     assert not plan["mittagsspitzen_aktiv"]
     assert not plan["mittagsspitzen_planbar"]
     assert plan["soll_ladegrenze_venus_a_w"] == 1100
-    assert plan["soll_ladegrenze_venus_e_w"] == 1300
+    assert plan["soll_ladegrenze_venus_e_w"] == 0
+    assert plan["effizienzverteilung"]["join_since"] == fx.NOW
+
+
+def test_efficiency_selection_reaches_hardware_and_release_history_without_soc_writes():
+    hass, payload = _normal_plan(pv=1500, controls={
+        "schwacher_tag": 150, "mittlerer_tag": 160, "starker_tag": 180})
+    # Yesterday's positive register must actually be withdrawn, not just omitted.
+    hass.states.states["number.marstek_venus_e_ladeleistung"] = fx.state(1300, fx.NOW, min=0, max=2500, step=50)
+    with patch.dict(sys.modules, stubs):
+        first = planner.calculate_plan(hass, payload)
+    plan = first["plan"]
+    assert plan["effizienzverteilung"]["mode"] == "single"
+    assert plan["ladefreigabe_venus_e_seit_ts"] is None
+    assert any(c["entity"] == "number.marstek_venus_e_ladeleistung" and c["value"] == 0
+               for c in first["proposed_commands"])
+    assert not any("soc" in c["entity"] or "kapazitat" in c["entity"] for c in first["proposed_commands"])
+    # Apply registers and observe genuine 2 kW surplus including ongoing charge.
+    hass.states.states["number.marstek_venus_a_maximale_ladeleistung"] = fx.state(1100, fx.NOW, min=0, max=1500, step=50)
+    hass.states.states["number.marstek_venus_e_ladeleistung"] = fx.state(0, fx.NOW, min=0, max=2500, step=50)
+    for offset in (15, 30, 45):
+        now = fx.NOW + offset
+        payload.update(now=now, prior_plan=plan)
+        for entity, value in (("sensor.aktuelle_pv_leistung", 2500),
+                              ("sensor.hausleistung_gesamt", 500),
+                              ("sensor.stromzahler_leistung", -900),
+                              ("sensor.marstek_venus_a_ac_leistung", -1100),
+                              ("sensor.marstek_venus_e_ac_leistung", 0)):
+            hass.states.states[entity] = fx.state(value, now, "W")
+        with patch.dict(sys.modules, stubs):
+            result = planner.calculate_plan(hass, payload)
+        plan = result["plan"]
+        assert plan["netto_ueberschuss_w"] == 2000
+        if offset < 45:
+            assert plan["soll_ladegrenze_venus_e_w"] == 0
+        else:
+            assert plan["soll_ladegrenze_venus_e_w"] == 1300
+            assert plan["ladefreigabe_venus_e_seit_ts"] == now
+            assert any(c["entity"] == "number.marstek_venus_e_ladeleistung" and c["value"] == 1300
+                       for c in result["proposed_commands"])
+
+
+def test_efficiency_never_overrides_weak_day_manual_control_or_calibration():
+    hass, payload = _normal_plan(pv=1500, controls={
+        "schwacher_tag": 150, "mittlerer_tag": 160, "starker_tag": 180,
+        "manuell_e_aktiv": True, "manuell_laden_e_w": 500})
+    with patch.dict(sys.modules, stubs):
+        plan = planner.calculate_plan(hass, payload)["plan"]
+    assert not plan["effizienzverteilung"]["active"]
+    assert plan["soll_ladegrenze_venus_e_w"] == 500
+    hass, payload = fx.scenario(primary_phase="charge", secondary_phase="idle")
+    hass.states.states["input_number.speicher_ladelogik_ae_schwacher_tag"] = fx.state(150, fx.NOW)
+    with patch.dict(sys.modules, stubs):
+        result = planner.calculate_plan(hass, payload)
+    assert not result["plan"]["effizienzverteilung"]["active"]
+    assert result["calibration"]["phase"] == "charge"
 
 
 def test_forecast_safety_applies_once_to_the_shared_remaining_pv():

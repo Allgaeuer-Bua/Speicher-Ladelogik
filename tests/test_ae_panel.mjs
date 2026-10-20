@@ -233,3 +233,20 @@ test("storage status distinguishes permission, real flow, target and safety", ()
   plan.daten_gueltig_venus_a = false;
   assert.equal(p._storageStatus("A").label, "Gesperrt");
 });
+
+test("efficiency pause is visible even after an earlier daily release", () => {
+  const p = panel();
+  p._panel.config.entities = { planung: "sensor.plan" };
+  p._hass.states["sensor.power_a"].state = "0";
+  p._hass.states["sensor.plan"] = { state: "Ladefreigabe aktiv", attributes: {
+    effizienzverteilung: { active: true, held: "A", primary: "E", reason: "Zuerst E laden" },
+    ladefreigabe_venus_a_seit_ts: 1792447200,
+    fahrplan_slot_aktiv_venus_a: false,
+    leistungsentscheidung_venus_a: { bevorzugt_w: 1100, roh_w: 0, stabil_w: 0,
+      grund: "Effizienzpause: zuerst Speicher E laden" },
+  } };
+  assert.equal(p._storageStatus("A").label, "Effizienzpause");
+  assert.match(p._chargeDecision("A"), /badge neutral[^>]*>Effizienzpause/);
+  assert.match(p._planningCard(), /Effizienzverteilung: Zuerst E laden/);
+  assert.match(p._planningCard(), /vorübergehend 0 W/);
+});

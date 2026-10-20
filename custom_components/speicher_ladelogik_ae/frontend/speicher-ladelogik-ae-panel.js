@@ -721,7 +721,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
         <div class="storage-slots">
           ${this._models().map((model) => this._storageSlot(model, model.toLowerCase())).join("")}
         </div>
-        <div class="slot-note">Nach dem Ladebeginn bleibt die Freigabe für diesen Tag bestehen. AstraMeter regelt die tatsächliche Leistung.</div>
+        <div class="slot-note">${this._attr("planung", "effizienzverteilung", {})?.active ? `Effizienzverteilung: ${esc(this._attr("planung", "effizienzverteilung", {}).reason)}. Der wartende Speicher kann vorübergehend 0 W erhalten.` : "Nach dem Ladebeginn bleibt die Tagesfreigabe bestehen."} AstraMeter regelt die tatsächliche Leistung.</div>
         ${this._calibrationJobsCard()}
         ${this._peakDetails()}
       </section>`;
@@ -744,6 +744,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       return { label: this._num(this._attr("planung", `obere_geraetegrenze_venus_${suffix}_prozent`), 100) >= 100 ? "Voll" : "Ziel erreicht", tone: "good" };
     }
     if (this._attr("planung", `fahrplan_slot_aktiv_venus_${suffix}`, false)) return { label: "Freigegeben", tone: "accent" };
+    if (this._attr("planung", "effizienzverteilung", {})?.held === letter) return { label: "Effizienzpause", tone: "neutral" };
     const planned = this._attr("planung", `ladebeginn_venus_${suffix}_ts`);
     return { label: planned && planned > Date.now() / 1000 ? `Wartet bis ${this._time(planned)}` : "Wartet", tone: "neutral" };
   }
@@ -1051,7 +1052,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
       `fruehes_ladeziel_venus_${model.toLowerCase()}_${key}`, label + (currentClass === key ? " · heute" : ""),
       "0 % = kein zusätzliches SoC-Ziel; der normale PV-Fahrplan bleibt aktiv",
     ])).join("")}</div></div>`).join("");
-    return `<main class="grid control-view"><div class="control-columns manual-columns span-full">${this._models().map((model) => this._manualCard(model)).join("")}</div><section class="card span-full">${this._cardTitle("mdi:chart-bell-curve", "Fahrplanfunktionen")}${this._toggleRow("mittagsspitzen", "Mittagsspitzen reduzieren", "An mittleren und starken Tagen, soweit die Vollladung abgesichert ist", "mdi:chart-bell-curve")}<p class="control-explanation">Vorzeitiges Ladeziel je Speicher · Profil aktuell ${esc(currentClass)}. Tagesklassen: schwach, mittel, stark. Wechselhaft gilt bei Prognoseunsicherheit an mittleren Tagen. Starke Tage behalten ihr eigenes Ziel. 0 % deaktiviert das zusätzliche Ziel. Vor dem ersten Tagesstart kann 0 W gesetzt werden; nach der Freigabe bleiben positive Grenzen erhalten.</p>${earlyGoals}${this._numberRow(["mittag_vorlauf", "Beginn vor Sonnenhöchststand", "Dynamischer Start des Mittagsfensters"])}${this._numberRow(["mittag_nachlauf", "Ende nach Sonnenhöchststand", "Dynamisches Ende des Mittagsfensters"])}</section><div class="control-columns span-full">${this._numberCard("Leistungsgrenzen", "mdi:battery-charging", "leistung")}${this._numberCard("Planungsparameter", "mdi:shield-sun-outline", "planung")}${this._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen")}</div>${this._modeControl()}</main>`;
+    return `<main class="grid control-view"><div class="control-columns manual-columns span-full">${this._models().map((model) => this._manualCard(model)).join("")}</div><section class="card span-full">${this._cardTitle("mdi:chart-bell-curve", "Fahrplanfunktionen")}${this._toggleRow("mittagsspitzen", "Mittagsspitzen reduzieren", "An mittleren und starken Tagen, soweit die Vollladung abgesichert ist", "mdi:chart-bell-curve")}<p class="control-explanation">Vorzeitiges Ladeziel je Speicher · Profil aktuell ${esc(currentClass)}. Tagesklassen: schwach, mittel, stark. Wechselhaft gilt bei Prognoseunsicherheit an mittleren Tagen. Starke Tage behalten ihr eigenes Ziel. 0 % deaktiviert das zusätzliche Ziel. Vor dem ersten Tagesstart kann 0 W gesetzt werden; nach der Freigabe bleiben positive Grenzen normalerweise erhalten. Bei schwachem oder wechselhaftem Profil kann die Effizienzverteilung einen Speicher vorübergehend mit 0 W warten lassen.</p>${earlyGoals}${this._numberRow(["mittag_vorlauf", "Beginn vor Sonnenhöchststand", "Dynamischer Start des Mittagsfensters"])}${this._numberRow(["mittag_nachlauf", "Ende nach Sonnenhöchststand", "Dynamisches Ende des Mittagsfensters"])}</section><div class="control-columns span-full">${this._numberCard("Leistungsgrenzen", "mdi:battery-charging", "leistung")}${this._numberCard("Planungsparameter", "mdi:shield-sun-outline", "planung")}${this._numberCard("Tagesklassen", "mdi:weather-partly-cloudy", "tagesklassen")}</div>${this._modeControl()}</main>`;
   }
 
   _formatWriteResult(item) {
@@ -1081,7 +1082,8 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const blocked = this._attr("planung", `daten_gueltig_venus_${suffix}`) === false || decision.grund === "Sicherheitsstopp";
     const released = this._attr("planung", `ladefreigabe_venus_${suffix}_seit_ts`);
     const full = this._attr("planung", `ziel_venus_${suffix}_erreicht`, false);
-    const label = blocked ? "Sicherheitsstopp" : full ? "Ziel erreicht" : released ? "Freigegeben" : "Geplant";
+    const efficiencyPaused = this._attr("planung", "effizienzverteilung", {})?.held === slot;
+    const label = blocked ? "Sicherheitsstopp" : full ? "Ziel erreicht" : efficiencyPaused ? "Effizienzpause" : released ? "Freigegeben" : "Geplant";
     const preferred = this._entityNum(this._state(`bevorzugte_ladeleistung_venus_${suffix}`), decision.bevorzugt_w);
     const limit = this._attr("planung", `soll_ladegrenze_venus_${suffix}_w`, decision.stabil_w);
     const reason = decision.sollwert_grund || decision.grund || "Keine Begründung verfügbar";
@@ -1089,7 +1091,7 @@ class SpeicherLadelogikPanel extends HTMLElement {
     const errors = (decision.datenfehler || []).filter((text) => !/^(?:Venus )?[AE]:/.test(text) || text.startsWith(`${slot}:`) || text.startsWith(`Venus ${slot}:`));
     const field = (label, value) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`;
     return `<article class="decision-card storage-${suffix} ${blocked ? "decision-blocked" : ""}">
-      <div class="decision-heading"><h3>${esc(this._storageLabel(slot))}</h3>${this._badge(label, blocked ? "bad" : released || full ? "good" : "neutral")}</div>
+      <div class="decision-heading"><h3>${esc(this._storageLabel(slot))}</h3>${this._badge(label, blocked ? "bad" : efficiencyPaused ? "neutral" : released || full ? "good" : "neutral")}</div>
       <p class="decision-reason">${esc(reason)}</p>
       ${errors.length ? `<ul class="decision-errors">${errors.map((text) => `<li>${esc(text)}</li>`).join("")}</ul>` : ""}
       <dl class="decision-power">
