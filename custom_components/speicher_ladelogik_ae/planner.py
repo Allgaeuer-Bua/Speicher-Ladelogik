@@ -9,7 +9,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from . import persistence
-from .charge_plan import daily_plan
+from .charge_plan import daily_plan, delay_preserves_targets, surplus_segments
+from .efficiency import distribute, LEAVE_SECONDS
 from .telemetry import ac_feedback
 from .const import VERSION as INTEGRATION_VERSION
 from .stability import (
@@ -1452,6 +1453,33 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         hysteresis=setting("hysterese", 0.2, 0.05, 1), batteries=specs, prior=prior_attributes,
     )
     decisions = daily["decisions"]
+    for key, spec in specs.items():
+        spec["charging_w"] = charging_power(key, bats[key]["power_display"] or 0)
+
+    def efficiency_delay_safe(secondary):
+        if not today["ok"]:
+            return False
+        # Use the same reserve, cloud deduction and efficiency as the daily
+        # plan. Recheck on every cycle, including the final charging window.
+        reserve = setting("knappheitsreserve", 125, 100, 200) / 100
+        buffered_needs = {key: spec["need"] * reserve for key, spec in specs.items()}
+        if prior_attributes.get("knapp") and need > 0:
+            margin = setting("hysterese", 0.2, 0.05, 1)
+            buffered_needs = {key: value + margin * specs[key]["need"] / need
+                              for key, value in buffered_needs.items()}
+        return delay_preserves_targets(
+            secondary=secondary, seconds=LEAVE_SECONDS, now=NOW, end=end,
+            segments=surplus_segments(normal_rows, NOW, end, load, extra),
+            batteries=specs, needs=buffered_needs,
+            caps={key: d["limit"] for key, d in decisions.items()},
+            starts={key: d["start"] for key, d in decisions.items()}, efficiency=eta)
+
+    distribution = distribute(
+        now=NOW, day=DAY0, profile=early_profile,
+        enabled=automatic and records_ok and live_valid,
+        batteries=specs, decisions=decisions, surplus=normal_live,
+        export=max(0, -(grid or 0)),
+        prior=prior_attributes.get("effizienzverteilung"), delay_safe=efficiency_delay_safe)
     early_soc_keys = daily["early_keys"]
     scarce = daily["scarce"]
     safe_rest = daily["available_kwh"]
@@ -1500,6 +1528,11 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         automatic_reason = "Jeder Speicher startet zum eigenen geplanten Zeitpunkt mit PV-Überschuss"
     efficiency_mode = ("Bedarfsgerecht erhöhte Ladegrenze" if daily["boosted"]
                        else "Bevorzugte Leistung; Freigabe bleibt nach Start bestehen")
+    if distribution["active"]:
+        efficiency_mode = ("Einzelladen " + distribution["primary"]
+                           if distribution["mode"] == "single" else "Parallelladen")
+        automatic_reason = "; ".join(SLOT_NAMES[k] + ": " + automatic_limit_reason[k]
+                                     for k in decisions)
 
     manual_allowed = {}
     for key in BATTERY_KEYS:
@@ -1762,7 +1795,9 @@ def calculate_plan(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
         "pv_planungswert_quelle": pv_estimate_source,
         "ueberschuss_untergrenze_w": balance_lower,
         "effizienzmodus": efficiency_mode,
-        "sollwertstrategie": "Tagesfreigabe je Speicher; nach Start positive Ladegrenze halten",
+        "sollwertstrategie": ("Schwach/wechselhaft: stabile Einzel-/Parallelfreigabe"
+                              if distribution["active"] else "Tagesfreigabe je Speicher; nach Start positive Ladegrenze halten"),
+        "effizienzverteilung": distribution,
         "bevorzugte_ladeleistung_a_w": BATTERIES["A"]["preferred"],
         "bevorzugte_ladeleistung_e_w": BATTERIES["E"]["preferred"],
         "maximale_ladeleistung_a_w": BATTERIES["A"]["maximum"],

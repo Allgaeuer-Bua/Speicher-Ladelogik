@@ -83,6 +83,7 @@ _STABILITY_KEYS = tuple(
         f"ac_rueckmeldung_venus_{name}",
     )
 ) + (
+    "effizienzverteilung",
     "berechnet_ts",
     "knapp",
     "tagesklasse",

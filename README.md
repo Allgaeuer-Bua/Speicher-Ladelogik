@@ -2,7 +2,7 @@
 
 Eine Home-Assistant-Integration für **eine Marstek Venus A und eine Venus E** mit PV-Ladeplanung, Kalibrierung und normalen Lovelace-Karten. Ab **2.3.0** sind Speicher-Ladelogik und Venus Speicher-Cockpit 1.0.4 zusammengeführt. Venus D wird in dieser Variante nicht angeboten.
 
-## Update auf 2.3.1 – vorhandene Installation
+## Update auf 2.4.0 – vorhandene Installation
 
 **Die Integration nicht löschen oder neu einrichten.** Entitäten, Einstellungen, Vormerkungen und Kalibrierhistorie bleiben bestehen.
 
@@ -10,7 +10,7 @@ Eine Home-Assistant-Integration für **eine Marstek Venus A und eine Venus E** m
 2. Unter **Einstellungen → Dashboards → Ressourcen** die folgende Ressource als **JavaScript-Modul** einmal hinzufügen:
 
    ```yaml
-   url: /speicher_ladelogik_ae_static/speicher-ladelogik-ae-card.js?v=2.3.1
+   url: /speicher_ladelogik_ae_static/speicher-ladelogik-ae-card.js?v=2.4.0
    type: module
    ```
 
@@ -27,7 +27,13 @@ Eine Home-Assistant-Integration für **eine Marstek Venus A und eine Venus E** m
 5. Vor dem Entfernen der alten separaten Venus-Karte ihre optionalen `entities:`, `capacity_kwh:` und `colors:`-Anpassungen in die neue Übersichtskarte übernehmen. Die Kernquellen (SoC, AC/DC, Grenzen und Packdaten) werden automatisch aus der Integration gelesen. Zusätzliche Zell-, Temperatur- und Energiequellen sind wie in Venus-Cockpit 1.0.4 vorbelegt und können über `entities:` geändert oder mit `''` deaktiviert werden. Die vollständige bisherige Schlüsselreferenz liegt in [`lovelace/TELEMETRIE.yaml`](lovelace/TELEMETRIE.yaml).
 6. App/Browser vollständig neu laden. Wenn alles geprüft ist, die bisherige Venus-Cockpit-Karte und deren alte JS-Ressource entfernen; die neue Oberfläche enthält ihre Verläufe und Zellwerte bereits. Keine zwei aktiven Steuerungsoberflächen parallel benutzen.
 
-Wer bereits 2.3.0 nutzt, behält seine Karten und Ansichten: Integration aktualisieren, HA neu starten und in der vorhandenen Ressource nur `v=2.3.0` in `v=2.3.1` ändern. Keine zweite Ressource hinzufügen. Messwerte lassen sich antippen; bei berechneten Werten öffnet sich eine Quellenauswahl. In der Handyansicht stehen ausgewählte Diagrammwerte unter den Kurven.
+Wer bereits 2.3.x nutzt, behält seine Karten und Ansichten: Integration aktualisieren, HA neu starten und in der vorhandenen Ressource die vorhandene Versionsangabe in `v=2.4.0` ändern. Keine zweite Ressource hinzufügen. Messwerte lassen sich antippen; bei berechneten Werten öffnet sich eine Quellenauswahl. In der Handyansicht stehen ausgewählte Diagrammwerte unter den Kurven.
+
+### Zusätzliche Venus-A-Packs
+
+SoC- und Zelldrift-Sensoren jedes zusätzlichen Packs in der Integration ergänzen. Die Karte übernimmt die Packliste auch für Auswahl, aktuelle Zellen sowie SoC-, Drift- und Einzelzellverläufe. Die Konfiguration wird bei laufenden HA-Aktualisierungen spätestens nach 60 Sekunden erneut gelesen; alternativ Karte neu laden. Pack 3 und 4 benötigen keine zusätzlichen Karten.
+
+Vorhandene Einzelzellsensoren im Marstek-Schema werden aus der konfigurierten SoC-Entität zugeordnet, etwa `sensor.marstek_venus_a_soc_batteriepack_3` → `sensor.marstek_venus_a_batteriepack_3_zelle_1_spannung`. Es werden nur in HA vorhandene Entitäten übernommen. Bei abweichenden Namen unter `entities:` die Schlüssel `a_p3_cell_1` bis `a_p3_cell_13` beziehungsweise `a_p4_cell_1` bis `a_p4_cell_13` zuordnen. Eigene Zuordnungen haben Vorrang. SoC und Drift allein liefern keine Einzelzellspannungen.
 
 ### Handbetrieb und Sicherheit
 
@@ -51,7 +57,7 @@ Die neue Kennung lautet `speicher_ladelogik_ae`. Einstellungen, Kalibrierhistori
 
 ## Lovelace-Oberfläche ab 2.3.0
 
-- **Übersicht:** Gemeinsamer SoC-Kreis, gespeicherte Energie, Gesamtleistung, Tagesprofil und Planstatus; darunter beide Speicher mit eigenem Handbetrieb sowie Elektrik/Temperaturen, Tagesplanung, Mittagsspitzenkappung, gemeinsamer Verlauf, Energiebilanz, Zellwerte und die beiden 13-Zellen-Verläufe. Kein Energiefluss und kein separater Speicher-Reiter.
+- **Übersicht:** Gemeinsamer SoC-Kreis, gespeicherte Energie, Gesamtleistung, Tagesprofil und Planstatus; darunter beide Speicher mit eigenem Handbetrieb sowie Elektrik/Temperaturen, Tagesplanung, Mittagsspitzenkappung, gemeinsamer Verlauf, Energiebilanz, Zellwerte und die 13-Zellen-Verläufe aller konfigurierten A-Packs. Kein Energiefluss und kein separater Speicher-Reiter.
 - **Kalibrierung:** Eigener Reiter für Einstellungen, Vormerkungen, laufende Aufträge und Ergebnisse.
 - **Steuerung:** Gemeinsame Fahrplanfunktionen, Leistungsgrenzen, Planungsparameter und Betriebsart. Der Handbetrieb befindet sich direkt bei A/E in der Übersicht.
 - **Diagnose:** Datenverfügbarkeit und Schreibergebnisse. Die Ladegrenze wird je Speicher in einer eigenen Karte erklärt: Begründung, bevorzugte Leistung, neu berechneter Wert und geltende Sollgrenze; weitere Planungsdetails lassen sich aufklappen.
@@ -66,9 +72,22 @@ Standard ist das helle Venus-Cockpit-Design. Die Anzeige kann über `theme: ligh
 2. **Bedarf je Speicher:** Geräteziel, eigener SoC und bei A die einzelnen Packs bestimmen den Restbedarf. Das zusätzliche frühe SoC-Ziel greift nur, wenn dieser Speicher darunter liegt. „Wechselhaft“ ist ein separates Zielprofil bei gemessener Prognoseunsicherheit an mittleren Tagen, keine vierte Ertragsklasse. Starke Tage behalten ihr eigenes frühes SoC-Ziel; ein kurzer PV-Einbruch schaltet es nicht auf „Wechselhaft“ um.
 3. **Früh genug beginnen:** Schwache Tage starten mit vorhandenem PV-Überschuss und ohne Mittagsspitzenkappung. Mittlere und starke Tage dürfen später beginnen, soweit die gemeinsame PV-Prognose beide Speicher einschließlich Reserve versorgen kann. Falls nötig wird zuerst der Start vorgezogen.
 4. **Bevorzugte Leistung:** A und E verwenden unabhängig ihre eingestellte bevorzugte Ladegrenze. Eine höhere Grenze wird nur gewählt, wenn die Simulation damit die heutige Zielfüllung tatsächlich verbessert. Fehlender PV-Ertrag oder eine knappe Reserve allein erzeugen keine Maximalleistung.
-5. **Nach Tagesfreigabe halten:** Keine 15-Minuten-Pausenslots und kein Zurücksetzen auf 0 W wegen Wolken, einer neuen Prognose oder dem Ende des Ladefensters. AstraMeter regelt die tatsächliche Leistung am Netzanschlusspunkt. Bei 100 % bleibt der Registerwert stehen; bei 100 → 99 % wird ohne Leistungserhöhung nachgeladen.
+5. **Nach Tagesfreigabe halten:** Außer der unten beschriebenen Effizienzpause keine 15-Minuten-Pausenslots und kein Zurücksetzen auf 0 W wegen Wolken, einer neuen Prognose oder dem Ende des Ladefensters. AstraMeter regelt die tatsächliche Leistung am Netzanschlusspunkt. Bei 100 % bleibt der Registerwert stehen; bei 100 → 99 % wird ohne Leistungserhöhung nachgeladen.
 
-**Vor dem ersten Ladebeginn eines neuen mittleren oder starken Tages kann die Ladegrenze 0 W sein.** Nur so bleibt Platz für die spätere PV-Spitze. Nach der Tagesfreigabe bleibt sie positiv. Ein frühes SoC-Ziel kann die Tagesfreigabe vorziehen; sein Erreichen löst keine erneute Sperre aus. An schwachen Tagen bleibt eine vorhandene positive Grenze auch vor dem ersten Überschuss stehen. Eine Ladefreigabe wird gespeichert und übersteht einen HA-Neustart am selben Tag.
+**Vor dem ersten Ladebeginn eines neuen mittleren oder starken Tages kann die Ladegrenze 0 W sein.** Nur so bleibt Platz für die spätere PV-Spitze. Nach der Tagesfreigabe bleibt sie außerhalb der Effizienzpause positiv. Ein frühes SoC-Ziel kann die Tagesfreigabe vorziehen; sein Erreichen löst keine erneute Sperre aus. An schwachen Tagen bleibt eine vorhandene positive Grenze auch vor dem ersten Überschuss stehen. Eine Ladefreigabe wird gespeichert und übersteht einen HA-Neustart am selben Tag.
+
+### Effizient auf einen oder zwei Speicher verteilen (ab 2.4.0)
+
+An **schwachen Tagen** und bei **wechselhaftem Profil** lädt zunächst ein automatisch freigegebener Speicher. Vorrang hat ein noch nicht erreichtes frühes SoC-Ziel, danach der niedrigere Pack-SoC. Die Auswahl bleibt bis zum Geräteziel bestehen. Der andere Speicher erhält ausdrücklich **0 W Ladegrenze**, auch wenn zuvor ein positiver Registerwert gesetzt war. Dies ist eine gezielte Ausnahme vom Halten der positiven Tagesfreigabe.
+
+- Der zweite Speicher wird nach **30 Sekunden** zugeschaltet, wenn mindestens **250 W** über der nutzbaren Ladegrenze des ersten übrig sind oder bestätigte Netzeinspeisung zeigt, dass er weniger aufnehmen kann. Ab **2.000 W Gesamtüberschuss** dürfen ebenfalls beide laden. 1.000 W je Speicher sind eine Orientierung, keine erzwungene Leistung und keine starre Wartegrenze.
+- Maßgeblich ist die tatsächlich freigegebene Ladegrenze einschließlich der modellierten Endphase. Eine A mit 1.100 W Freigabe hat nicht automatisch weitere 400 W Spielraum; die vorhandene Planung entscheidet weiterhin über eine höhere Grenze. Die konfigurierte Maximalleistung wird nie überschritten.
+- Erst nach **180 Sekunden** mit weniger als Einzelkapazität plus **100 W** (höchstens 1.750 W) und weniger als 100 W Netzeinspeisung wird wieder auf einen Speicher gewechselt. Kurze Wolken ändern die Freigaben nicht. Bereits laufende Ladung zählt zum Gesamtüberschuss; sinkende Netzeinspeisung allein löst keine Rückschaltung aus.
+- Die Planung prüft in jedem Durchlauf, ob weitere drei Minuten Einzelladen die heutige Zielfüllung einschließlich Planungsreserven verschlechtern würden. Dann werden beide sofort freigegeben. Ohne gültige Prognose oder frische AC-Rückmeldungen wird die zusätzliche Effizienzpause nicht angewendet.
+- Handbetrieb, Kalibrierung, Sicherheitsgrenzen sowie normale mittlere/starke Profile behalten ihre bisherige Priorität. Ist ein Speicher voll oder nicht automatisch verfügbar, kann der andere laden. Die 100→99-%-Regel erhöht die Ladeleistung weiterhin nicht.
+- Der Regelzyklus beträgt 15 Sekunden: Zuschaltung typischerweise nach etwa **30–45 Sekunden**, zuzüglich Sensor- und Gerätekommunikation. Nach einer längeren Unterbrechung beginnen Stabilitätszeiten neu; die Auswahl bleibt am selben Tag gespeichert.
+
+Die Planung zeigt unter `effizienzverteilung` Auswahl, wartenden Speicher, Überschuss, Grund und laufende Zeitbedingungen. Übersicht und Diagnose kennzeichnen eine **Effizienzpause** ausdrücklich. Nur Ladeleistungsgrenzen werden dafür geschrieben, keine SoC-Grenzen.
 
 ### Planungsparameter
 

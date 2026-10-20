@@ -210,3 +210,16 @@ def test_forecast_house_deficit_is_shared_and_must_be_recharged():
     exhausted = daily.simulate([[DAY, DAY + 1800, -1000]], empty,
                                {"E": empty["E"]["need"]}, {"E": 1300}, {"E": DAY}, 0.9, DAY + 1800)
     assert exhausted["missing"] == empty["E"]["need"]
+
+
+def test_efficiency_delay_guard_preserves_shared_energy_and_final_target():
+    batteries = {key: battery(key, 40) for key in ("A", "E")}
+    base = dict(secondary="E", seconds=180, now=DAY, end=DAY + 3600,
+                batteries=batteries, needs={"A": 0.8, "E": 1.1},
+                caps={"A": 1100, "E": 1300}, starts={"A": DAY, "E": DAY}, efficiency=1)
+    assert daily.delay_preserves_targets(**base, segments=[[DAY, DAY + 3600, 3000]])
+    # In a short closing PV window, withholding E would spill usable energy.
+    assert not daily.delay_preserves_targets(**{**base, "end": DAY + 180},
+                                            segments=[[DAY, DAY + 180, 3000]])
+    # If PV only feeds one device anyway, concentrating it loses no energy.
+    assert daily.delay_preserves_targets(**base, segments=[[DAY, DAY + 3600, 800]])

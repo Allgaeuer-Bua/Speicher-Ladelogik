@@ -1,6 +1,6 @@
-/* Speicher-Ladelogik A/E 2.3.1 — native Lovelace views, no sidebar panel. */
-import { SpeicherLadelogikPanel, esc } from "./speicher-ladelogik-ae-panel.js?v=2.3.1";
-import "./speicher-telemetry.js?v=2.3.1";
+/* Speicher-Ladelogik A/E 2.4.0 — native Lovelace views, no sidebar panel. */
+import { SpeicherLadelogikPanel, esc } from "./speicher-ladelogik-ae-panel.js?v=2.4.0";
+import "./speicher-telemetry.js?v=2.4.0";
 
 const TAG = "speicher-ladelogik-ae-card";
 const VIEWS = { overview: "Übersicht", calibration: "Kalibrieren", control: "Steuerung", diagnostics: "Diagnose" };
@@ -39,7 +39,7 @@ class SpeicherLadelogikCard extends SpeicherLadelogikPanel {
   set hass(value) {
     this._hass = value;
     if (!this._cardConfig) return;
-    if (!this._panel) this._loadConfig();
+    if (!this._panel || Date.now() >= (this._nextConfigRefresh || 0)) this._loadConfig();
     if (this._panel) {
       this._getAnalytics().hass = value;
       this._render();
@@ -70,8 +70,10 @@ class SpeicherLadelogikCard extends SpeicherLadelogikPanel {
         ? entries.find(entry => entry.entry_id === this._cardConfig.entry_id)
         : entries.length === 1 ? entries[0] : null;
       if (!selected) throw new Error(entries.length > 1 ? "Mehrere Integrationen gefunden. entry_id in der Karte angeben." : "Speicher-Ladelogik A/E ist nicht geladen. Integration und Version prüfen.");
-      this._panel = { config: selected };
+      this._nextConfigRefresh = Date.now() + 60000;
       this._loadError = "";
+      if (JSON.stringify(this._panel?.config) === JSON.stringify(selected)) return;
+      this._panel = { config: selected };
       this._rendered = false;
       this._getAnalytics().hass = this._hass;
       this._render();
@@ -92,24 +94,41 @@ class SpeicherLadelogikCard extends SpeicherLadelogikPanel {
 
   _telemetryConfig() {
     const sources = this._config().sources || {};
-    const entities = { sign_setting: "" };
+    const entities = { sign_setting: "" }, packIndices = new Set();
+    const list = value => (Array.isArray(value) ? value : [value]).filter(Boolean);
+    const packNumber = (id, index) => Number(id.match(/(?:batteriepack|pack)_(\d+)(?:_|$)/)?.[1] || index + 1);
     for (const s of ["a", "e"]) {
       for (const [key, source] of [["power", `power_${s}`], ["ac_raw", `power_${s}`], ["soc", `soc_${s}`], ["dc", `dc_${s}`], ["status", `inverter_${s}`], ["charge_limit", `charge_limit_${s}`], ["discharge_limit", `discharge_limit_${s}`]]) {
         entities[`${s}_${key}`] = typeof sources[source] === "string" ? sources[source] : "";
       }
       const drifts = Array.isArray(sources[`drift_${s}`]) ? sources[`drift_${s}`] : [sources[`drift_${s}`]];
       if (s === "a") {
-        const packs = sources.pack_soc_a || [];
-        for (let i = 1; i <= 2; i++) {
-          entities[`a_p${i}_soc`] = packs[i - 1] || "";
-          entities[`a_p${i}_drift`] = drifts[i - 1] || "";
+        for (const [kind, values] of [["soc", list(sources.pack_soc_a)], ["drift", list(sources.drift_a)]]) {
+          values.forEach((id, index) => {
+            const pack = packNumber(id, index);
+            if (pack < 1 || pack > 6) return;
+            packIndices.add(pack);
+            entities[`a_p${pack}_${kind}`] = id;
+            if (kind !== "soc") return;
+            const prefix = id.match(/^(sensor\..+)_soc_batteriepack_\d+$/)?.[1];
+            if (!prefix) return;
+            for (let cell = 1; cell <= 13; cell++) {
+              const candidate = `${prefix}_batteriepack_${pack}_zelle_${cell}_spannung`;
+              if (this._hass?.states?.[candidate]) entities[`a_p${pack}_cell_${cell}`] = candidate;
+            }
+          });
         }
       } else {
         entities.e_drift = drifts[0] || "";
         entities.e_cell_max = sources.cell_voltage_e || "";
       }
     }
+    for (const [key, id] of Object.entries(this._cardConfig.entities || {})) {
+      const match = key.match(/^a_p([1-6])_(?:soc|drift|cell_\d+)$/);
+      if (match && id) packIndices.add(Number(match[1]));
+    }
     return {
+      pack_indices: [...packIndices].sort((a, b) => a - b),
       theme: this._effectiveTheme(), enable_controls: false,
       history_hours: this._cardConfig.history_hours || 24,
       history_refresh_seconds: this._cardConfig.history_refresh_seconds || 120,
@@ -222,7 +241,7 @@ class SpeicherLadelogikCard extends SpeicherLadelogikPanel {
 
   _header() {
     const name = this._tab === "overview" ? "Speicher-Ladelogik A/E" : VIEWS[this._tab];
-    return `<header class="cockpit-header"><div class="brand-copy"><strong>${esc(name)}</strong><span>Speicher · ${esc(this._config().version || "2.3.1")}</span></div><button class="icon-button appearance-toggle" data-appearance-toggle aria-label="Darstellung anpassen"><ha-icon icon="mdi:palette-outline"></ha-icon></button></header>`;
+    return `<header class="cockpit-header"><div class="brand-copy"><strong>${esc(name)}</strong><span>Speicher · ${esc(this._config().version || "2.4.0")}</span></div><button class="icon-button appearance-toggle" data-appearance-toggle aria-label="Darstellung anpassen"><ha-icon icon="mdi:palette-outline"></ha-icon></button></header>`;
   }
 
   _systemCard() {

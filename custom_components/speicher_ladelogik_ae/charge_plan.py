@@ -12,6 +12,19 @@ from typing import Any
 EPS_KWH = 0.002
 
 
+def delay_preserves_targets(*, secondary, seconds, now, end, segments, batteries,
+                            needs, caps, starts, efficiency):
+    """Check a bounded solo period against the same shared forecast and needs."""
+    baseline = simulate(segments, batteries, needs, caps, starts, efficiency, end)
+    delayed = simulate(segments, batteries, needs, caps,
+                       {**starts, secondary: max(starts[secondary], now + seconds)},
+                       efficiency, end)
+    if delayed["missing"] > baseline["missing"] + 0.01:
+        return False
+    return all(baseline["missing_by_key"][key] > EPS_KWH or value <= 0.01
+               for key, value in delayed["missing_by_key"].items())
+
+
 def surplus_segments(rows, now, end, load, cloud_reserve):
     """Deduct the cloud reserve once, from the end of the remaining AC surplus."""
     segments = []
