@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - custom_components/speicher_ladelogik_ae/manifest.json
+      - CHANGELOG.md
       - .github/workflows/publish.yml
 
 permissions:
