@@ -6,16 +6,17 @@ Eine Home-Assistant-Integration für **eine Marstek Venus A, eine Venus E oder b
 
 **Die Integration nicht löschen oder neu einrichten.** Entitäten, Einstellungen, Vormerkungen und Kalibrierhistorie bleiben bestehen.
 
-1. In HACS dieses Integrations-Repository aktualisieren. Alternativ nur den vollständigen Ordner `custom_components/speicher_ladelogik_ae` ersetzen. Home Assistant neu starten.
-2. Unter **Einstellungen → Dashboards → Ressourcen** die folgende Ressource als **JavaScript-Modul** einmal hinzufügen:
+1. In HACS dieses Integrations-Repository aktualisieren. Alternativ den vollständigen Ordner `custom_components/speicher_ladelogik_ae` ersetzen. Home Assistant neu starten.
+2. Das Dashboard **Speicher-Ladelogik A/E** wird beim Start der Integration automatisch in der Home-Assistant-Seitenleiste registriert. Es enthält Übersicht, Speicher, Kalibrierung, Steuerung und Diagnose. Angezeigt werden nur die eingerichteten Speicher; ein manueller Dashboard-Import oder eine zusätzliche Ressource ist für diese Seitenleisten-Ansicht nicht nötig.
+3. Die Speicheranzahl lässt sich später über **Einstellungen → Geräte & Dienste → Speicher-Ladelogik A/E → Neu konfigurieren** ändern. Dort **nur Venus A**, **nur Venus E** oder **Venus A + Venus E** auswählen und anschließend die Sensoren des beziehungsweise der gewählten Speicher erneut zuordnen.
+4. Die Lovelace-Karte kann weiterhin optional in einem eigenen Dashboard eingebunden werden. Dafür die Ressource einmalig unter **Einstellungen → Dashboards → Ressourcen** als **JavaScript-Modul** eintragen:
 
    ```yaml
    url: /speicher_ladelogik_ae_static/speicher-ladelogik-ae-card.js?v=2.4.1
    type: module
    ```
 
-3. Nach dem Neustart erscheint **Speicher-Ladelogik A/E** automatisch in der Home-Assistant-Seitenleiste. Das Dashboard enthält Übersicht, Speicher, Kalibrierung, Steuerung und Diagnose und zeigt nur die ausgewählten Speicher. Für ein zusätzliches normales Lovelace-Dashboard enthält [`lovelace/DASHBOARD.yaml`](lovelace/DASHBOARD.yaml) die vollständige Konfiguration mit **Übersicht · Kalibrieren · Steuerung · Diagnose** als nativen HA-Reitern. Bei einem vorhandenen Dashboard nur die Listeneinträge aus [`lovelace/ANSICHTEN.yaml`](lovelace/ANSICHTEN.yaml) unter dessen vorhandenes `views:` einfügen; nicht das ganze Dashboard überschreiben.
-4. Für eine einzelne Karte: Dashboard bearbeiten → Karte hinzufügen → Manuell:
+   Anschließend die Karte manuell hinzufügen:
 
    ```yaml
    type: custom:speicher-ladelogik-ae-card
@@ -23,11 +24,8 @@ Eine Home-Assistant-Integration für **eine Marstek Venus A, eine Venus E oder b
    theme: light
    ```
 
-   Andere Ansichten: `calibration`, `control`, `diagnostics`. Die Ansicht am PC breit platzieren; am Handy stehen A und E untereinander. Eine Ansicht mit Typ `panel` nutzt die volle Breite. Die manuelle Lovelace-Karte ist optional; das Seitenleisten-Dashboard benötigt keine manuell eingetragene Ressource. Ein vorhandenes benutzerdefiniertes HA-Dashboard bleibt unverändert.
-5. Vor dem Entfernen der alten separaten Venus-Karte ihre optionalen `entities:`, `capacity_kwh:` und `colors:`-Anpassungen in die neue Übersichtskarte übernehmen. Die Kernquellen (SoC, AC/DC, Grenzen und Packdaten) werden automatisch aus der Integration gelesen. Zusätzliche Zell-, Temperatur- und Energiequellen sind wie in Venus-Cockpit 1.0.4 vorbelegt und können über `entities:` geändert oder mit `''` deaktiviert werden. Die vollständige bisherige Schlüsselreferenz liegt in [`lovelace/TELEMETRIE.yaml`](lovelace/TELEMETRIE.yaml).
-6. App/Browser vollständig neu laden. Wenn alles geprüft ist, die bisherige Venus-Cockpit-Karte und deren alte JS-Ressource entfernen; die neue Oberfläche enthält ihre Verläufe und Zellwerte bereits. Keine zwei aktiven Steuerungsoberflächen parallel benutzen.
-
-Wer bereits 2.3.x nutzt, behält seine Karten und Ansichten: Integration aktualisieren, HA neu starten und in der vorhandenen Ressource die vorhandene Versionsangabe in `v=2.4.1` ändern. Keine zweite Ressource hinzufügen. Messwerte lassen sich antippen; bei berechneten Werten öffnet sich eine Quellenauswahl. In der Handyansicht stehen ausgewählte Diagrammwerte unter den Kurven.
+   Weitere Ansichten: `calibration`, `control`, `diagnostics`. Für ein neues Dashboard enthält [`lovelace/DASHBOARD.yaml`](lovelace/DASHBOARD.yaml) eine vollständige Beispielkonfiguration. Bei einem vorhandenen Dashboard nur die Einträge aus [`lovelace/ANSICHTEN.yaml`](lovelace/ANSICHTEN.yaml) unter dessen vorhandenes `views:` einfügen; nicht das ganze Dashboard überschreiben.
+5. Bei einer vorhandenen manuellen Lovelace-Karte die Ressource auf `v=2.4.1` aktualisieren; keine zweite Ressource hinzufügen. App/Browser anschließend vollständig neu laden. Das automatische Seitenleisten-Dashboard wird unabhängig davon direkt von der Integration geladen.
 
 ### Zusätzliche Venus-A-Packs
 
