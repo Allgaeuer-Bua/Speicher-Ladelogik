@@ -715,6 +715,5 @@ def test_single_venus_e_configuration_keeps_the_e_slot():
     assert normalized["enabled_models"] == ["E"]
     assert normalized["slot_models"] == {"E": "E"}
     assert normalized["slot_names"] == {"E": "Venus E"}
-    assert "e_soc" in normalized
-    assert "a_soc" not in normalized
+    assert normalized["e_soc"] == "sensor.marstek_venus_e_soc"
 
