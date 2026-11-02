@@ -13,7 +13,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.service import async_register_admin_service
 
 from .const import DOMAIN, VERSION
-from .panel import PANEL_STATIC_PATH, PANEL_URL_PATH, panel_entity_config, panel_source_config
+from .panel import PANEL_STATIC_PATH, panel_entity_config, panel_source_config
 from .storage import normalize_config
 
 
