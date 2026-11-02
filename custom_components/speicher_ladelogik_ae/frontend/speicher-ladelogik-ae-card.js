@@ -1,4 +1,4 @@
-/* Speicher-Ladelogik A/E 2.4.0 — native Lovelace views, no sidebar panel. */
+/* Speicher-Ladelogik A/E 2.4.1 — optional native Lovelace card. */
 import { SpeicherLadelogikPanel, esc } from "./speicher-ladelogik-ae-panel.js?v=2.4.1";
 import "./speicher-telemetry.js?v=2.4.1";
 
