@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Gemeinsame Datenquellen",
-        "description": "Datenquellen auswählen. Nach der ersten Einrichtung beginnt die Integration sicher im Modus Beobachten.",
+        "description": "Datenquellen auswählen und festlegen, ob Venus A, Venus E oder beide Speicher eingerichtet werden. Nach der ersten Einrichtung beginnt die Integration sicher im Modus Beobachten.",
         "data": {
           "name": "Name",
           "pv_ac": "Aktuelle PV-AC-Leistung",
@@ -44,7 +44,7 @@
       },
       "reconfigure": {
         "title": "Speicherauswahl",
-        "description": "Auswählen, welche Speicher konfiguriert bleiben sollen. Die Datenquellen des ausgewählten Speichers werden anschließend erneut abgefragt.",
+        "description": "Festlegen, ob nur Venus A, nur Venus E oder beide Speicher konfiguriert sein sollen.",
         "data": {
           "storage_selection": "Einzurichtende Speicher"
         }
