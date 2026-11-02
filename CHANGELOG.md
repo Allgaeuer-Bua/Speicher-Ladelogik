@@ -1,5 +1,13 @@
 # Änderungen
 
+## 2.4.1
+
+- Die Einrichtung unterstützt jetzt **nur Venus A**, **nur Venus E** oder **Venus A + Venus E**. Bei einer späteren Neu-Konfiguration kann die Auswahl geändert und die Zuordnung der betroffenen Speicher aktualisiert werden.
+- Einzel-Speicher-Konfigurationen bleiben im korrekten physischen Slot erhalten. Eine allein eingerichtete Venus E wird nicht fälschlich als Venus A behandelt.
+- Das automatische Dashboard **Speicher-Ladelogik A/E** ist wieder in der Home-Assistant-Seitenleiste verfügbar. Seine Ansichten zeigen nur die tatsächlich eingerichteten Speicher.
+- Die normale Lovelace-Karte bleibt optional zusätzlich verwendbar; bestehende benutzerdefinierte Dashboards werden nicht überschrieben.
+- Regressionstests für Einzelkonfigurationen von Venus A und Venus E ergänzt. Python-, Frontend-, Hassfest-, HACS- und Browser-Prüfungen erfolgreich.
+
 ## 2.4.0
 
 - Venus-A-Packs werden aus den konfigurierten SoC-/Zelldrift-Quellen dynamisch übernommen: Pack 3 und 4 erscheinen in Auswahl, Tabellen, SoC-/Drift-Verläufen und Einzelzell-Diagrammen. Vorhandene Standard-Zellsensoren werden automatisch zugeordnet; eigene Zuordnungen bleiben vorrangig.
