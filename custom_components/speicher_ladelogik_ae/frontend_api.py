@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import voluptuous as vol
-from homeassistant.components import frontend, websocket_api
+from homeassistant.components import websocket_api
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
@@ -28,7 +28,7 @@ def websocket_config(hass, connection, msg):
         configurations.append({
             "entry_id": entry.entry_id,
             "version": VERSION,
-            "models": ["A", "E"],
+            "models": list(normalized.get("enabled_models", ["A", "E"])),
             "entities": panel_entity_config(entry, registry),
             "sources": panel_source_config(entry),
             "storage_labels": normalized.get("slot_names", {}),
@@ -70,8 +70,6 @@ async def async_register_frontend(hass: HomeAssistant, entry) -> None:
         ])
         data["lovelace_static_registered"] = True
     data.setdefault("lovelace_entries", {})[entry.entry_id] = entry
-    # The old custom panel is not recreated. Existing user-owned dashboards stay untouched.
-    frontend.async_remove_panel(hass, PANEL_URL_PATH, warn_if_unknown=False)
 
 
 @callback
