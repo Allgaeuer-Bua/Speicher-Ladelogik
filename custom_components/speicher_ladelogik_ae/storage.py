@@ -1,4 +1,4 @@
-"""Fixed Venus A/E storage configuration."""
+"""Configured Venus A/E storage instances mapped onto stable planner slots."""
 
 from __future__ import annotations
 
@@ -137,7 +137,7 @@ def legacy_instances(config: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def storage_instances(config: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return the configured Venus A and Venus E instances."""
+    """Return one or both configured Venus A/E instances."""
     raw = config.get(CONF_STORAGE_INSTANCES)
     if not isinstance(raw, list):
         return legacy_instances(config)
@@ -162,8 +162,8 @@ def storage_instances(config: dict[str, Any]) -> list[dict[str, Any]]:
         result.append(item)
         if len(result) == 2:
             break
-    if len(result) != 2:
-        return legacy_instances({**config, CONF_ENABLED_MODELS: ["A", "E"]})
+    if not result:
+        return legacy_instances(config)
     return sorted(result, key=lambda item: SLOT_KEYS.index(item["model"]))
 
 
