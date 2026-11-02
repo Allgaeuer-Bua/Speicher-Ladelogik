@@ -1,8 +1,8 @@
 # Speicher-Ladelogik A/E
 
-Eine Home-Assistant-Integration für **eine Marstek Venus A und eine Venus E** mit PV-Ladeplanung, Kalibrierung und normalen Lovelace-Karten. Ab **2.3.0** sind Speicher-Ladelogik und Venus Speicher-Cockpit 1.0.4 zusammengeführt. Venus D wird in dieser Variante nicht angeboten.
+Eine Home-Assistant-Integration für **eine Marstek Venus A, eine Venus E oder beide Speicher gemeinsam** mit PV-Ladeplanung, Kalibrierung und einem automatisch angelegten Dashboard in der Home-Assistant-Seitenleiste. Ab **2.3.0** sind Speicher-Ladelogik und Venus Speicher-Cockpit 1.0.4 zusammengeführt. Venus D wird in dieser Variante nicht angeboten.
 
-## Update auf 2.4.0 – vorhandene Installation
+## Update auf 2.4.1 – vorhandene Installation
 
 **Die Integration nicht löschen oder neu einrichten.** Entitäten, Einstellungen, Vormerkungen und Kalibrierhistorie bleiben bestehen.
 
@@ -10,11 +10,11 @@ Eine Home-Assistant-Integration für **eine Marstek Venus A und eine Venus E** m
 2. Unter **Einstellungen → Dashboards → Ressourcen** die folgende Ressource als **JavaScript-Modul** einmal hinzufügen:
 
    ```yaml
-   url: /speicher_ladelogik_ae_static/speicher-ladelogik-ae-card.js?v=2.4.0
+   url: /speicher_ladelogik_ae_static/speicher-ladelogik-ae-card.js?v=2.4.1
    type: module
    ```
 
-3. Die Karte im gewünschten normalen Dashboard verwenden. Für ein neues leeres Dashboard enthält [`lovelace/DASHBOARD.yaml`](lovelace/DASHBOARD.yaml) die vollständige Konfiguration mit **Übersicht · Kalibrieren · Steuerung · Diagnose** als nativen HA-Reitern. Bei einem vorhandenen Dashboard nur die Listeneinträge aus [`lovelace/ANSICHTEN.yaml`](lovelace/ANSICHTEN.yaml) unter dessen vorhandenes `views:` einfügen; nicht das ganze Dashboard überschreiben.
+3. Nach dem Neustart erscheint **Speicher-Ladelogik A/E** automatisch in der Home-Assistant-Seitenleiste. Das Dashboard enthält Übersicht, Speicher, Kalibrierung, Steuerung und Diagnose und zeigt nur die ausgewählten Speicher. Für ein zusätzliches normales Lovelace-Dashboard enthält [`lovelace/DASHBOARD.yaml`](lovelace/DASHBOARD.yaml) die vollständige Konfiguration mit **Übersicht · Kalibrieren · Steuerung · Diagnose** als nativen HA-Reitern. Bei einem vorhandenen Dashboard nur die Listeneinträge aus [`lovelace/ANSICHTEN.yaml`](lovelace/ANSICHTEN.yaml) unter dessen vorhandenes `views:` einfügen; nicht das ganze Dashboard überschreiben.
 4. Für eine einzelne Karte: Dashboard bearbeiten → Karte hinzufügen → Manuell:
 
    ```yaml
@@ -23,11 +23,11 @@ Eine Home-Assistant-Integration für **eine Marstek Venus A und eine Venus E** m
    theme: light
    ```
 
-   Andere Ansichten: `calibration`, `control`, `diagnostics`. Die Ansicht am PC breit platzieren; am Handy stehen A und E untereinander. Eine Ansicht mit Typ `panel` nutzt die volle Breite. Es wird **kein eigener Seitenleisteneintrag** mehr automatisch angelegt. Ein vorhandenes benutzerdefiniertes HA-Dashboard bleibt unverändert.
+   Andere Ansichten: `calibration`, `control`, `diagnostics`. Die Ansicht am PC breit platzieren; am Handy stehen A und E untereinander. Eine Ansicht mit Typ `panel` nutzt die volle Breite. Die manuelle Lovelace-Karte ist optional; das Seitenleisten-Dashboard benötigt keine manuell eingetragene Ressource. Ein vorhandenes benutzerdefiniertes HA-Dashboard bleibt unverändert.
 5. Vor dem Entfernen der alten separaten Venus-Karte ihre optionalen `entities:`, `capacity_kwh:` und `colors:`-Anpassungen in die neue Übersichtskarte übernehmen. Die Kernquellen (SoC, AC/DC, Grenzen und Packdaten) werden automatisch aus der Integration gelesen. Zusätzliche Zell-, Temperatur- und Energiequellen sind wie in Venus-Cockpit 1.0.4 vorbelegt und können über `entities:` geändert oder mit `''` deaktiviert werden. Die vollständige bisherige Schlüsselreferenz liegt in [`lovelace/TELEMETRIE.yaml`](lovelace/TELEMETRIE.yaml).
 6. App/Browser vollständig neu laden. Wenn alles geprüft ist, die bisherige Venus-Cockpit-Karte und deren alte JS-Ressource entfernen; die neue Oberfläche enthält ihre Verläufe und Zellwerte bereits. Keine zwei aktiven Steuerungsoberflächen parallel benutzen.
 
-Wer bereits 2.3.x nutzt, behält seine Karten und Ansichten: Integration aktualisieren, HA neu starten und in der vorhandenen Ressource die vorhandene Versionsangabe in `v=2.4.0` ändern. Keine zweite Ressource hinzufügen. Messwerte lassen sich antippen; bei berechneten Werten öffnet sich eine Quellenauswahl. In der Handyansicht stehen ausgewählte Diagrammwerte unter den Kurven.
+Wer bereits 2.3.x nutzt, behält seine Karten und Ansichten: Integration aktualisieren, HA neu starten und in der vorhandenen Ressource die vorhandene Versionsangabe in `v=2.4.1` ändern. Keine zweite Ressource hinzufügen. Messwerte lassen sich antippen; bei berechneten Werten öffnet sich eine Quellenauswahl. In der Handyansicht stehen ausgewählte Diagrammwerte unter den Kurven.
 
 ### Zusätzliche Venus-A-Packs
 
@@ -50,8 +50,8 @@ Gespeicherte Energie bleibt eine **SoC-Schätzung**. Gesamt-SoC und Energie verw
 1. In Home Assistant die bisherige Integration **Speicher-Ladelogik** auf **Beobachten** stellen und ihre bisherigen Automationen zur Ladegrenze deaktivieren.
 2. Die alte Integration unter *Einstellungen → Geräte & Dienste* entfernen und Home Assistant neu starten. Wenn die alte Version manuell installiert wurde, `custom_components/speicher_ladelogik` ebenfalls entfernen.
 3. Dieses Repository als benutzerdefiniertes **Integrations**-Repository in HACS hinzufügen und **Speicher-Ladelogik A/E** installieren. Alternativ `custom_components/speicher_ladelogik_ae` nach `/config/custom_components/` kopieren. Home Assistant neu starten.
-4. Unter *Einstellungen → Geräte & Dienste → Integration hinzufügen* **Speicher-Ladelogik A/E** auswählen. Gemeinsame PV-, Netz-, Hauslast- und Prognosesensoren sowie danach Venus A und Venus E zuordnen. Für Venus A können bis zu vier MPPT-Leistungssensoren gewählt werden.
-5. Das Dashboard prüfen. Die Integration startet im Modus **Beobachten**. Die Betriebsart **Automatik** erst einschalten, wenn die Sensoren gültig sind und keine andere Automation die Ladegrenzen derselben Geräte schreibt.
+4. Unter *Einstellungen → Geräte & Dienste → Integration hinzufügen* **Speicher-Ladelogik A/E** auswählen. Im ersten Schritt festlegen, ob **nur Venus A**, **nur Venus E** oder **Venus A + Venus E** eingerichtet werden. Danach die gemeinsamen PV-, Netz-, Hauslast- und Prognosesensoren sowie die Quellen des ausgewählten Speichers zuordnen. Für Venus A können bis zu vier MPPT-Leistungssensoren gewählt werden.
+5. Das automatisch angelegte Seitenleisten-Dashboard prüfen. Die Integration startet im Modus **Beobachten**. Die Betriebsart **Automatik** erst einschalten, wenn die Sensoren gültig sind und keine andere Automation die Ladegrenzen derselben Geräte schreibt.
 
 Die neue Kennung lautet `speicher_ladelogik_ae`. Einstellungen, Kalibrierhistorie und Verlaufsdaten der alten Integration werden nicht automatisch übernommen. Die alten HA-Entitäten können nach dem Entfernen als verwaist erscheinen; sie sind kein Bestandteil des neuen Pakets.
 
