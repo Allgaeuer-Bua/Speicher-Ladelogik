@@ -51,7 +51,7 @@ PANEL_TITLE: Final = "Speicher-Ladelogik A/E"
 PANEL_ICON: Final = "mdi:battery-charging-medium"
 PANEL_ELEMENT: Final = f"speicher-ladelogik-ae-panel-{VERSION.replace('.', '-')}"
 
-_STATIC_REGISTERED = "panel_static_registered"
+_STATIC_REGISTERED = "lovelace_static_registered"
 _PANEL_REGISTERED = "panel_registered"
 
 # Native entities are resolved through their stable unique IDs. The dashboard
@@ -235,7 +235,7 @@ async def async_register_panel(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
         registry = er.async_get(hass)
         normalized, instances = normalize_config(dict(entry.data))
-        slots = ["A", "E"]
+        slots = list(normalized.get("enabled_models", ["A", "E"]))
         panel_config = {
             "domain": DOMAIN,
             "title": NAME,
