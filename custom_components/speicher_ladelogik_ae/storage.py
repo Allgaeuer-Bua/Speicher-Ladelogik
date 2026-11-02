@@ -171,11 +171,15 @@ def normalize_config(config: dict[str, Any]) -> tuple[dict[str, Any], list[dict[
     """Map A and E onto their matching planner slots."""
     instances = storage_instances(config)
     normalized = dict(config)
-    normalized[CONF_ENABLED_MODELS] = list(SLOT_KEYS[: len(instances)])
+    normalized[CONF_ENABLED_MODELS] = []
     normalized["slot_models"] = {}
     normalized["slot_names"] = {}
     normalized["slot_ids"] = {}
-    for slot, instance in zip(SLOT_KEYS, instances, strict=False):
+    for instance in instances:
+        # Keep physical model keys stable. A single Venus E must remain in
+        # planner slot E instead of being renamed to slot A.
+        slot = str(instance["model"])
+        normalized[CONF_ENABLED_MODELS].append(slot)
         normalized["slot_models"][slot] = instance["model"]
         normalized["slot_names"][slot] = instance["name"]
         normalized["slot_ids"][slot] = instance["id"]
