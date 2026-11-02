@@ -688,3 +688,33 @@ def test_charge_attribute_failure_and_out_of_range_soc_are_separate():
     assert any("Stellbereich ungültig" in message and "step=None" in message for message in errors)
     assert any("Pack 1-SoC" in message and "außerhalb 0–100 %" in message for message in errors)
     assert not any("Gesamt-/Pack" in message for message in errors)
+
+def test_single_venus_a_configuration_is_preserved():
+    config = {
+        **const.DEFAULTS,
+        "storage_instances": [
+            {"id": "a", "name": "Venus A", "model": "A", "modules": 3},
+        ],
+    }
+    normalized, instances = storage.normalize_config(config)
+    assert [item["model"] for item in instances] == ["A"]
+    assert normalized["enabled_models"] == ["A"]
+    assert normalized["slot_models"] == {"A": "A"}
+    assert normalized["slot_names"] == {"A": "Venus A"}
+
+
+def test_single_venus_e_configuration_keeps_the_e_slot():
+    config = {
+        **const.DEFAULTS,
+        "storage_instances": [
+            {"id": "e", "name": "Venus E", "model": "E", "modules": 1},
+        ],
+    }
+    normalized, instances = storage.normalize_config(config)
+    assert [item["model"] for item in instances] == ["E"]
+    assert normalized["enabled_models"] == ["E"]
+    assert normalized["slot_models"] == {"E": "E"}
+    assert normalized["slot_names"] == {"E": "Venus E"}
+    assert "e_soc" in normalized
+    assert "a_soc" not in normalized
+
