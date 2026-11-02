@@ -126,7 +126,8 @@ class SpeicherLadelogikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_plan: dict[str, Any] | None = None
         self._stored_stability: dict[str, Any] = {}
         self._control: dict[str, Any] = dict(CONTROL_DEFAULTS)
-        for slot, instance in zip(SLOT_KEYS, self.storage_instances, strict=False):
+        for instance in self.storage_instances:
+            slot = str(instance["model"])
             name = slot.lower()
             model = str(instance["model"])
             modules = int(instance.get("modules", MODEL_DEFAULT_MODULES.get(model, 1)))
