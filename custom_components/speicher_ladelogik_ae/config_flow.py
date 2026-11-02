@@ -10,6 +10,8 @@ from homeassistant.core import callback
 from homeassistant.helpers.selector import (
     EntitySelector,
     EntitySelectorConfig,
+    SelectSelector,
+    SelectSelectorConfig,
     TextSelector,
     TextSelectorConfig,
 )
@@ -66,6 +68,25 @@ def _entity(domain: str | list[str], *, multiple: bool = False) -> EntitySelecto
     return EntitySelector(EntitySelectorConfig(domain=domain, multiple=multiple))
 
 
+def _models_for_selection(selection: str) -> list[str]:
+    """Return the physical storage models selected in the setup form."""
+    return {
+        "A": ["A"],
+        "E": ["E"],
+        "A_E": ["A", "E"],
+    }.get(str(selection), ["A", "E"])
+
+
+def _selection_for_models(models: list[str]) -> str:
+    """Return the setup selector value for an existing storage selection."""
+    selected = set(models)
+    if selected == {"A"}:
+        return "A"
+    if selected == {"E"}:
+        return "E"
+    return "A_E"
+
+
 class SpeicherLadelogikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Configure Speicher-Ladelogik A/E from the UI."""
 
@@ -91,15 +112,25 @@ class SpeicherLadelogikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             await self.async_set_unique_id(DOMAIN)
             self._abort_if_unique_id_configured()
-            self._storage_models = ["A", "E"]
+            selection = str(user_input.pop("storage_selection", "A_E"))
+            self._storage_models = _models_for_selection(selection)
             self._data.update(user_input)
-            self._data[CONF_ENABLED_MODELS] = list(dict.fromkeys(self._storage_models))
+            self._data[CONF_ENABLED_MODELS] = list(self._storage_models)
             return await self.async_step_storage()
 
         schema = vol.Schema(
             {
                 vol.Required(CONF_NAME, default=DEFAULTS[CONF_NAME]): TextSelector(
                     TextSelectorConfig()
+                ),
+                vol.Required("storage_selection", default="A_E"): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            {"value": "A_E", "label": "Venus A + Venus E"},
+                            {"value": "A", "label": "Nur Venus A"},
+                            {"value": "E", "label": "Nur Venus E"},
+                        ]
+                    )
                 ),
                 vol.Required(CONF_PV_AC, default=DEFAULTS[CONF_PV_AC]): _entity(
                     "sensor"
@@ -222,16 +253,49 @@ class SpeicherLadelogikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ):
-        """Update the fixed Venus A and Venus E source mappings."""
+        """Update shared sources and choose one or both configured storages."""
         entry = self._get_reconfigure_entry()
         existing = storage_instances(dict(entry.data))
         self._reconfigure_entry = entry
-        self._storage_models = ["A", "E"]
-        self._storage_defaults = existing
+
+        if user_input is None:
+            current_selection = _selection_for_models(
+                [str(item.get("model")) for item in existing]
+            )
+            return self.async_show_form(
+                step_id="reconfigure",
+                data_schema=vol.Schema(
+                    {
+                        vol.Required(
+                            "storage_selection", default=current_selection
+                        ): SelectSelector(
+                            SelectSelectorConfig(
+                                options=[
+                                    {"value": "A_E", "label": "Venus A + Venus E"},
+                                    {"value": "A", "label": "Nur Venus A"},
+                                    {"value": "E", "label": "Nur Venus E"},
+                                ]
+                            )
+                        )
+                    }
+                ),
+            )
+
+        self._storage_models = _models_for_selection(
+            str(user_input.get("storage_selection", "A_E"))
+        )
+        existing_by_model = {
+            str(item.get("model")): item for item in existing
+        }
+        self._storage_defaults = [
+            existing_by_model[model]
+            for model in self._storage_models
+            if model in existing_by_model
+        ]
         self._storage_instances = []
         self._storage_index = 0
         self._data = dict(entry.data)
-        self._data[CONF_ENABLED_MODELS] = ["A", "E"]
+        self._data[CONF_ENABLED_MODELS] = list(self._storage_models)
         self._data.pop(CONF_STORAGE_INSTANCES, None)
         return await self.async_step_storage()
 
