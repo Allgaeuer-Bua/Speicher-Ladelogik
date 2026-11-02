@@ -14,7 +14,8 @@
           "house_power_average": "Gemittelte Hausleistung",
           "pv_daily_energy": "Heutige PV-Produktion",
           "forecast_sensors": "15-Minuten-Prognosesensoren heute und morgen",
-          "mobile_notify_service": "Optionaler Handy-Benachrichtigungsdienst (z. B. notify.mobile_app_mein_geraet)"
+          "mobile_notify_service": "Optionaler Handy-Benachrichtigungsdienst (z. B. notify.mobile_app_mein_geraet)",
+          "storage_selection": "Einrichtung der Speicher"
         }
       },
       "storage": {
@@ -39,6 +40,13 @@
           "drift": "Zelldrift-Sensoren",
           "mppt_sensors": "Optionale MPPT-Leistungssensoren Venus A (maximal 4)",
           "inverter_status": "Optionaler Wechselrichterstatus (Charge / Discharge / Standby)"
+        }
+      },
+      "reconfigure": {
+        "title": "Speicherauswahl",
+        "description": "Auswählen, welche Speicher konfiguriert bleiben sollen. Die Datenquellen des ausgewählten Speichers werden anschließend erneut abgefragt.",
+        "data": {
+          "storage_selection": "Einzurichtende Speicher"
         }
       }
     },
